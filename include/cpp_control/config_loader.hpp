@@ -1,0 +1,47 @@
+#pragma once
+
+#include <yaml-cpp/yaml.h>
+
+#include <string>
+#include <vector>
+
+struct Config
+{
+    // Control parameters
+    double control_dt = 0.02;
+    std::string msg_type = "hg";
+    std::string imu_type = "pelvis";
+
+    // Topics
+    std::string lowcmd_topic = "/lowcmd";
+    std::string lowstate_topic = "/lowstate";
+
+    // Model paths
+    std::string policy_path;
+    std::string onnx_path;
+    std::string motion_path;
+
+    // Control gains for 29DOF
+    std::vector<double> kps;  // [29]
+    std::vector<double> kds;  // [29]
+
+    // Default positions for 29DOF
+    std::vector<double> default_angles;  // [29]
+
+    // Scaling factors
+    std::vector<double> action_scale;  // [29]
+
+    // Model dimensions
+    int num_actions = 29;
+    int num_obs = 99;
+
+    // Joint names for 29DOF (mujoco order)
+    std::vector<std::string> joint_names;
+
+    // Stiffness and damping parameters
+    std::vector<double> stiffness_params;
+    std::vector<double> damping_params;
+
+    Config() = default;
+    explicit Config(const std::string& config_path);
+};
