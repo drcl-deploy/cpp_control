@@ -35,7 +35,7 @@ cpp_control/
 - **B button**: Zeroing (disable motors)
 - **Y button**: Damping mode
 - **X button**: Nominal pose (stand up smoothly)
-- **A button**: Policy control (run ONNX locomotion)
+- **UP button**: Policy control (run ONNX locomotion)
 
 ## Build
 
@@ -64,7 +64,7 @@ These scripts configure:
 ## Usage
 
 ### With Real Robot
-
+clone unitree_ros2 at https://github.com/unitreerobotics/unitree_ros2, build (TODO: move shell script to repo)
 ```bash
 source ~/drcl_deploy/setup_robot.sh
 ros2 launch cpp_control locomotion_onnx_controller.launch.py
@@ -73,8 +73,9 @@ ros2 launch cpp_control locomotion_onnx_controller.launch.py
 ### With Unitree MuJoCo Simulation
 
 **Terminal 1: Start MuJoCo simulation**
+clone unitree_mujoco at https://github.com/unitreerobotics/unitree_mujoco
 ```bash
-cd ~/TextOp/TextOpDeploy/src/unitree_mujoco/simulate_python
+cd ~//unitree_mujoco/simulate_python/
 # Make sure config.py has DOMAIN_ID = 1 and INTERFACE = "lo"
 python3 unitree_mujoco.py
 ```
