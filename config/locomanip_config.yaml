@@ -1,0 +1,65 @@
+# Configuration for G1 Loco-Manipulation Controller (29DOF version)
+# Based on locomotion_config with additional hand position observations
+
+control_dt: 0.02  # 50Hz control loop
+
+msg_type: "hg"     # "hg" for G1 humanoid
+imu_type: "pelvis" # IMU location
+
+# Topic names - unitree_mujoco publishes these topics
+lowcmd_topic: "/lowcmd"
+lowstate_topic: "/lowstate"
+
+# Model paths (relative paths resolved by launch file)
+onnx_path: "g1_rate_32_min_accel.onnx"
+
+# Control gains for 29DOF (stiffness) - from deploy_mjlab.yaml
+kps: [40.2, 99.1, 40.2, 99.1, 28.5, 28.5,
+      40.2, 99.1, 40.2, 99.1, 28.5, 28.5,
+      40.2, 28.5, 28.5,
+      14.3, 14.3, 14.3, 14.3, 14.3, 16.8, 16.8,
+      14.3, 14.3, 14.3, 14.3, 14.3, 16.8, 16.8]
+
+# Control gains for 29DOF (damping) - from deploy_mjlab.yaml
+kds: [2.6, 6.3, 2.6, 6.3, 1.8, 1.8,
+      2.6, 6.3, 2.6, 6.3, 1.8, 1.8,
+      2.6, 1.8, 1.8,
+      0.9, 0.9, 0.9, 0.9, 0.9, 1.1, 1.1,
+      0.9, 0.9, 0.9, 0.9, 0.9, 1.1, 1.1]
+
+# Default positions for 29DOF (standing pose) - from deploy_mjlab.yaml
+default_angles: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+                 -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,
+                 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+# Action scaling (uniform for locomotion)
+action_scale: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+               0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+               0.5, 0.5, 0.5,
+               0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+               0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+# Model dimensions
+# Observation: ang_vel(3) + gravity(3) + cmd_vel(3) + 
+#              joint_pos(29) + joint_vel(29) + last_action(29) +
+#              left_hand_pos(3) + left_hand_quat(4) + right_hand_pos(3) + right_hand_quat(4) = 110
+num_actions: 29
+num_obs: 110
+
+# Joint names for 29DOF (mujoco order)
+joint_names: ["left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", 
+              "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+              "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint", 
+              "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+              "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint", 
+              "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+              "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint", 
+              "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
+              "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint", 
+              "right_wrist_pitch_joint", "right_wrist_yaw_joint"]
+
+# Hand link names for FK computation
+left_hand_link: "left_wrist_yaw_link"
+right_hand_link: "right_wrist_yaw_link"

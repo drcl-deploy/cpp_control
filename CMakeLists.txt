@@ -64,6 +64,7 @@ ament_target_dependencies(locomotion_onnx_controller
   rclcpp
   std_msgs
   sensor_msgs
+  geometry_msgs
   unitree_hg
 )
 

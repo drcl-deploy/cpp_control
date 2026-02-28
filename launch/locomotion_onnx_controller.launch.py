@@ -7,6 +7,11 @@ Usage:
     # With custom ONNX model:
     ros2 launch cpp_control locomotion_onnx_controller.launch.py \
         onnx_model_path:=/path/to/your/policy.onnx
+    
+    # With locomanip policy (button A):
+    ros2 launch cpp_control locomotion_onnx_controller.launch.py \
+        locomanip_config_path:=/path/to/locomanip_config.yaml \
+        locomanip_onnx_path:=/path/to/locomanipulation.onnx
 """
 
 import os
@@ -27,11 +32,15 @@ def generate_launch_description():
     # Get package share directory
     pkg_share = get_package_share_directory('cpp_control')
     
-    # Default paths
+    # Default paths for locomotion
     default_config_path = os.path.join(pkg_share, 'config', 'locomotion_config.yaml')
     default_onnx_path = os.path.join(pkg_share, 'models', 'locomotion.onnx')
     
-    # Declare launch arguments
+    # Default paths for locomanip
+    default_locomanip_config_path = os.path.join(pkg_share, 'config', 'locomanip_config.yaml')
+    default_locomanip_onnx_path = os.path.join(pkg_share, 'models', 'g1_action_rate_32.onnx')
+    
+    # Declare launch arguments for locomotion
     config_path_arg = DeclareLaunchArgument(
         'config_path',
         default_value=default_config_path,
@@ -41,7 +50,20 @@ def generate_launch_description():
     onnx_model_path_arg = DeclareLaunchArgument(
         'onnx_model_path',
         default_value=default_onnx_path,
-        description='Path to the ONNX policy model'
+        description='Path to the locomotion ONNX policy model'
+    )
+    
+    # Declare launch arguments for locomanip
+    locomanip_config_path_arg = DeclareLaunchArgument(
+        'locomanip_config_path',
+        default_value=default_locomanip_config_path,
+        description='Path to the locomanip configuration YAML file'
+    )
+    
+    locomanip_onnx_path_arg = DeclareLaunchArgument(
+        'locomanip_onnx_path',
+        default_value=default_locomanip_onnx_path,
+        description='Path to the locomanip ONNX policy model'
     )
     
     # Locomotion controller node
@@ -57,6 +79,8 @@ def generate_launch_description():
         parameters=[{
             'config_path': LaunchConfiguration('config_path'),
             'onnx_model_path': LaunchConfiguration('onnx_model_path'),
+            'locomanip_config_path': LaunchConfiguration('locomanip_config_path'),
+            'locomanip_onnx_path': LaunchConfiguration('locomanip_onnx_path'),
         }],
         additional_env={'LD_LIBRARY_PATH': new_ld_path},
         # Remap topics if needed
@@ -70,5 +94,7 @@ def generate_launch_description():
     return LaunchDescription([
         config_path_arg,
         onnx_model_path_arg,
+        locomanip_config_path_arg,
+        locomanip_onnx_path_arg,
         locomotion_controller_node,
     ])
