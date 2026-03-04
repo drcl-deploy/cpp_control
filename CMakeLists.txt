@@ -2,32 +2,27 @@ cmake_minimum_required(VERSION 3.8)
 project(cpp_control)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra)
-  # Disable pedantic warnings for ONNX Runtime
-  add_compile_options(-Wno-pedantic)
+  add_compile_options(-Wall -Wextra -Wno-pedantic)
 endif()
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find dependencies
+# ── Dependencies ───────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(unitree_hg REQUIRED)
-
-# Find yaml-cpp
 find_package(yaml-cpp REQUIRED)
 
-# ONNX Runtime setup
+# ── ONNX Runtime ──────────────────────────────────────────────
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    set(ONNXRUNTIME_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-x64-1.22.0" 
+    set(ONNXRUNTIME_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-x64-1.22.0"
         CACHE PATH "ONNX Runtime root directory")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(ONNXRUNTIME_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-aarch64-1.22.0" 
+    set(ONNXRUNTIME_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-aarch64-1.22.0"
         CACHE PATH "ONNX Runtime root directory")
 endif()
 
@@ -37,54 +32,69 @@ if(EXISTS "${ONNXRUNTIME_ROOT_DIR}")
     set(ONNXRUNTIME_LIBRARIES "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so")
     message(STATUS "Found ONNX Runtime at ${ONNXRUNTIME_ROOT_DIR}")
 else()
-    message(WARNING "ONNX Runtime not found at ${ONNXRUNTIME_ROOT_DIR}. "
-                    "Please set ONNXRUNTIME_ROOT_DIR or place ONNX Runtime in thirdparty/")
+    message(WARNING "ONNX Runtime not found at ${ONNXRUNTIME_ROOT_DIR}")
 endif()
 
-# Set RPATH to find our ONNX Runtime instead of system's
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 set(CMAKE_BUILD_RPATH "${ONNXRUNTIME_LIB_DIR}")
 set(CMAKE_INSTALL_RPATH "${ONNXRUNTIME_LIB_DIR}")
 
-# Include directories
 include_directories(include)
 if(ONNXRUNTIME_INCLUDE_DIRS)
     include_directories(${ONNXRUNTIME_INCLUDE_DIRS})
 endif()
 
-# Add locomotion ONNX controller executable
-add_executable(locomotion_onnx_controller
-  src/locomotion_onnx_controller.cpp
+# ── Shared library: common (config, onnx, crc) ────────────────
+add_library(cpp_control_common STATIC
   src/config_loader.cpp
   src/onnx_policy.cpp
   src/motor_crc_hg.cpp
 )
+target_link_libraries(cpp_control_common ${ONNXRUNTIME_LIBRARIES} yaml-cpp)
+ament_target_dependencies(cpp_control_common rclcpp unitree_hg)
 
-ament_target_dependencies(locomotion_onnx_controller
-  rclcpp
-  std_msgs
-  sensor_msgs
-  geometry_msgs
-  unitree_hg
+# ── Level 0: base_node ────────────────────────────────────────
+add_library(cpp_control_base STATIC src/base_node.cpp)
+target_link_libraries(cpp_control_base cpp_control_common)
+ament_target_dependencies(cpp_control_base rclcpp sensor_msgs)
+
+# ── Level 1: g1_base_node ────────────────────────────────────
+add_library(cpp_control_g1 STATIC src/robots/g1_base_node.cpp)
+target_link_libraries(cpp_control_g1 cpp_control_base)
+ament_target_dependencies(cpp_control_g1 rclcpp unitree_hg geometry_msgs)
+
+# ── Task: locomotion (base + g1) ──────────────────────────────
+add_library(cpp_control_locomotion_base STATIC
+  src/tasks/locomotion/base.cpp
 )
+target_link_libraries(cpp_control_locomotion_base cpp_control_g1)
+ament_target_dependencies(cpp_control_locomotion_base rclcpp sensor_msgs)
 
-target_link_libraries(locomotion_onnx_controller
-  ${ONNXRUNTIME_LIBRARIES}
-  yaml-cpp
+add_executable(g1_locomotion_node src/tasks/locomotion/g1.cpp)
+target_link_libraries(g1_locomotion_node cpp_control_locomotion_base)
+ament_target_dependencies(g1_locomotion_node
+  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg)
+
+# ── Task: locomanip (base + g1) ──────────────────────────────
+add_library(cpp_control_locomanip_base STATIC
+  src/tasks/locomanip/base.cpp
 )
+target_link_libraries(cpp_control_locomanip_base cpp_control_g1)
+ament_target_dependencies(cpp_control_locomanip_base rclcpp sensor_msgs geometry_msgs)
 
-# Install targets
+add_executable(g1_locomanip_node src/tasks/locomanip/g1.cpp)
+target_link_libraries(g1_locomanip_node cpp_control_locomanip_base)
+ament_target_dependencies(g1_locomanip_node
+  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg)
+
+# ── Install ───────────────────────────────────────────────────
 install(TARGETS
-  locomotion_onnx_controller
+  g1_locomotion_node
+  g1_locomanip_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install directories
-install(DIRECTORY
-  launch
-  config
-  models
-  include
+install(DIRECTORY launch config models include
   DESTINATION share/${PROJECT_NAME}/
 )
 
