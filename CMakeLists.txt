@@ -58,20 +58,14 @@ add_library(cpp_control_base STATIC src/base_node.cpp)
 target_link_libraries(cpp_control_base cpp_control_common)
 ament_target_dependencies(cpp_control_base rclcpp sensor_msgs)
 
-# ── Level 1: g1_base_node ────────────────────────────────────
-add_library(cpp_control_g1 STATIC src/robots/g1_base_node.cpp)
+# ── Level 1: g1 ────────────────────────────────────
+add_library(cpp_control_g1 STATIC src/robots/g1.cpp)
 target_link_libraries(cpp_control_g1 cpp_control_base)
 ament_target_dependencies(cpp_control_g1 rclcpp unitree_hg geometry_msgs)
 
-# ── Task: locomotion (base + g1) ──────────────────────────────
-add_library(cpp_control_locomotion_base STATIC
-  src/tasks/locomotion/base.cpp
-)
-target_link_libraries(cpp_control_locomotion_base cpp_control_g1)
-ament_target_dependencies(cpp_control_locomotion_base rclcpp sensor_msgs)
-
+# ── Task: locomotion (g1) ─────────────────────────────────────
 add_executable(g1_locomotion_node src/tasks/locomotion/g1.cpp)
-target_link_libraries(g1_locomotion_node cpp_control_locomotion_base)
+target_link_libraries(g1_locomotion_node cpp_control_g1)
 ament_target_dependencies(g1_locomotion_node
   rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg)
 

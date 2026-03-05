@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cpp_control/robots/g1_base_node.hpp"
+#include "cpp_control/robots/g1.hpp"
 #include "common/math_utils.hpp"
 
 #include <geometry_msgs/msg/pose.hpp>

@@ -1,4 +1,4 @@
-#include "cpp_control/robots/g1_base_node.hpp"
+#include "cpp_control/robots/g1.hpp"
 
 #include <cstring>
 
