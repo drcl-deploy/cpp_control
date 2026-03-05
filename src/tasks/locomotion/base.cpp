@@ -1,4 +1,5 @@
 #include "cpp_control/tasks/locomotion/base.hpp"
+#include <iostream>
 
 namespace cpp_control
 {
@@ -15,11 +16,11 @@ LocomotionBase::LocomotionBase(const std::string& node_name) : G1BaseNode(node_n
     if (!onnx_path.empty())
     {
         policy_ = std::make_unique<ONNXPolicy>(onnx_path);
-        RCLCPP_INFO(this->get_logger(), "Locomotion policy: %s", onnx_path.c_str());
+        std::cout << "Locomotion policy: " << onnx_path << std::endl;
     }
     else
     {
-        RCLCPP_WARN(this->get_logger(), "No ONNX model path for locomotion");
+        std::cerr << "No ONNX model path for locomotion" << std::endl;
     }
 }
 
@@ -34,27 +35,44 @@ std::vector<float> LocomotionBase::build_observation()
     // Angular velocity (body frame from gyroscope)
     for (int i = 0; i < 3; ++i)
         obs.push_back(robot_state_.imu_gyroscope[i]);
-
+    // print out agular velocity for debugging
+    std::cout << "Gyro: [" << robot_state_.imu_gyroscope[0] << ", " << robot_state_.imu_gyroscope[1] << ", " << robot_state_.imu_gyroscope[2] << "]" << std::endl;
     // Projected gravity
     auto pg = math::get_projected_gravity(robot_state_.imu_quaternion);
     for (int i = 0; i < 3; ++i)
         obs.push_back(pg[i]);
-
+    // print out projected gravity for debugging
+    std::cout << "Projected Gravity: [" << pg[0] << ", " << pg[1] << ", " << pg[2] << "]" << std::endl;
     // Command velocity
     for (int i = 0; i < 3; ++i)
         obs.push_back(cmd_vel_[i]);
-
+    // print out command velocity for debugging
+    std::cout << "Cmd Vel: [" << cmd_vel_[0] << ", " << cmd_vel_[1] << ", " << cmd_vel_[2] << "]" << std::endl;
     // Joint positions relative to default
     for (int i = 0; i < n; ++i)
         obs.push_back(robot_state_.joint_positions[i] - default_angles_[i]);
-
+    // print out joint positions for debugging
+    std::string joint_pos_str = "Joint Pos Rel: [";
+    for (int i = 0; i < n; ++i)
+        joint_pos_str += std::to_string(robot_state_.joint_positions[i] - default_angles_[i]) + (i < n - 1 ? ", " : "]");
+    std::cout << joint_pos_str << std::endl;
     // Joint velocities
     for (int i = 0; i < n; ++i)
         obs.push_back(robot_state_.joint_velocities[i]);
-
+    // print out joint velocities for debugging
+    std::string joint_vel_str = "Joint Vel: [";
+    for (int i = 0; i < n; ++i)
+        joint_vel_str += std::to_string(robot_state_.joint_velocities[i]) + (i < n - 1 ? ", " : "]");
+    std::cout << joint_vel_str << std::endl;
     // Last action
     for (int i = 0; i < n; ++i)
         obs.push_back(last_actions_[i]);
+
+    // print out last actions for debugging
+    std::string last_actions_str = "Last Actions: [";
+    for (int i = 0; i < n; ++i)
+        last_actions_str += std::to_string(last_actions_[i]) + (i < n - 1 ? ", " : "]");
+    std::cout << last_actions_str << std::endl;
 
     return obs;
 }
