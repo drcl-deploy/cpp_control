@@ -24,7 +24,15 @@ inline std::array<float, 3> quat_rotate_inverse(const std::array<float, 4>& q,
 
 inline std::array<float, 3> get_projected_gravity(const std::array<float, 4>& quat)
 {
-    return quat_rotate_inverse(quat, {0.0f, 0.0f, -1.0f});
+    // Must match the exact formula used during policy training (master branch).
+    // This is NOT the standard R^T * [0,0,-1]; it uses a specific sign convention
+    // from the IsaacLab training environment.
+    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
+    return {
+         2.0f * (-z * x + w * y),
+        -2.0f * ( z * y + w * x),
+         1.0f - 2.0f * (w * w + z * z)
+    };
 }
 
 }  // namespace math
