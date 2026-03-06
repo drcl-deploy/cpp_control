@@ -10,7 +10,7 @@ C++ control package for G1 robot with layered abstraction:C++ control package fo
 
 Level 0: BaseNode         — robot-agnostic FSM, joystick, timer
 
-Level 1: G1BaseNode       — G1-specific HG messages, gamepad, XR hands```
+Level 1: G1Node       — G1-specific HG messages, gamepad, XR hands```
 
 Level 2: G1Locomotion     — SE2 velocity locomotion policycpp_control/
 
@@ -50,7 +50,7 @@ cpp_control/│   ├── common/
 
 │   └── cpp_control/│   ├── locomotion_onnx_controller.cpp
 
-│       ├── base_node.hpp           ← Level 0│   ├── config_loader.cpp
+│       ├── base.hpp           ← Level 0│   ├── config_loader.cpp
 
 │       ├── config_loader.hpp│   ├── onnx_policy.cpp
 
@@ -58,7 +58,7 @@ cpp_control/│   ├── common/
 
 │       ├── robots/└── thirdparty/                 # ONNX Runtime (symlinked)
 
-│       │   └── g1_base_node.hpp    ← Level 1```
+│       │   └── g1.hpp    ← Level 1```
 
 │       └── tasks/
 
@@ -82,7 +82,7 @@ cpp_control/│   ├── common/
 
 └── src/```bash
 
-    ├── base_node.cppcd /home/junchao/drcl_deploy
+    ├── base.cppcd /home/junchao/drcl_deploy
 
     ├── config_loader.cppcolcon build --packages-select cpp_control
 
@@ -92,7 +92,7 @@ cpp_control/│   ├── common/
 
     ├── robots/## Environment Setup
 
-    │   └── g1_base_node.cpp
+    │   └── g1.cpp
 
     └── tasks/Before running, source the appropriate setup script based on your target:
 
@@ -168,9 +168,9 @@ ros2 launch cpp_control g1_locomanip.launch.py config_path:=/path/to/config.yaml
 
 source ~/drcl_deploy/setup_sim.sh
 
-1. Create `include/cpp_control/robots/<robot>_base_node.hpp`ros2 launch cpp_control locomotion_onnx_controller.launch.py
+1. Create `include/cpp_control/robots/<robot>_base.hpp`ros2 launch cpp_control locomotion_onnx_controller.launch.py
 
-2. Create `src/robots/<robot>_base_node.cpp````
+2. Create `src/robots/<robot>_base.cpp````
 
 3. Inherit from `BaseNode`, implement `init_robot()`, `publish_command()`, `num_motors()`
 

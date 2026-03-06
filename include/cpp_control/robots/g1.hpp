@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cpp_control/base_node.hpp"
+#include "cpp_control/base.hpp"
 #include "common/gamepad.hpp"
 #include "common/motor_crc_hg.h"
 

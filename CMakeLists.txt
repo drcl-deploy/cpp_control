@@ -54,8 +54,8 @@ add_library(cpp_control_common STATIC
 target_link_libraries(cpp_control_common ${ONNXRUNTIME_LIBRARIES} yaml-cpp)
 ament_target_dependencies(cpp_control_common rclcpp unitree_hg)
 
-# ── Level 0: base_node ────────────────────────────────────────
-add_library(cpp_control_base STATIC src/base_node.cpp)
+# ── Level 0: base ────────────────────────────────────────
+add_library(cpp_control_base STATIC src/base.cpp)
 target_link_libraries(cpp_control_base cpp_control_common)
 ament_target_dependencies(cpp_control_base rclcpp sensor_msgs)
 
