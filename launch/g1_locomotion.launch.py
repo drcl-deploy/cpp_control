@@ -18,8 +18,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
 
-    default_config = os.path.join(pkg, 'config', 'g1', 'locomotion_config.yaml')
-    default_model = os.path.join(pkg, 'models', 'locomotion.onnx')
+    default_config = os.path.join(pkg, 'config', 'locomotion', 'g1.yaml')
+    default_model = os.path.join(pkg, 'models','locomotion', 'g1.onnx')
 
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),

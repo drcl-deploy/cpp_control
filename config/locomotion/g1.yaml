@@ -14,7 +14,7 @@ lowcmd_topic: "/robot_command" #"/lowcmd"
 lowstate_topic: "/robot_state" #"/lowstate"
 
 # Model paths (relative paths resolved by launch file)
-onnx_path: "locomotion.onnx"
+onnx_path: "locomotion/g1.onnx"
 
 # Control gains for 29DOF (stiffness) - from deploy_mjlab.yaml
 kps: [40.2, 99.1, 40.2, 99.1, 28.5, 28.5,
