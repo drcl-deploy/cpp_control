@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(unitree_hg REQUIRED)
+find_package(messages REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 # ── ONNX Runtime ──────────────────────────────────────────────
@@ -61,13 +62,13 @@ ament_target_dependencies(cpp_control_base rclcpp sensor_msgs)
 # ── Level 1: g1 ────────────────────────────────────
 add_library(cpp_control_g1 STATIC src/robots/g1.cpp)
 target_link_libraries(cpp_control_g1 cpp_control_base)
-ament_target_dependencies(cpp_control_g1 rclcpp unitree_hg geometry_msgs)
+ament_target_dependencies(cpp_control_g1 rclcpp unitree_hg messages geometry_msgs)
 
 # ── Task: locomotion (g1) ─────────────────────────────────────
 add_executable(g1_locomotion_node src/tasks/locomotion/g1.cpp)
 target_link_libraries(g1_locomotion_node cpp_control_g1)
 ament_target_dependencies(g1_locomotion_node
-  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg)
+  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg messages)
 
 # ── Task: locomanip (base + g1) ──────────────────────────────
 add_library(cpp_control_locomanip_base STATIC
@@ -79,7 +80,7 @@ ament_target_dependencies(cpp_control_locomanip_base rclcpp sensor_msgs geometry
 add_executable(g1_locomanip_node src/tasks/locomanip/g1.cpp)
 target_link_libraries(g1_locomanip_node cpp_control_locomanip_base)
 ament_target_dependencies(g1_locomanip_node
-  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg)
+  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg messages)
 
 # ── Install ───────────────────────────────────────────────────
 install(TARGETS

@@ -14,7 +14,7 @@ namespace cpp_control
  *  - build_observation()  : [ang_vel(3), proj_grav(3), cmd_vel(3), jpos_rel(N), jvel(N), last_act(N)]
  *  - policy_control()     : obs → predict → action-scaled position command
  */
-class G1LocomotionNode : public G1BaseNode
+class G1LocomotionNode : public G1Node
 {
 public:
     explicit G1LocomotionNode(const std::string& node_name = "g1_locomotion_controller");

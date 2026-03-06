@@ -22,7 +22,7 @@ namespace cpp_control
  *
  * Robot-specific subclass (g1.cpp) can override if needed.
  */
-class LocoManipBase : public G1BaseNode
+class LocoManipBase : public G1Node
 {
 public:
     explicit LocoManipBase(const std::string& node_name);

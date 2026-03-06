@@ -5,7 +5,7 @@
 namespace cpp_control
 {
 
-G1LocomotionNode::G1LocomotionNode(const std::string& node_name) : G1BaseNode(node_name)
+G1LocomotionNode::G1LocomotionNode(const std::string& node_name) : G1Node(node_name)
 {
     // Initialize robot (Level 0+1) now that vtable is ready
     init();

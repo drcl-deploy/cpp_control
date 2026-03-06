@@ -11,6 +11,7 @@ struct Config
     double control_dt = 0.02;
     std::string msg_type = "hg";
     std::string imu_type = "pelvis";
+    std::string workflow = "unitree";  // "unitree" or "drcl_deploy"
 
     // Topics
     std::string lowcmd_topic = "/lowcmd";

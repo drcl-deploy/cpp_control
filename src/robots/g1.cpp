@@ -5,9 +5,9 @@
 namespace cpp_control
 {
 
-G1BaseNode::G1BaseNode(const std::string& node_name) : BaseNode(node_name) {}
+G1Node::G1Node(const std::string& node_name) : BaseNode(node_name) {}
 
-void G1BaseNode::init_robot()
+void G1Node::init_robot()
 {
     // ── Load robot constants from config ──
     if (config_)
@@ -24,6 +24,10 @@ void G1BaseNode::init_robot()
             kds_[i] = static_cast<float>(config_->kds[i]);
             action_scale_[i] = static_cast<float>(config_->action_scale[i]);
         }
+        if (config_->workflow == "drcl_deploy")
+            workflow_ = Workflow::DRCL_DEPLOY;
+        else
+            workflow_ = Workflow::UNITREE;
     }
     else
     {
@@ -55,21 +59,40 @@ void G1BaseNode::init_robot()
         action_scale_.assign(G1_NUM_MOTOR, 0.5f);
     }
 
-    // ── HG message setup ──
+    // ── Workflow-based backend init ──
+    switch (workflow_)
+    {
+    case Workflow::DRCL_DEPLOY:
+        init_drcl_deploy();
+        break;
+    case Workflow::UNITREE:
+    default:
+        init_unitree();
+        break;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "G1 init_robot: workflow=%s",
+                config_ ? config_->workflow.c_str() : "unitree");
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Unitree HG backend
+// ══════════════════════════════════════════════════════════════
+
+void G1Node::init_unitree()
+{
     std::string lowcmd_topic = config_ ? config_->lowcmd_topic : "/lowcmd";
     std::string lowstate_topic = config_ ? config_->lowstate_topic : "/lowstate";
 
     almi_ctrl::init_cmd_hg(low_cmd_hg_, mode_machine_, mode_pr_);
 
-    lowcmd_pub_ = this->create_publisher<unitree_hg::msg::LowCmd>(lowcmd_topic, 10);
-    lowstate_sub_ = this->create_subscription<unitree_hg::msg::LowState>(
+    lowcmd_pub_hg_ = this->create_publisher<unitree_hg::msg::LowCmd>(lowcmd_topic, 10);
+    lowstate_sub_hg_ = this->create_subscription<unitree_hg::msg::LowState>(
         lowstate_topic, 10,
-        [this](unitree_hg::msg::LowState::SharedPtr msg) { this->low_state_handler_hg(msg); });
+        [this](unitree_hg::msg::LowState::SharedPtr msg) { this->subscribe_low_state(msg); });
 }
 
-// ── State Handler ─────────────────────────────────────────────
-
-void G1BaseNode::low_state_handler_hg(unitree_hg::msg::LowState::SharedPtr msg)
+void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
 {
     // IMU
     robot_state_.imu_quaternion = {
@@ -95,13 +118,12 @@ void G1BaseNode::low_state_handler_hg(unitree_hg::msg::LowState::SharedPtr msg)
     handle_gamepad(*msg);
 }
 
-void G1BaseNode::handle_gamepad(const unitree_hg::msg::LowState& msg)
+void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
 {
     memcpy(gamepad_rx_.buff, msg.wireless_remote.data(), 40);
     gamepad_.update(gamepad_rx_.RF_RX);
 
     // Mode switching only — velocity mapping is task-specific (Level 2)
-    // Use on_press (rising edge) not pressed (level) to avoid firing every frame
     if (gamepad_.B.on_press)
     {
         control_mode_ = ControlMode::ZEROING;
@@ -132,18 +154,10 @@ void G1BaseNode::handle_gamepad(const unitree_hg::msg::LowState& msg)
         RCLCPP_INFO(this->get_logger(), "[GP] -> policy");
     }
 
-    // Let Level 2 read velocities from gamepad_
     on_gamepad();
 }
 
-// ── Command Publishing ────────────────────────────────────────
-
-void G1BaseNode::publish_command(const RobotCommand& cmd)
-{
-    publish_command_hg(cmd);
-}
-
-void G1BaseNode::publish_command_hg(const RobotCommand& cmd)
+void G1Node::publish_low_cmd(const RobotCommand& cmd)
 {
     for (int i = 0; i < G1_NUM_MOTOR && i < static_cast<int>(cmd.motor_commands.size()); ++i)
     {
@@ -154,7 +168,78 @@ void G1BaseNode::publish_command_hg(const RobotCommand& cmd)
         low_cmd_hg_.motor_cmd[i].kd = cmd.motor_commands[i].kd;
     }
     get_crc(low_cmd_hg_);
-    lowcmd_pub_->publish(low_cmd_hg_);
+    lowcmd_pub_hg_->publish(low_cmd_hg_);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  drcl_deploy backend (G1State / G1Command)
+// ══════════════════════════════════════════════════════════════
+
+void G1Node::init_drcl_deploy()
+{
+    std::string lowcmd_topic = config_ ? config_->lowcmd_topic : "/lowcmd";
+    std::string lowstate_topic = config_ ? config_->lowstate_topic : "/lowstate";
+
+    lowcmd_pub_drcl_ = this->create_publisher<messages::msg::G1Command>(lowcmd_topic, 10);
+    lowstate_sub_drcl_ = this->create_subscription<messages::msg::G1State>(
+        lowstate_topic, 10,
+        [this](messages::msg::G1State::SharedPtr msg) { this->subscribe_g1_state(msg); });
+}
+
+void G1Node::subscribe_g1_state(messages::msg::G1State::SharedPtr msg)
+{
+    // IMU (G1State has IMU[1])
+    robot_state_.imu_quaternion = {
+        msg->imu[0].quaternion[0], msg->imu[0].quaternion[1],
+        msg->imu[0].quaternion[2], msg->imu[0].quaternion[3]};
+    robot_state_.imu_gyroscope = {
+        msg->imu[0].gyroscope[0], msg->imu[0].gyroscope[1],
+        msg->imu[0].gyroscope[2]};
+    robot_state_.imu_accelerometer = {
+        msg->imu[0].accelerometer[0], msg->imu[0].accelerometer[1],
+        msg->imu[0].accelerometer[2]};
+
+    // Joints
+    for (int i = 0; i < G1_NUM_MOTOR; ++i)
+    {
+        robot_state_.joint_positions[i] = msg->motor_state[i].q;
+        robot_state_.joint_velocities[i] = msg->motor_state[i].dq;
+        robot_state_.joint_torques[i] = msg->motor_state[i].tauest;
+    }
+
+
+}
+
+void G1Node::publish_g1_command(const RobotCommand& cmd)
+{
+    messages::msg::G1Command msg;
+    for (int i = 0; i < G1_NUM_MOTOR && i < static_cast<int>(cmd.motor_commands.size()); ++i)
+    {
+        msg.motor_command[i].q = cmd.motor_commands[i].q;
+        msg.motor_command[i].dq = cmd.motor_commands[i].dq;
+        msg.motor_command[i].tau = cmd.motor_commands[i].tau;
+        msg.motor_command[i].kp = cmd.motor_commands[i].kp;
+        msg.motor_command[i].kd = cmd.motor_commands[i].kd;
+    }
+    lowcmd_pub_drcl_->publish(msg);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  publish_command — dispatches to active backend
+// ══════════════════════════════════════════════════════════════
+
+void G1Node::publish_command(const RobotCommand& cmd)
+{
+    switch (workflow_)
+    {
+    case Workflow::DRCL_DEPLOY:
+        publish_g1_command(cmd);
+        break;
+    case Workflow::UNITREE:
+    default:
+        publish_low_cmd(cmd);
+        break;
+    }
 }
 
 }  // namespace cpp_control

@@ -6,9 +6,12 @@ control_dt: 0.02  # 50Hz control loop
 msg_type: "hg"     # "hg" for G1 humanoid
 imu_type: "pelvis" # IMU location
 
-# Topic names - unitree_mujoco publishes these topics
-lowcmd_topic: "/lowcmd"
-lowstate_topic: "/lowstate"
+# Workflow: "unitree" for unitree_hg messages, "drcl_deploy" for custom G1State/G1Command messages
+workflow: "drcl_deploy" #"unitree"
+
+# Topic names
+lowcmd_topic: "/robot_command" #"/lowcmd"
+lowstate_topic: "/robot_state" #"/lowstate"
 
 # Model paths (relative paths resolved by launch file)
 onnx_path: "locomotion.onnx"

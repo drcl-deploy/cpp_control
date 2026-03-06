@@ -6,57 +6,75 @@
 
 #include <unitree_hg/msg/low_cmd.hpp>
 #include <unitree_hg/msg/low_state.hpp>
+#include <messages/msg/g1_state.hpp>
+#include <messages/msg/g1_command.hpp>
 
 namespace cpp_control
 {
 
-constexpr int G1_NUM_MOTOR = 29;
+    constexpr int G1_NUM_MOTOR = 29;
 
-/**
- * @brief Level 1: G1 robot-specific base node.
- *
- * Implements:
- *  - HG message backend (state parsing + command publishing)
- *  - Unitree gamepad parsing + mode switching via wireless_remote
- *
- * Level 2 tasks override:
- *  - policy_control()       : task-specific inference
- *  - on_joy()               : joystick velocity mapping
- *  - on_gamepad()           : gamepad velocity mapping (called after mode switch)
- */
-class G1BaseNode : public BaseNode
-{
-public:
-    explicit G1BaseNode(const std::string& node_name);
-    ~G1BaseNode() override = default;
+    enum class Workflow
+    {
+        UNITREE,
+        DRCL_DEPLOY
+    };
 
-protected:
-    // --- Level 1 implementation of BaseNode interface ---
-    void init_robot() override;
-    void publish_command(const RobotCommand& cmd) override;
-    int num_motors() const override { return G1_NUM_MOTOR; }
+    /**
+     * @brief Level 1: G1 robot-specific base node.
+     *
+     * Implements:
+     *  - HG message backend (state parsing + command publishing)     [workflow=unitree]
+     *  - drcl_deploy message backend (G1State / G1Command)           [workflow=drcl_deploy]
+     *  - Unitree gamepad parsing + mode switching via wireless_remote [unitree only]
+     *
+     * Level 2 tasks override:
+     *  - policy_control()       : task-specific inference
+     *  - on_joy()               : joystick velocity mapping
+     *  - on_gamepad()           : gamepad velocity mapping (called after mode switch)
+     */
+    class G1Node : public BaseNode
+    {
+    public:
+        explicit G1Node(const std::string &node_name);
+        ~G1Node() override = default;
 
-    // --- Hook for Level 2: read velocities from gamepad_ after mode switching ---
-    virtual void on_gamepad() {}
+    protected:
+        // --- Level 1 implementation of BaseNode interface ---
+        void init_robot() override;
+        void publish_command(const RobotCommand &cmd) override;
+        int num_motors() const override { return G1_NUM_MOTOR; }
 
-    // --- Gamepad state (readable by Level 2) ---
-    unitree::common::Gamepad gamepad_;
+        // --- Hook for Level 2: read velocities from gamepad_ after mode switching ---
+        virtual void on_gamepad() {}
 
-private:
-    // --- HG message backend ---
-    void low_state_handler_hg(unitree_hg::msg::LowState::SharedPtr msg);
-    void publish_command_hg(const RobotCommand& cmd);
-    void handle_gamepad(const unitree_hg::msg::LowState& msg);
+        // --- Gamepad state (readable by Level 2) ---
+        unitree::common::Gamepad gamepad_;
 
-    unitree_hg::msg::LowCmd low_cmd_hg_;
-    uint8_t mode_machine_ = 5;
-    uint8_t mode_pr_ = 0;
+    private:
+        // --- Workflow selector ---
+        Workflow workflow_ = Workflow::UNITREE;
 
-    unitree::common::REMOTE_DATA_RX gamepad_rx_;
+        // --- HG message backend (unitree) ---
+        void init_unitree();
+        void subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg);
+        void publish_low_cmd(const RobotCommand &cmd);
+        void handle_gamepad(const unitree_hg::msg::LowState &msg);
 
-    // --- ROS handles ---
-    rclcpp::Publisher<unitree_hg::msg::LowCmd>::SharedPtr lowcmd_pub_;
-    rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr lowstate_sub_;
-};
+        unitree_hg::msg::LowCmd low_cmd_hg_;
+        uint8_t mode_machine_ = 5;
+        uint8_t mode_pr_ = 0;
+        unitree::common::REMOTE_DATA_RX gamepad_rx_;
 
-}  // namespace cpp_control
+        rclcpp::Publisher<unitree_hg::msg::LowCmd>::SharedPtr lowcmd_pub_hg_;
+        rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr lowstate_sub_hg_;
+
+        // --- drcl_deploy message backend ---
+        void init_drcl_deploy();
+        void subscribe_g1_state(messages::msg::G1State::SharedPtr msg);
+        void publish_g1_command(const RobotCommand &cmd);
+        rclcpp::Publisher<messages::msg::G1Command>::SharedPtr lowcmd_pub_drcl_;
+        rclcpp::Subscription<messages::msg::G1State>::SharedPtr lowstate_sub_drcl_;
+    };
+
+} // namespace cpp_control

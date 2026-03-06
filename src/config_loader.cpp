@@ -22,6 +22,10 @@ Config::Config(const std::string& config_path)
         {
             imu_type = config["imu_type"].as<std::string>();
         }
+        if (config["workflow"])
+        {
+            workflow = config["workflow"].as<std::string>();
+        }
 
         // Topics
         if (config["lowcmd_topic"])
