@@ -70,9 +70,21 @@ target_link_libraries(g1_locomotion_node cpp_control_g1)
 ament_target_dependencies(g1_locomotion_node
   rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg messages)
 
+# ── Level 1: mini_pi ────────────────────────────────────
+add_library(cpp_control_mini_pi STATIC src/robots/mini_pi.cpp)
+target_link_libraries(cpp_control_mini_pi cpp_control_base)
+ament_target_dependencies(cpp_control_mini_pi rclcpp messages geometry_msgs)
+
+# ── Task: locomotion (mini_pi) ───────────────────────────────
+add_executable(mini_pi_locomotion_node src/tasks/locomotion/mini_pi.cpp)
+target_link_libraries(mini_pi_locomotion_node cpp_control_mini_pi)
+ament_target_dependencies(mini_pi_locomotion_node
+  rclcpp std_msgs sensor_msgs geometry_msgs messages)
+
 # ── Install ───────────────────────────────────────────────────
 install(TARGETS
   g1_locomotion_node
+  mini_pi_locomotion_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

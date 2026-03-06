@@ -1,0 +1,41 @@
+# Configuration for MiniPi Locomotion Controller (12DOF)
+
+control_dt: 0.02  # 50Hz control loop
+
+workflow: "drcl_deploy"
+
+# Topic names
+lowcmd_topic: "/robot_command"
+lowstate_topic: "/robot_state"
+
+# Model path
+onnx_path: "locomotion/mini_pi_sim2real.onnx"
+
+# Control gains (12DOF, uniform 504736NE actuators)
+# stiffness = armature * (10 * 2pi)^2 ≈ 15.35
+# damping   = 2 * 2.0 * armature * (10 * 2pi) ≈ 0.98
+kps: [15.35, 15.35, 15.35, 15.35, 15.35, 15.35,
+      15.35, 15.35, 15.35, 15.35, 15.35, 15.35]
+
+kds: [0.98, 0.98, 0.98, 0.98, 0.98, 0.98,
+      0.98, 0.98, 0.98, 0.98, 0.98, 0.98]
+
+# Default positions (JOINT_NAMES_EXPR order)
+default_angles: [0.0, -0.4, 0.65, 0.0, 0.0, -0.25,
+                 0.0, -0.4, 0.65, 0.0, 0.0, -0.25]
+
+# Action scaling: 0.25 * effort_limit / stiffness ≈ 0.26
+action_scale: [0.26, 0.26, 0.26, 0.26, 0.26, 0.26,
+               0.26, 0.26, 0.26, 0.26, 0.26, 0.26]
+
+# Model dimensions
+num_actions: 12
+num_obs: 45
+
+# Joint names (JOINT_NAMES_EXPR order from constants.py)
+joint_names: ["l_ankle_roll_joint", "l_ankle_pitch_joint",
+              "l_calf_joint", "l_thigh_joint",
+              "l_hip_roll_joint", "l_hip_pitch_joint",
+              "r_ankle_roll_joint", "r_ankle_pitch_joint",
+              "r_calf_joint", "r_thigh_joint",
+              "r_hip_roll_joint", "r_hip_pitch_joint"]
