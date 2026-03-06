@@ -70,22 +70,9 @@ target_link_libraries(g1_locomotion_node cpp_control_g1)
 ament_target_dependencies(g1_locomotion_node
   rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg messages)
 
-# ── Task: locomanip (base + g1) ──────────────────────────────
-add_library(cpp_control_locomanip_base STATIC
-  src/tasks/locomanip/base.cpp
-)
-target_link_libraries(cpp_control_locomanip_base cpp_control_g1)
-ament_target_dependencies(cpp_control_locomanip_base rclcpp sensor_msgs geometry_msgs)
-
-add_executable(g1_locomanip_node src/tasks/locomanip/g1.cpp)
-target_link_libraries(g1_locomanip_node cpp_control_locomanip_base)
-ament_target_dependencies(g1_locomanip_node
-  rclcpp std_msgs sensor_msgs geometry_msgs unitree_hg messages)
-
 # ── Install ───────────────────────────────────────────────────
 install(TARGETS
   g1_locomotion_node
-  g1_locomanip_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
