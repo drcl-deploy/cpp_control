@@ -81,10 +81,17 @@ target_link_libraries(mini_pi_locomotion_node cpp_control_mini_pi)
 ament_target_dependencies(mini_pi_locomotion_node
   rclcpp std_msgs sensor_msgs geometry_msgs messages)
 
+# ── Task: dive (mini_pi) ─────────────────────────────────────
+add_executable(mini_pi_dive_node src/tasks/dive/mini_pi.cpp)
+target_link_libraries(mini_pi_dive_node cpp_control_mini_pi)
+ament_target_dependencies(mini_pi_dive_node
+  rclcpp std_msgs sensor_msgs geometry_msgs messages)
+
 # ── Install ───────────────────────────────────────────────────
 install(TARGETS
   g1_locomotion_node
   mini_pi_locomotion_node
+  mini_pi_dive_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
