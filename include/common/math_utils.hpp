@@ -35,5 +35,20 @@ inline std::array<float, 3> get_projected_gravity(const std::array<float, 4>& qu
     };
 }
 
+/// Convert quaternion (w,x,y,z) to 6D rotation representation (first two columns of R).
+/// Returns [R00, R01, R10, R11, R20, R21] (row-major order).
+inline std::array<float, 6> quat_to_rotation_6d(const std::array<float, 4>& q)
+{
+    float w = q[0], x = q[1], y = q[2], z = q[3];
+    return {
+        1.f - 2.f * (y * y + z * z),  // R00
+        2.f * (x * y - w * z),         // R01
+        2.f * (x * y + w * z),         // R10
+        1.f - 2.f * (x * x + z * z),  // R11
+        2.f * (x * z - w * y),         // R20
+        2.f * (y * z + w * x),         // R21
+    };
+}
+
 }  // namespace math
 }  // namespace cpp_control

@@ -34,13 +34,20 @@ inline void append_imu_obs(std::vector<float>& obs, const RobotState& state)
     append_projected_gravity(obs, state);
 }
 
-// ── Command Velocity ──────────────────────────────────────────
+// ── Command ──────────────────────────────────────────────────
 
 /// Append 3D command velocity to observation vector
 inline void append_cmd_vel(std::vector<float>& obs, const std::array<float, 3>& cmd_vel)
 {
     for (int i = 0; i < 3; ++i)
         obs.push_back(cmd_vel[i]);
+}
+
+/// Append generic 3D command to observation vector
+inline void append_cmd(std::vector<float>& obs, const std::array<float, 3>& cmd)
+{
+    for (int i = 0; i < 3; ++i)
+        obs.push_back(cmd[i]);
 }
 
 // ── Joint Observations ────────────────────────────────────────
@@ -113,6 +120,16 @@ inline void append_pose(std::vector<float>& obs,
 {
     append_position(obs, pos);
     append_quaternion(obs, quat);
+}
+
+// ── Orientation ───────────────────────────────────────────────
+
+/// Append 6D rotation matrix representation (first two columns of R from quaternion)
+inline void append_rotation_6d(std::vector<float>& obs, const std::array<float, 4>& quat)
+{
+    auto r6d = math::quat_to_rotation_6d(quat);
+    for (int i = 0; i < 6; ++i)
+        obs.push_back(r6d[i]);
 }
 
 }  // namespace obs
