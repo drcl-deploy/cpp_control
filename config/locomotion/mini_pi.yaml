@@ -25,8 +25,8 @@ default_angles: [0.0, -0.4, 0.65, 0.0, 0.0, -0.25,
                  0.0, -0.4, 0.65, 0.0, 0.0, -0.25]
 
 # Action scaling: 0.25 * effort_limit / stiffness ≈ 0.26
-action_scale: [0.26, 0.26, 0.26, 0.26, 0.26, 0.26,
-               0.26, 0.26, 0.26, 0.26, 0.26, 0.26]
+action_scale: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+               0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
 
 # Model dimensions
 num_actions: 12
