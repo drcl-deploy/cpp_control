@@ -10,6 +10,10 @@ constexpr size_t UP_DOWN    = 7;  // up = +1, down = -1
 constexpr size_t LEFT_RIGHT = 6;  // left = +1, right = -1
 }  // namespace dpad
 
+
+// make a global varian to map from motor2action index
+std::array<int, 12> motor2action_id = {11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+
 MiniPiDiveNode::MiniPiDiveNode(const std::string& node_name) : MiniPiNode(node_name)
 {
     init();
@@ -39,17 +43,14 @@ std::vector<float> MiniPiDiveNode::build_observation()
     std::vector<float> obs;
     obs.reserve(3 + n + n + n + 6 + 3);  // 48
 
+    // print a line 
+    std::cout << "*********" << std::endl;
+
     // [gyro(3), jpos_rel(n), jvel(n), last_act(n), rmat6d(6), cmd(3)]
     obs::append_gyro(obs, robot_state_);
-    obs::append_joint_pos_rel(obs, robot_state_, default_angles_);
-    obs::append_joint_vel(obs, robot_state_, n);
-    obs::append_last_actions(obs, last_actions_);
+    obs::append_joint_obs(obs, robot_state_, default_angles_);
+    obs::append_last_actions(obs, last_actions_, n);
     obs::append_rotation_6d(obs, robot_state_.imu_quaternion);
-    // print the quaternion value
-    std::cout << "IMU Quaternion: [" << robot_state_.imu_quaternion[0] << ", "
-              << robot_state_.imu_quaternion[1] << ", "
-              << robot_state_.imu_quaternion[2] << ", "
-              << robot_state_.imu_quaternion[3] << "]" << std::endl;
     obs::append_cmd(obs, cmd_);
     
 
@@ -72,14 +73,15 @@ RobotCommand MiniPiDiveNode::policy_control()
 
     for (int i = 0; i < n && i < static_cast<int>(action.size()); ++i)
     {
-        constexpr float kActionScale = 0.5f;
-        actions_[i] = action[i];
-        cmd.motor_commands[i].q = default_angles_[i] + kActionScale * action[i];
+        actions_[i] = action[motor2action_id[i]];  // map from action index to motor index
+        // put a print statement to show the motro to action mapping
+        std::cout << "Motor " << i << " action: " << motor2action_id[i] << " -> " << actions_[i] << std::endl;
+        cmd.motor_commands[i].q = default_angles_[i] + action_scale_[i] * actions_[i];
         cmd.motor_commands[i].kp = kps_[i];
         cmd.motor_commands[i].kd = kds_[i];
     }
 
-    last_actions_ = actions_;
+    last_actions_ = action;
     return cmd;
 }
 
