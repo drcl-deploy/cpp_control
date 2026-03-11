@@ -1,8 +1,42 @@
 # cpp_control
 
-a modular, multi-robot, multi-task C++ controller deployment package for ROS2.
+a modular, multi-robot, multi-workflow C++ controller deployment package for ROS2.
 
 developed and tested in ROS2 [humble](https://docs.ros.org/en/humble/index.html)
+
+```mermaid
+graph LR
+    CPP["cpp_control"]
+
+    subgraph drcl [" drcl_deploy "]
+        MJ["mj_sim"]
+        IF["interface"]
+    end
+
+    subgraph unitree [" unitree_ros2 "]
+        UM["unitree_mujoco"]
+        HW["hardware"]
+    end
+
+    SDK["direct hardware SDK"]
+
+    CPP <=="messages"==> drcl
+    CPP <=="unitree_hg"==> unitree
+    CPP <=="custom communication<br/>& data structures"==> SDK
+
+    style CPP fill:#4a6fa5,color:#fff,stroke:none
+    style drcl fill:none,stroke:#6b8f71,stroke-width:2px,color:#6b8f71
+    style unitree fill:none,stroke:#c4a35a,stroke-width:2px,color:#c4a35a
+    style MJ fill:#6b8f71,color:#fff,stroke:none
+    style IF fill:#6b8f71,color:#fff,stroke:none
+    style UM fill:#c4a35a,color:#fff,stroke:none
+    style HW fill:#c4a35a,color:#fff,stroke:none
+    style SDK fill:#8b5e3c,color:#fff,stroke:none
+
+    linkStyle 0 stroke:#6b8f71,stroke-width:4px
+    linkStyle 1 stroke:#c4a35a,stroke-width:4px
+    linkStyle 2 stroke:#8b5e3c,stroke-width:4px
+```
 
 ## install
 
