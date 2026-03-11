@@ -42,10 +42,6 @@ std::vector<float> MiniPiDiveNode::build_observation()
     int n = num_motors();
     std::vector<float> obs;
     obs.reserve(3 + n + n + n + 6 + 3);  // 48
-
-    // print a line 
-    std::cout << "*********" << std::endl;
-
     // [gyro(3), jpos_rel(n), jvel(n), last_act(n), rmat6d(6), cmd(3)]
     obs::append_gyro(obs, robot_state_);
     obs::append_joint_obs(obs, robot_state_, default_angles_);
@@ -70,13 +66,14 @@ RobotCommand MiniPiDiveNode::policy_control()
     int n = num_motors();
     RobotCommand cmd;
     cmd.motor_commands.resize(n);
-
+    // put a line
+    std::cout << "**********" << std::endl;
     for (int i = 0; i < n && i < static_cast<int>(action.size()); ++i)
     {
         actions_[i] = action[motor2action_id[i]];  // map from action index to motor index
-        // put a print statement to show the motro to action mapping
-        std::cout << "Motor " << i << " action: " << motor2action_id[i] << " -> " << actions_[i] << std::endl;
+        // put a print statement to show the motor to action mapping
         cmd.motor_commands[i].q = default_angles_[i] + action_scale_[i] * actions_[i];
+        std::cout << "mtr_id " << i << " act_id: " << motor2action_id[i] << " cmd: " << cmd.motor_commands[i].q << std::endl;
         cmd.motor_commands[i].kp = kps_[i];
         cmd.motor_commands[i].kd = kds_[i];
     }
