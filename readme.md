@@ -1,14 +1,14 @@
 # cpp_control
 
 A modular, multi-robot, multi-task C++ controller deployment package for ROS 2.
-Built around ONNX Runtime policy inference with a clean three-level inheritance architecture
-that makes it straightforward to add new robots and tasks.
+
+developed and tested in ros2 [humble](https://docs.ros.org/en/humble/index.html)
 
 ## install
 
 refer to corresponding deployment workflow:
-*  [unitree.md](workflow/unitree.md) 
-*  [drcl_deploy.md](workflow/drcl_deploy.md)
+*  [unitree.md](workflows/unitree.md) 
+*  [drcl_deploy.md](workflows/drcl_deploy.md)
 
 **onnx** (optionally, for nn controllers)
 * download pre-built [ONNX Runtime v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0)
@@ -43,7 +43,7 @@ The package follows a **three-level inheritance** pattern that cleanly separates
 graph TD
     A["<b>level 0 — BaseNode</b><br/><i>robot &amp; task agnostic</i><br/>control FSM · joystick · timer loop .etc"]
 
-    B["<b>level 1 — RobotNode</b><br/><i>robot-specific</i><br/>(motor count , joint config, pub/sub backend handlers, etc"]
+    B["<b>level 1 — RobotNode</b><br/><i>robot-specific</i><br/>(motor count , joint config, pub/sub backend handlers, etc)"]
 
     C["<b>level 2 — RobotTaskNode</b><br/><i>robot and task-specific</i><br/>(observation building, policy inference , action mapping , etc )"]
 

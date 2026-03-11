@@ -25,7 +25,7 @@ colcon build
 
 ### mujoco 
 
-down [mujoco 3.3.6 release](https://github.com/google-deepmind/mujoco/releases/tag/3.3.6), and extract it to the `~/.mujoco` directory;
+download [mujoco 3.3.6 release](https://github.com/google-deepmind/mujoco/releases/tag/3.3.6), and extract it to the `~/.mujoco` directory;
 
 ```
 cd ~/.mujoco/mujoco-3.3.6
