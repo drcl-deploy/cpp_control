@@ -1,8 +1,8 @@
 # cpp_control
 
-A modular, multi-robot, multi-task C++ controller deployment package for ROS 2.
+a modular, multi-robot, multi-task C++ controller deployment package for ROS2.
 
-developed and tested in ros2 [humble](https://docs.ros.org/en/humble/index.html)
+developed and tested in ROS2 [humble](https://docs.ros.org/en/humble/index.html)
 
 ## install
 
@@ -88,7 +88,8 @@ cpp_control/
 
 2. **register in CMakeLists.txt** — add a static library following the `cpp_control_g1` pattern.
 
->[!TIP] refer to
+>[!TIP]
+> refer to
 > * [robots/g1.hpp](include/cpp_control/robots/g1.hpp) 
 > * [robots/g1.cpp](src/robots/g1.cpp)
 
@@ -111,7 +112,8 @@ cpp_control/
 
 5. **register in CMakeLists.txt** — add executable following existing patterns.
 
->[!TIP] refer to
+>[!TIP]
+> refer to
 > * [tasks/locomotion/g1.hpp](include/cpp_control/tasks/locomotion/g1.hpp) 
 > * [tasks/locomotion/g1.cpp](src/tasks/locomotion/g1.cpp)
 
