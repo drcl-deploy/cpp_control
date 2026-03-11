@@ -38,6 +38,9 @@ protected:
 
     // [flip_x, flip_y, terrain_height]  (default: front flip)
     std::array<float, 3> cmd_ = {1.0f, 0.0f, 1.0f};
+
+    // Motor-to-action index mapping (loaded from config)
+    std::vector<int> motor2action_id_;
 };
 
 }  // namespace cpp_control

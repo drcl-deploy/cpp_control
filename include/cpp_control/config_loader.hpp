@@ -39,6 +39,9 @@ struct Config
     // Joint names for 29DOF (mujoco order)
     std::vector<std::string> joint_names;
 
+    // Motor-to-action index mapping
+    std::vector<int> motor2action_id;
+
     // Stiffness and damping parameters
     std::vector<double> stiffness_params;
     std::vector<double> damping_params;

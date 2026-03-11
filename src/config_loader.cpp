@@ -110,6 +110,12 @@ Config::Config(const std::string& config_path)
             num_obs = config["num_obs"].as<int>();
         }
 
+        // Motor-to-action index mapping
+        if (config["motor2action_id"])
+        {
+            motor2action_id = config["motor2action_id"].as<std::vector<int>>();
+        }
+
         // Joint names
         if (config["joint_names"])
         {

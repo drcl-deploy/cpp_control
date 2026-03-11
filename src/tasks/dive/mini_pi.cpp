@@ -1,5 +1,7 @@
 #include "cpp_control/tasks/dive/mini_pi.hpp"
 
+#include <numeric>
+
 namespace cpp_control
 {
 
@@ -11,12 +13,21 @@ constexpr size_t LEFT_RIGHT = 6;  // left = +1, right = -1
 }  // namespace dpad
 
 
-// make a global varian to map from motor2action index
-std::array<int, 12> motor2action_id = {11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
-
 MiniPiDiveNode::MiniPiDiveNode(const std::string& node_name) : MiniPiNode(node_name)
 {
     init();
+
+    // Load motor-to-action mapping from config
+    if (config_ && !config_->motor2action_id.empty())
+    {
+        motor2action_id_ = config_->motor2action_id;
+    }
+    else
+    {
+        RCLCPP_WARN(this->get_logger(), "motor2action_id not in config, using identity mapping");
+        motor2action_id_.resize(num_motors());
+        std::iota(motor2action_id_.begin(), motor2action_id_.end(), 0);
+    }
 
     std::string onnx_path = this->declare_parameter("onnx_model_path", "");
     if (onnx_path.empty() && config_)
@@ -70,10 +81,10 @@ RobotCommand MiniPiDiveNode::policy_control()
     std::cout << "**********" << std::endl;
     for (int i = 0; i < n && i < static_cast<int>(action.size()); ++i)
     {
-        actions_[i] = action[motor2action_id[i]];  // map from action index to motor index
+        actions_[i] = action[motor2action_id_[i]];  // map from action index to motor index
         // put a print statement to show the motor to action mapping
         cmd.motor_commands[i].q = default_angles_[i] + action_scale_[i] * actions_[i];
-        std::cout << "mtr_id " << i << " act_id: " << motor2action_id[i] << " cmd: " << cmd.motor_commands[i].q << std::endl;
+        std::cout << "mtr_id " << i << " act_id: " << motor2action_id_[i] << " cmd: " << cmd.motor_commands[i].q << std::endl;
         cmd.motor_commands[i].kp = kps_[i];
         cmd.motor_commands[i].kd = kds_[i];
     }
