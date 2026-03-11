@@ -1,6 +1,6 @@
 
 
-## setting up
+## install 
 
 ### unitree_ros2
 * clone
@@ -64,3 +64,21 @@ cd unitree_ros2
 source setup.sh && cd ./cyclonedds_ws
 colcon build --symlink-install --packages-select cpp_control
 ```
+
+## usage 
+* in terminal1, spawn simulation 
+```
+cd unitree_ros2
+source setup.sh 
+sudo ./unitree_mujoco/simulate/build/unitree_mujoco -i 0 -n lo -r g1 
+```
+> [!NOTE] 
+> in `./unitree_mujoco/simulate/config.yaml` , set `use_joystick: 1` for joystick to be detected. 
+
+* in terminal2, spawn controller 
+```
+cd unitree_ros2
+source setup.sh 
+ros2 launch cpp_control g1_locomotion.launch.py 
+```
+

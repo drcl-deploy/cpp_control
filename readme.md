@@ -10,6 +10,13 @@ refer to corresponding deployment workflow:
 *  [unitree.md](workflow/unitree.md) 
 *  [drcl_deploy.md](workflow/drcl_deploy.md)
 
+**onnx** (optionally, for nn controllers)
+* download pre-built [ONNX Runtime v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0)
+* put a symbolic link under [thirdparty]
+```
+ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
+```
+
 ## usage
 
 ```bash
@@ -81,7 +88,9 @@ cpp_control/
 
 2. **register in CMakeLists.txt** — add a static library following the `cpp_control_g1` pattern.
 
-> **reference:** [robots/g1.hpp](include/cpp_control/robots/g1.hpp) · [robots/g1.cpp](src/robots/g1.cpp)
+>[!TIP] refer to
+> * [robots/g1.hpp](include/cpp_control/robots/g1.hpp) 
+> * [robots/g1.cpp](src/robots/g1.cpp)
 
 ---
 
@@ -102,7 +111,9 @@ cpp_control/
 
 5. **register in CMakeLists.txt** — add executable following existing patterns.
 
-> **reference:** [tasks/locomotion/g1.hpp](include/cpp_control/tasks/locomotion/g1.hpp) · [tasks/locomotion/g1.cpp](src/tasks/locomotion/g1.cpp)
+>[!TIP] refer to
+> * [tasks/locomotion/g1.hpp](include/cpp_control/tasks/locomotion/g1.hpp) 
+> * [tasks/locomotion/g1.cpp](src/tasks/locomotion/g1.cpp)
 
 ---
 
