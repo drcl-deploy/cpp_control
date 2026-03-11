@@ -6,12 +6,15 @@ control_dt: 0.02  # 50Hz control loop
 msg_type: "hg"     # "hg" for G1 humanoid
 imu_type: "pelvis" # IMU location
 
-# Topic names - unitree_mujoco publishes these topics
-lowcmd_topic: "/lowcmd"
-lowstate_topic: "/lowstate"
+# Workflow: "unitree" for unitree_hg messages, "drcl_deploy" for custom G1State/G1Command messages
+workflow: "unitree" #"unitree" or "drcl_deploy"
+
+# Topic names
+lowcmd_topic: "/lowcmd" #"/lowcmd or /robot_command"
+lowstate_topic: "/lowstate" #"/lowstate or /robot_state"
 
 # Model paths (relative paths resolved by launch file)
-onnx_path: "locomotion.onnx"
+onnx_path: "locomotion/g1.onnx"
 
 # Control gains for 29DOF (stiffness) - from deploy_mjlab.yaml
 kps: [40.2, 99.1, 40.2, 99.1, 28.5, 28.5,

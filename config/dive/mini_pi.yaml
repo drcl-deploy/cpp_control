@@ -1,0 +1,44 @@
+# Configuration for MiniPi Dive Controller (12DOF)
+
+control_dt: 0.02  # 50Hz control loop
+
+workflow: "drcl_deploy"
+
+# Topic names
+lowcmd_topic: "/robot_command"
+lowstate_topic: "/robot_state"
+
+# Model path
+onnx_path: "dive/mini_pi.onnx"
+
+# Control gains (12DOF, uniform 504736NE actuators)
+# stiffness = armature * (10 * 2pi)^2 ≈ 15.35
+# damping   = 2 * 2.0 * armature * (10 * 2pi) ≈ 0.98
+kps: [15.35, 15.35, 15.35, 15.35, 15.35, 15.35,
+      15.35, 15.35, 15.35, 15.35, 15.35, 15.35]
+
+kds: [0.98, 0.98, 0.98, 0.98, 0.98, 0.98,
+      0.98, 0.98, 0.98, 0.98, 0.98, 0.98]
+
+# Default positions (JOINT_NAMES_EXPR order)
+default_angles: [0.0, -0.4, 0.65, 0.0, 0.0, -0.25,
+                 0.0, -0.4, 0.65, 0.0, 0.0, -0.25]
+
+# Action scaling: 0.5 (uniform, from env_cfgs.py joint_pos_action.scale)
+action_scale: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+               0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+# Motor-to-action index mapping (as mjlab actuator order is not followed)
+motor2action_id: [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+
+# Model dimensions
+num_actions: 12
+num_obs: 48  # [gyro(3), jpos_rel(12), jvel(12), last_act(12), rmat6d(6), cmd(3)]
+
+# Joint names (JOINT_NAMES_EXPR order from constants.py)
+joint_names: ["l_ankle_roll_joint", "l_ankle_pitch_joint",
+              "l_calf_joint", "l_thigh_joint",
+              "l_hip_roll_joint", "l_hip_pitch_joint",
+              "r_ankle_roll_joint", "r_ankle_pitch_joint",
+              "r_calf_joint", "r_thigh_joint",
+              "r_hip_roll_joint", "r_hip_pitch_joint"]
