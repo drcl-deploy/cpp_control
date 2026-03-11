@@ -62,13 +62,21 @@ void G1Node::init_robot()
     // ── Workflow-based backend init ──
     switch (workflow_)
     {
+#ifdef HAS_MESSAGES
     case Workflow::DRCL_DEPLOY:
         init_drcl_deploy();
         break;
+#endif
+#ifdef HAS_UNITREE_HG
     case Workflow::UNITREE:
-    default:
         init_unitree();
         break;
+#endif
+    default:
+        RCLCPP_FATAL(this->get_logger(),
+            "Workflow '%s' not available (backend not compiled)",
+            config_ ? config_->workflow.c_str() : "unitree");
+        throw std::runtime_error("Requested workflow backend not compiled");
     }
 
     RCLCPP_INFO(this->get_logger(), "G1 init_robot: workflow=%s",
@@ -78,6 +86,8 @@ void G1Node::init_robot()
 // ══════════════════════════════════════════════════════════════
 //  Unitree HG backend
 // ══════════════════════════════════════════════════════════════
+
+#ifdef HAS_UNITREE_HG
 
 void G1Node::init_unitree()
 {
@@ -171,9 +181,13 @@ void G1Node::publish_low_cmd(const RobotCommand& cmd)
     lowcmd_pub_hg_->publish(low_cmd_hg_);
 }
 
+#endif  // HAS_UNITREE_HG
+
 // ══════════════════════════════════════════════════════════════
 //  drcl_deploy backend (G1State / G1Command)
 // ══════════════════════════════════════════════════════════════
+
+#ifdef HAS_MESSAGES
 
 void G1Node::init_drcl_deploy()
 {
@@ -206,8 +220,6 @@ void G1Node::subscribe_g1_state(messages::msg::G1State::SharedPtr msg)
         robot_state_.joint_velocities[i] = msg->motor_state[i].dq;
         robot_state_.joint_torques[i] = msg->motor_state[i].tauest;
     }
-
-
 }
 
 void G1Node::publish_g1_command(const RobotCommand& cmd)
@@ -224,6 +236,8 @@ void G1Node::publish_g1_command(const RobotCommand& cmd)
     lowcmd_pub_drcl_->publish(msg);
 }
 
+#endif  // HAS_MESSAGES
+
 // ══════════════════════════════════════════════════════════════
 //  publish_command — dispatches to active backend
 // ══════════════════════════════════════════════════════════════
@@ -232,12 +246,17 @@ void G1Node::publish_command(const RobotCommand& cmd)
 {
     switch (workflow_)
     {
+#ifdef HAS_MESSAGES
     case Workflow::DRCL_DEPLOY:
         publish_g1_command(cmd);
         break;
+#endif
+#ifdef HAS_UNITREE_HG
     case Workflow::UNITREE:
-    default:
         publish_low_cmd(cmd);
+        break;
+#endif
+    default:
         break;
     }
 }

@@ -82,12 +82,14 @@ void G1LocomotionNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 
 // ── Velocity from Gamepad ─────────────────────────────────────
 
+#ifdef HAS_UNITREE_HG
 void G1LocomotionNode::on_gamepad()
 {
     cmd_vel_[0] = gamepad_.ly * 0.5f;
     cmd_vel_[1] = gamepad_.lx * 0.5f;
     cmd_vel_[2] = gamepad_.rx * 0.5f;
 }
+#endif
 
 }  // namespace cpp_control
 

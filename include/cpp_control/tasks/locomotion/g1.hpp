@@ -27,7 +27,9 @@ protected:
 
     // --- Velocity from both joystick and gamepad ---
     void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
+#ifdef HAS_UNITREE_HG
     void on_gamepad() override;
+#endif
 
     std::array<float, 3> cmd_vel_ = {0.0f, 0.0f, 0.0f};
 };
