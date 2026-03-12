@@ -46,7 +46,7 @@ refer to corresponding deployment workflow:
 
 **onnx** (optionally, for nn controllers)
 * download pre-built [ONNX Runtime v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0)
-* put a symbolic link under [thirdparty]
+* put a symbolic link under [thirdparty](./thirdparty/)
 ```
 ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
 ```
