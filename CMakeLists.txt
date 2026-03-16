@@ -105,7 +105,13 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(g1_locomotion_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
-  list(APPEND INSTALL_TARGETS g1_locomotion_node)
+  # Task: textop tracker (g1)
+  add_executable(g1_textop_node src/tasks/textop/g1.cpp)
+  target_link_libraries(g1_textop_node cpp_control_g1)
+  ament_target_dependencies(g1_textop_node
+    rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
+
+  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node)
 endif()
 
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────
@@ -138,6 +144,10 @@ endif()
 
 install(DIRECTORY launch config models include
   DESTINATION share/${PROJECT_NAME}/
+)
+
+install(PROGRAMS scripts/npz_motion_publisher.py
+  DESTINATION lib/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)
