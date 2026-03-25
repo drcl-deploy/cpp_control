@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Publish motion data from an NPZ file to /textop/motion as a Float32MultiArray.
+Publish motion data from an NPZ file to /tracker/motion as a Float32MultiArray.
 
 The data is packed as a [T, 65] array where each row contains:
     joint_pos (29, IsaacLab order) | joint_vel (29) | anchor_pos (3) | anchor_ori (4, wxyz)
@@ -21,7 +21,7 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 
 class NPZMotionPublisher(Node):
 
-    def __init__(self, npz_path: str, topic: str = '/textop/motion'):
+    def __init__(self, npz_path: str, topic: str = '/tracker/motion'):
         super().__init__('npz_motion_publisher')
         self.publisher = self.create_publisher(Float32MultiArray, topic, 10)
         self.npz_path = npz_path
@@ -84,7 +84,7 @@ class NPZMotionPublisher(Node):
         self.timer = self.create_timer(0.5, self._publish_once)
 
         self.get_logger().info(
-            f'Loaded {self.npz_path}: T={T}, Nq={Nq}. Publishing to /textop/motion ...')
+            f'Loaded {self.npz_path}: T={T}, Nq={Nq}. Publishing to /tracker/motion ...')
 
     def _publish_once(self):
         self.publisher.publish(self._msg)
@@ -98,7 +98,7 @@ class NPZMotionPublisher(Node):
 def main():
     parser = argparse.ArgumentParser(description='Publish NPZ motion as Float32MultiArray')
     parser.add_argument('npz_file', help='Path to .npz motion file')
-    parser.add_argument('--topic', default='/textop/motion', help='ROS2 topic')
+    parser.add_argument('--topic', default='/tracker/motion', help='ROS2 topic')
     args, unknown = parser.parse_known_args()
 
     rclpy.init()

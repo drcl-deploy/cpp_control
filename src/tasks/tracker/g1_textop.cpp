@@ -1,4 +1,4 @@
-#include "cpp_control/tasks/textop/g1.hpp"
+#include "cpp_control/tasks/tracker/g1_textop.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -64,8 +64,8 @@ G1TextopNode::G1TextopNode(const std::string& node_name) : G1Node(node_name)
         RCLCPP_WARN(this->get_logger(), "No ONNX model path for textop");
     }
 
-    // Subscribe to motion data (packed Float32MultiArray on /textop/motion)
-    std::string motion_topic = this->declare_parameter("motion_topic", "/textop/motion");
+    // Subscribe to motion data (packed Float32MultiArray on /tracker/motion)
+    std::string motion_topic = this->declare_parameter("motion_topic", "/tracker/motion");
     motion_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
         motion_topic, 10,
         [this](std_msgs::msg::Float32MultiArray::SharedPtr msg) { on_motion(msg); });

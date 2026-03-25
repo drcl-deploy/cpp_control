@@ -105,8 +105,8 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(g1_locomotion_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
-  # Task: textop tracker (g1)
-  add_executable(g1_textop_node src/tasks/textop/g1.cpp)
+  # Task: tracker (g1 textop)
+  add_executable(g1_textop_node src/tasks/tracker/g1_textop.cpp)
   target_link_libraries(g1_textop_node cpp_control_g1)
   ament_target_dependencies(g1_textop_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})

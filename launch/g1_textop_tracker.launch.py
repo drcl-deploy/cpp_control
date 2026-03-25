@@ -1,9 +1,9 @@
 """
-Launch G1 TextOp Tracker Controller.
+Launch G1 Tracker Controller (TextOp).
 
 Usage:
-    ros2 launch cpp_control g1_textop.launch.py
-    ros2 launch cpp_control g1_textop.launch.py onnx_model_path:=/path/to/model.onnx
+    ros2 launch cpp_control g1_textop_tracker.launch.py
+    ros2 launch cpp_control g1_textop_tracker.launch.py onnx_model_path:=/path/to/model.onnx
 """
 
 import os
@@ -18,7 +18,7 @@ import yaml
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
 
-    default_config = os.path.join(pkg, 'config', 'textop', 'g1.yaml')
+    default_config = os.path.join(pkg, 'config', 'tracker', 'g1_textop.yaml')
 
     # Read the ONNX model path from the config file
     with open(default_config, 'r') as f:
@@ -32,7 +32,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),
         DeclareLaunchArgument('onnx_model_path', default_value=default_model),
-        DeclareLaunchArgument('motion_topic', default_value='/textop/motion'),
+        DeclareLaunchArgument('motion_topic', default_value='/tracker/motion'),
 
         Node(
             package='cpp_control',
