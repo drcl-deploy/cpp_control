@@ -179,7 +179,7 @@ std::vector<float> G1TextopNode::build_observation()
             transform_ref_to_robot(mot_anchor_pos_[idx], mot_anchor_ori_[idx]);
 
         // Relative orientation: robot body → reference
-        auto [_, rel_quat] = subtract_frames(
+        auto [_, rel_quat] = math::subtract_frames(
             robot_init_pos_, robot_quat, ref_pos_r, ref_quat_r);
 
         auto r6d = math::quat_to_rotation_6d(rel_quat);
@@ -274,12 +274,12 @@ void G1TextopNode::on_gamepad()
 void G1TextopNode::setup_init_frame()
 {
     robot_init_pos_ = {0.0f, 0.0f, 0.0f};  // no odom, assume origin
-    robot_init_hq_  = heading_quat(robot_state_.imu_quaternion);
+    robot_init_hq_  = math::heading_quat(robot_state_.imu_quaternion);
 
     ref_init_pos_  = mot_anchor_pos_[0];
-    ref_init_hq_   = heading_quat(mot_anchor_ori_[0]);
+    ref_init_hq_   = math::heading_quat(mot_anchor_ori_[0]);
 
-    ref2robot_quat_ = qmul(robot_init_hq_, qinv(ref_init_hq_));
+    ref2robot_quat_ = math::qmul(robot_init_hq_, math::qinv(ref_init_hq_));
     frame_init_ = true;
 
     RCLCPP_INFO(this->get_logger(), "Frame aligned (ref → robot)");
@@ -296,74 +296,17 @@ G1TextopNode::transform_ref_to_robot(const std::array<float, 3>& pos,
     std::array<float, 3> dp = {pos[0] - ref_init_pos_[0],
                                 pos[1] - ref_init_pos_[1],
                                 pos[2] - ref_init_pos_[2]};
-    auto dp_rot = qapply(qinv(ref_init_hq_), dp);
+    auto dp_rot = math::quat_rotate(math::qinv(ref_init_hq_), dp);
     std::array<float, 3> pos_new = {robot_init_pos_[0] + dp_rot[0],
                                      robot_init_pos_[1] + dp_rot[1],
                                      robot_init_pos_[2] + dp_rot[2]};
 
     // Orientation: ref2robot * ref_quat
-    auto quat_new = qmul(ref2robot_quat_, quat);
+    auto quat_new = math::qmul(ref2robot_quat_, quat);
 
     return {pos_new, quat_new};
 }
 
-// ── Quaternion math ──────────────────────────────────────────────
-
-std::array<float, 4> G1TextopNode::qmul(const std::array<float, 4>& a,
-                                         const std::array<float, 4>& b)
-{
-    return {
-        a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
-        a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
-        a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
-        a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0],
-    };
-}
-
-std::array<float, 4> G1TextopNode::qinv(const std::array<float, 4>& q)
-{
-    float n2 = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
-    float s  = 1.0f / std::max(n2, 1e-9f);
-    return {q[0]*s, -q[1]*s, -q[2]*s, -q[3]*s};
-}
-
-std::array<float, 3> G1TextopNode::qapply(const std::array<float, 4>& q,
-                                           const std::array<float, 3>& v)
-{
-    // R(q) * v  using quaternion-based rotation
-    float w = q[0], x = q[1], y = q[2], z = q[3];
-    float m00 = 1.f - 2.f*(y*y + z*z), m01 = 2.f*(x*y - w*z), m02 = 2.f*(x*z + w*y);
-    float m10 = 2.f*(x*y + w*z), m11 = 1.f - 2.f*(x*x + z*z), m12 = 2.f*(y*z - w*x);
-    float m20 = 2.f*(x*z - w*y), m21 = 2.f*(y*z + w*x), m22 = 1.f - 2.f*(x*x + y*y);
-    return {
-        m00*v[0] + m01*v[1] + m02*v[2],
-        m10*v[0] + m11*v[1] + m12*v[2],
-        m20*v[0] + m21*v[1] + m22*v[2],
-    };
-}
-
-std::array<float, 4> G1TextopNode::heading_quat(const std::array<float, 4>& q)
-{
-    float yaw = std::atan2(2.0f * (q[0]*q[3] + q[1]*q[2]),
-                           1.0f - 2.0f * (q[2]*q[2] + q[3]*q[3]));
-    float hy = yaw * 0.5f;
-    return {std::cos(hy), 0.0f, 0.0f, std::sin(hy)};
-}
-
-std::pair<std::array<float, 3>, std::array<float, 4>>
-G1TextopNode::subtract_frames(const std::array<float, 3>& pos_a,
-                              const std::array<float, 4>& quat_a,
-                              const std::array<float, 3>& pos_b,
-                              const std::array<float, 4>& quat_b)
-{
-    auto q_inv_a = qinv(quat_a);
-    auto q_rel   = qmul(q_inv_a, quat_b);
-    std::array<float, 3> dp = {pos_b[0] - pos_a[0],
-                                pos_b[1] - pos_a[1],
-                                pos_b[2] - pos_a[2]};
-    auto t_rel = qapply(q_inv_a, dp);
-    return {t_rel, q_rel};
-}
 
 }  // namespace cpp_control
 

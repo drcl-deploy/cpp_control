@@ -84,19 +84,6 @@ private:
     std::pair<std::array<float, 3>, std::array<float, 4>>
     transform_ref_to_robot(const std::array<float, 3>& pos,
                            const std::array<float, 4>& quat) const;
-
-    // ── Quaternion helpers ───────────────────────────────────────
-    static std::array<float, 4> qmul(const std::array<float, 4>& a,
-                                     const std::array<float, 4>& b);
-    static std::array<float, 4> qinv(const std::array<float, 4>& q);
-    static std::array<float, 3> qapply(const std::array<float, 4>& q,
-                                       const std::array<float, 3>& v);
-    static std::array<float, 4> heading_quat(const std::array<float, 4>& q);
-    static std::pair<std::array<float, 3>, std::array<float, 4>>
-    subtract_frames(const std::array<float, 3>& pos_a,
-                    const std::array<float, 4>& quat_a,
-                    const std::array<float, 3>& pos_b,
-                    const std::array<float, 4>& quat_b);
 };
 
 }  // namespace cpp_control
