@@ -111,7 +111,13 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(g1_textop_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
-  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node)
+  # Task: visual_backbone_policies (g1 residual)
+  add_executable(g1_vbp_residual_node src/tasks/visual_backbone_policies/g1_residual.cpp)
+  target_link_libraries(g1_vbp_residual_node cpp_control_g1)
+  ament_target_dependencies(g1_vbp_residual_node
+    rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+
+  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vbp_residual_node)
 endif()
 
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────
