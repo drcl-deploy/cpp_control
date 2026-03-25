@@ -133,12 +133,27 @@ void G1TextopNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg)
                               msg->data[off + 2], msg->data[off + 3]};
     }
 
+    // Append a settle frame: nominal joint pose, zero velocity, last anchor.
+    // The policy will naturally stabilize to standing because it sees
+    // default_angles as the command — unlike raw PD, it keeps CoM balanced.
+    {
+        std::vector<float> nominal_il(NQ);
+        for (int il = 0; il < NQ; ++il)
+            nominal_il[il] = default_angles_[il_to_mj_[il]];
+
+        mot_joint_pos_.push_back(nominal_il);
+        mot_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
+        mot_anchor_pos_.push_back(mot_anchor_pos_.back());
+        mot_anchor_ori_.push_back(mot_anchor_ori_.back());
+        T += 1;
+    }
+
     mot_T_ = T;
     mot_t_ = 0;
     mot_ready_ = true;
     frame_init_ = false;  // re-align on new motion
 
-    RCLCPP_INFO(this->get_logger(), "Received motion: T=%d", T);
+    RCLCPP_INFO(this->get_logger(), "Received motion: T=%d (incl. settle frame)", T);
 }
 
 // ── Observation ──────────────────────────────────────────────────
@@ -248,7 +263,7 @@ RobotCommand G1TextopNode::policy_control()
 
     last_actions_ = actions_;
 
-    // Advance motion time
+    // Advance motion time (clamps at last frame, which is the settle frame)
     if (mot_t_ < mot_T_ - 1)
         mot_t_++;
 
