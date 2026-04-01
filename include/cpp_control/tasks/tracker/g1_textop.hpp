@@ -42,7 +42,7 @@ protected:
     RobotCommand policy_control() override;
     std::vector<float> build_observation();
 
-    // --- Joystick / gamepad (unused for now, placeholder) ---
+    // --- Joystick / gamepad ---
     void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
 #ifdef HAS_UNITREE_HG
     void on_gamepad() override;
@@ -71,6 +71,21 @@ private:
     std::array<int, NQ> mj_to_il_{};  // mj_to_il_[mj] = il
     std::array<int, NQ> il_to_mj_{};  // il_to_mj_[il] = mj
     void build_reindex_tables();
+
+    // ── Stand mode (RB) ─────────────────────────────────────────
+    bool stand_mode_ = false;
+    bool prev_rb_    = false;   // joy edge detection
+    void init_stand_motion();   // synthesise single settle frame
+
+    // ── Pending motion (staged while standing) ──────────────────
+    std::vector<std::vector<float>> pend_joint_pos_;
+    std::vector<std::vector<float>> pend_joint_vel_;
+    std::vector<std::array<float, 3>> pend_anchor_pos_;
+    std::vector<std::array<float, 4>> pend_anchor_ori_;
+    int  pend_T_     = 0;
+    bool pend_ready_ = false;
+    void commit_pending_motion();
+    void pad_pending_motion();  // add pre/post interpolation pads
 
     // ── Frame alignment (ref → robot) ────────────────────────────
     bool frame_init_ = false;

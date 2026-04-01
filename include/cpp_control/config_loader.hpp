@@ -42,6 +42,11 @@ struct Config
     // Motor-to-action index mapping
     std::vector<int> motor2action_id;
 
+    // Motion padding for smooth stand ↔ motion transitions
+    double motion_pad_length = 0.5;  // seconds
+    bool pre_motion_pad  = true;
+    bool post_motion_pad = true;
+
     // Stiffness and damping parameters
     std::vector<double> stiffness_params;
     std::vector<double> damping_params;
