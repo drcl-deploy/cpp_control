@@ -98,6 +98,11 @@ residual_action_scale: [0.1,
                         0.1,
                         ]
 
+# ── Motion padding for smooth stand ↔ motion transitions ───────
+motion_pad_length: 0.5   # seconds of linear interpolation before/after motion
+pre_motion_pad: true      # pad nominal → motion[0] at start
+post_motion_pad: true     # pad motion[-1] → nominal at end
+
 # ── Joint names (MuJoCo order) ──────────────────────────────────
 joint_names: ["left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
               "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",

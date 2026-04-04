@@ -216,45 +216,139 @@ void G1ResidualNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg)
         return;
     }
 
-    mot_joint_pos_.resize(T);
-    mot_joint_vel_.resize(T);
-    mot_anchor_pos_.resize(T);
-    mot_anchor_ori_.resize(T);
+    pend_joint_pos_.resize(T);
+    pend_joint_vel_.resize(T);
+    pend_anchor_pos_.resize(T);
+    pend_anchor_ori_.resize(T);
 
     for (int t = 0; t < T; ++t)
     {
         int off = t * cols;
-        mot_joint_pos_[t].assign(msg->data.begin() + off,
-                                 msg->data.begin() + off + NQ);
+        pend_joint_pos_[t].assign(msg->data.begin() + off,
+                                  msg->data.begin() + off + NQ);
         off += NQ;
-        mot_joint_vel_[t].assign(msg->data.begin() + off,
-                                 msg->data.begin() + off + NQ);
+        pend_joint_vel_[t].assign(msg->data.begin() + off,
+                                  msg->data.begin() + off + NQ);
         off += NQ;
-        mot_anchor_pos_[t] = {msg->data[off], msg->data[off + 1], msg->data[off + 2]};
+        pend_anchor_pos_[t] = {msg->data[off], msg->data[off + 1], msg->data[off + 2]};
         off += 3;
-        mot_anchor_ori_[t] = {msg->data[off], msg->data[off + 1],
-                              msg->data[off + 2], msg->data[off + 3]};
+        pend_anchor_ori_[t] = {msg->data[off], msg->data[off + 1],
+                               msg->data[off + 2], msg->data[off + 3]};
     }
 
-    // Append settle frame (nominal pose, zero vel, last anchor)
+    pend_T_ = T;
+    pad_pending_motion();
+    pend_ready_ = true;
+
+    if (!stand_mode_)
     {
-        std::vector<float> nominal_il(NQ);
-        for (int il = 0; il < NQ; ++il)
-            nominal_il[il] = default_angles_[il_to_mj_[il]];
-
-        mot_joint_pos_.push_back(nominal_il);
-        mot_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
-        mot_anchor_pos_.push_back(mot_anchor_pos_.back());
-        mot_anchor_ori_.push_back(mot_anchor_ori_.back());
-        T += 1;
+        commit_pending_motion();
     }
+    else
+    {
+        RCLCPP_INFO(this->get_logger(),
+                     "Motion staged (T=%d). Will commit on A.", pend_T_);
+    }
+}
 
-    mot_T_ = T;
+// ── Motion buffer helpers ────────────────────────────────────────
+
+void G1ResidualNode::commit_pending_motion()
+{
+    mot_joint_pos_ = std::move(pend_joint_pos_);
+    mot_joint_vel_ = std::move(pend_joint_vel_);
+    mot_anchor_pos_ = std::move(pend_anchor_pos_);
+    mot_anchor_ori_ = std::move(pend_anchor_ori_);
+    mot_T_ = pend_T_;
     mot_t_ = 0;
     mot_ready_ = true;
     frame_init_ = false;
+    pend_ready_ = false;
+    RCLCPP_INFO(this->get_logger(), "Motion committed: T=%d", mot_T_);
+}
 
-    RCLCPP_INFO(this->get_logger(), "Received motion: T=%d (incl. settle frame)", T);
+void G1ResidualNode::pad_pending_motion()
+{
+    float dt  = config_ ? static_cast<float>(config_->control_dt) : 0.02f;
+    float pad = config_ ? static_cast<float>(config_->motion_pad_length) : 0.0f;
+    int pad_frames = std::max(0, static_cast<int>(std::round(pad / dt)));
+    if (pad_frames == 0)
+        return;
+
+    // Nominal pose in IsaacLab joint order
+    std::vector<float> nominal_il(NQ);
+    for (int il = 0; il < NQ; ++il)
+        nominal_il[il] = default_angles_[il_to_mj_[il]];
+
+    bool do_pre  = config_ && config_->pre_motion_pad;
+    bool do_post = config_ && config_->post_motion_pad;
+
+    // Pre-pad: linearly interpolate nominal → motion[0]
+    if (do_pre && !pend_joint_pos_.empty())
+    {
+        const auto& first_pos  = pend_joint_pos_.front();
+        const auto& first_apos = pend_anchor_pos_.front();
+        const auto& first_aori = pend_anchor_ori_.front();
+
+        std::vector<std::vector<float>>    pre_pos(pad_frames);
+        std::vector<std::vector<float>>    pre_vel(pad_frames, std::vector<float>(NQ, 0.0f));
+        std::vector<std::array<float, 3>>  pre_apos(pad_frames, first_apos);
+        std::vector<std::array<float, 4>>  pre_aori(pad_frames, first_aori);
+
+        for (int f = 0; f < pad_frames; ++f)
+        {
+            float a = static_cast<float>(f + 1) / static_cast<float>(pad_frames + 1);
+            pre_pos[f].resize(NQ);
+            for (int j = 0; j < NQ; ++j)
+                pre_pos[f][j] = (1.0f - a) * nominal_il[j] + a * first_pos[j];
+        }
+
+        pend_joint_pos_.insert(pend_joint_pos_.begin(), pre_pos.begin(), pre_pos.end());
+        pend_joint_vel_.insert(pend_joint_vel_.begin(), pre_vel.begin(), pre_vel.end());
+        pend_anchor_pos_.insert(pend_anchor_pos_.begin(), pre_apos.begin(), pre_apos.end());
+        pend_anchor_ori_.insert(pend_anchor_ori_.begin(), pre_aori.begin(), pre_aori.end());
+    }
+
+    // Post-pad: linearly interpolate motion[-1] → nominal
+    if (do_post && !pend_joint_pos_.empty())
+    {
+        const auto last_pos  = pend_joint_pos_.back();
+        const auto last_apos = pend_anchor_pos_.back();
+        const auto last_aori = pend_anchor_ori_.back();
+
+        for (int f = 0; f < pad_frames; ++f)
+        {
+            float a = static_cast<float>(f + 1) / static_cast<float>(pad_frames + 1);
+            std::vector<float> pos(NQ);
+            for (int j = 0; j < NQ; ++j)
+                pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
+
+            pend_joint_pos_.push_back(pos);
+            pend_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
+            pend_anchor_pos_.push_back(last_apos);
+            pend_anchor_ori_.push_back(last_aori);
+        }
+    }
+
+    pend_T_ = static_cast<int>(pend_joint_pos_.size());
+    RCLCPP_INFO(this->get_logger(), "Motion padded: T=%d (pre=%s, post=%s, d=%.2fs)",
+                pend_T_, do_pre ? "on" : "off", do_post ? "on" : "off", pad);
+}
+
+void G1ResidualNode::init_stand_motion()
+{
+    std::vector<float> nominal_il(NQ);
+    for (int il = 0; il < NQ; ++il)
+        nominal_il[il] = default_angles_[il_to_mj_[il]];
+
+    mot_joint_pos_ = {nominal_il};
+    mot_joint_vel_ = {std::vector<float>(NQ, 0.0f)};
+    mot_anchor_pos_ = {{0.0f, 0.0f, 0.0f}};
+    mot_anchor_ori_ = {{1.0f, 0.0f, 0.0f, 0.0f}};
+    mot_T_ = 1;
+    mot_t_ = 0;
+    mot_ready_ = true;
+    frame_init_ = false;
 }
 
 // ── HLC Observation ──────────────────────────────────────────────
@@ -377,6 +471,13 @@ RobotCommand G1ResidualNode::policy_control()
     if (!wbc_policy_ || !mot_ready_)
         return zeroing_control();
 
+    // Stand mode: lock to settle frame, continuously re-anchor
+    if (stand_mode_)
+    {
+        mot_t_ = mot_T_ - 1;
+        frame_init_ = false;
+    }
+
     // --- WBC inference ---
     auto wbc_obs = build_wbc_observation();
     auto wbc_action = wbc_policy_->predict(wbc_obs);  // IsaacLab order
@@ -420,8 +521,8 @@ RobotCommand G1ResidualNode::policy_control()
     wbc_last_actions_ = wbc_actions_;
     hlc_last_actions_ = hlc_actions_;
 
-    // Advance motion time (clamps at settle frame)
-    if (mot_t_ < mot_T_ - 1)
+    // Advance motion time (clamps at settle frame; skip if standing)
+    if (!stand_mode_ && mot_t_ < mot_T_ - 1)
         mot_t_++;
 
     return cmd;
@@ -429,15 +530,77 @@ RobotCommand G1ResidualNode::policy_control()
 
 // ── Joystick / Gamepad (placeholder) ─────────────────────────────
 
-void G1ResidualNode::on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/)
+void G1ResidualNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 {
-    // No velocity command needed — behaviour driven by vision + motion
+    constexpr size_t RB = 5;  // Xbox X-mode right bumper
+
+    bool rb = (msg->buttons.size() > RB) && (msg->buttons[RB] == 1);
+    if (rb && !prev_rb_)
+    {
+        stand_mode_ = true;
+        if (!mot_ready_)
+            init_stand_motion();
+        frame_init_ = false;
+        control_mode_ = ControlMode::POLICY;
+        std::fill(hlc_actions_.begin(), hlc_actions_.end(), 0.0f);
+        std::fill(hlc_last_actions_.begin(), hlc_last_actions_.end(), 0.0f);
+        std::fill(wbc_actions_.begin(), wbc_actions_.end(), 0.0f);
+        std::fill(wbc_last_actions_.begin(), wbc_last_actions_.end(), 0.0f);
+        if (policy_)
+            policy_->reset_memory();
+        if (wbc_policy_)
+            wbc_policy_->reset_memory();
+        RCLCPP_INFO(this->get_logger(), "-> stand (WBC @ settle)");
+    }
+    prev_rb_ = rb;
+
+    // A exits stand mode
+    if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1 && stand_mode_)
+    {
+        stand_mode_ = false;
+        if (pend_ready_)
+            commit_pending_motion();
+        else
+        {
+            mot_t_ = 0;
+            frame_init_ = false;
+        }
+    }
 }
 
 #ifdef HAS_UNITREE_HG
 void G1ResidualNode::on_gamepad()
 {
-    // No velocity command needed
+    if (gamepad_.R1.on_press)
+    {
+        stand_mode_ = true;
+        if (!mot_ready_)
+            init_stand_motion();
+        frame_init_ = false;
+        control_mode_ = ControlMode::POLICY;
+        std::fill(hlc_actions_.begin(), hlc_actions_.end(), 0.0f);
+        std::fill(hlc_last_actions_.begin(), hlc_last_actions_.end(), 0.0f);
+        std::fill(wbc_actions_.begin(), wbc_actions_.end(), 0.0f);
+        std::fill(wbc_last_actions_.begin(), wbc_last_actions_.end(), 0.0f);
+        if (policy_)
+            policy_->reset_memory();
+        if (wbc_policy_)
+            wbc_policy_->reset_memory();
+        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (WBC @ default pose)");
+    }
+
+    // A exits stand mode
+    if (gamepad_.A.on_press && stand_mode_)
+    {
+        stand_mode_ = false;
+        if (pend_ready_)
+            commit_pending_motion();
+        else
+        {
+            mot_t_ = 0;
+            frame_init_ = false;
+        }
+    }
 }
 #endif
 

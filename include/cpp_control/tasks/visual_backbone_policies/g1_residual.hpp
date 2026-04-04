@@ -99,6 +99,21 @@ private:
     int  mot_t_     = 0;
     bool mot_ready_ = false;
 
+    // ── Stand mode (RB) ─────────────────────────────────────────
+    bool stand_mode_ = false;
+    bool prev_rb_    = false;
+    void init_stand_motion();
+
+    // ── Pending motion (staged while standing) ──────────────────
+    std::vector<std::vector<float>> pend_joint_pos_;
+    std::vector<std::vector<float>> pend_joint_vel_;
+    std::vector<std::array<float, 3>> pend_anchor_pos_;
+    std::vector<std::array<float, 4>> pend_anchor_ori_;
+    int  pend_T_     = 0;
+    bool pend_ready_ = false;
+    void commit_pending_motion();
+    void pad_pending_motion();
+
     // ── IsaacLab ↔ MuJoCo reindexing ───────────────────────────
     std::array<int, NQ> mj_to_il_{};
     std::array<int, NQ> il_to_mj_{};
