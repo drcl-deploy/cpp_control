@@ -328,24 +328,44 @@ void G1TextopNode::pad_pending_motion()
         pend_anchor_ori_.insert(pend_anchor_ori_.begin(), pre_aori.begin(), pre_aori.end());
     }
 
-    // Post-pad: linearly interpolate motion[-1] → nominal
+    // Post-pad: linearly interpolate motion[-1] → nominal (joints + anchor)
+    // Anchor ramps toward neutral (origin + identity quat) so that stand
+    // mode sees the same observation as init_stand_motion().
     if (do_post && !pend_joint_pos_.empty())
     {
         const auto last_pos  = pend_joint_pos_.back();   // copy (back shifts as we push)
         const auto last_apos = pend_anchor_pos_.back();
         const auto last_aori = pend_anchor_ori_.back();
+        constexpr std::array<float, 3> zero_pos = {0.0f, 0.0f, 0.0f};
+        constexpr std::array<float, 4> identity_ori = {1.0f, 0.0f, 0.0f, 0.0f};
 
         for (int f = 0; f < pad_frames; ++f)
         {
             float a = static_cast<float>(f + 1) / static_cast<float>(pad_frames + 1);
+
             std::vector<float> pos(NQ);
             for (int j = 0; j < NQ; ++j)
                 pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
 
+            std::array<float, 3> apos;
+            for (int i = 0; i < 3; ++i)
+                apos[i] = (1.0f - a) * last_apos[i] + a * zero_pos[i];
+
+            std::array<float, 4> aori;
+            float norm = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                aori[i] = (1.0f - a) * last_aori[i] + a * identity_ori[i];
+                norm += aori[i] * aori[i];
+            }
+            norm = std::sqrt(norm);
+            for (int i = 0; i < 4; ++i)
+                aori[i] /= norm;
+
             pend_joint_pos_.push_back(pos);
             pend_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
-            pend_anchor_pos_.push_back(last_apos);
-            pend_anchor_ori_.push_back(last_aori);
+            pend_anchor_pos_.push_back(apos);
+            pend_anchor_ori_.push_back(aori);
         }
     }
 

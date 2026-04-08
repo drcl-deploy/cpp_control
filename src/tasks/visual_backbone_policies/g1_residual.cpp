@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 
 namespace cpp_control
 {
@@ -309,24 +308,44 @@ void G1ResidualNode::pad_pending_motion()
         pend_anchor_ori_.insert(pend_anchor_ori_.begin(), pre_aori.begin(), pre_aori.end());
     }
 
-    // Post-pad: linearly interpolate motion[-1] → nominal
+    // Post-pad: linearly interpolate motion[-1] → nominal (joints + anchor)
+    // Anchor ramps toward neutral (origin + identity quat) so that stand
+    // mode sees the same observation as init_stand_motion().
     if (do_post && !pend_joint_pos_.empty())
     {
         const auto last_pos  = pend_joint_pos_.back();
         const auto last_apos = pend_anchor_pos_.back();
         const auto last_aori = pend_anchor_ori_.back();
+        constexpr std::array<float, 3> zero_pos = {0.0f, 0.0f, 0.0f};
+        constexpr std::array<float, 4> identity_ori = {1.0f, 0.0f, 0.0f, 0.0f};
 
         for (int f = 0; f < pad_frames; ++f)
         {
             float a = static_cast<float>(f + 1) / static_cast<float>(pad_frames + 1);
+
             std::vector<float> pos(NQ);
             for (int j = 0; j < NQ; ++j)
                 pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
 
+            std::array<float, 3> apos;
+            for (int i = 0; i < 3; ++i)
+                apos[i] = (1.0f - a) * last_apos[i] + a * zero_pos[i];
+
+            std::array<float, 4> aori;
+            float norm = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                aori[i] = (1.0f - a) * last_aori[i] + a * identity_ori[i];
+                norm += aori[i] * aori[i];
+            }
+            norm = std::sqrt(norm);
+            for (int i = 0; i < 4; ++i)
+                aori[i] /= norm;
+
             pend_joint_pos_.push_back(pos);
             pend_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
-            pend_anchor_pos_.push_back(last_apos);
-            pend_anchor_ori_.push_back(last_aori);
+            pend_anchor_pos_.push_back(apos);
+            pend_anchor_ori_.push_back(aori);
         }
     }
 
@@ -485,8 +504,8 @@ RobotCommand G1ResidualNode::policy_control()
     for (int il = 0; il < NQ && il < static_cast<int>(wbc_action.size()); ++il)
         wbc_actions_[il] = wbc_action[il];
 
-    // --- HLC inference (requires embedding) ---
-    bool run_hlc = (policy_ != nullptr) && embedding_ready_;
+    // --- HLC inference (only in motion tracking mode) ---
+    bool run_hlc = !stand_mode_ && (policy_ != nullptr);
     if (run_hlc)
     {
         auto hlc_obs = build_hlc_observation();
@@ -508,7 +527,7 @@ RobotCommand G1ResidualNode::policy_control()
         // WBC target
         float q_target = default_angles_[mj] + action_scale_[mj] * wbc_actions_[il];
 
-        // Add HLC residual
+        // Add HLC residual (motion tracking only)
         if (run_hlc)
             q_target += residual_action_scale_[mj] * hlc_actions_[il];
 
@@ -611,13 +630,14 @@ void G1ResidualNode::setup_init_frame()
     robot_init_pos_ = {0.0f, 0.0f, 0.0f};
     robot_init_hq_  = math::heading_quat(robot_state_.imu_quaternion);
 
-    ref_init_pos_  = mot_anchor_pos_[0];
-    ref_init_hq_   = math::heading_quat(mot_anchor_ori_[0]);
+    ref_init_pos_  = mot_anchor_pos_[mot_t_];
+    ref_init_hq_   = math::heading_quat(mot_anchor_ori_[mot_t_]);
 
     ref2robot_quat_ = math::qmul(robot_init_hq_, math::qinv(ref_init_hq_));
     frame_init_ = true;
 
-    RCLCPP_INFO(this->get_logger(), "Frame aligned (ref → robot)");
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                          "Frame aligned (ref → robot)");
 }
 
 std::pair<std::array<float, 3>, std::array<float, 4>>
