@@ -75,8 +75,8 @@ void G1LocomotionNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
     if (msg->axes.size() > joy::XMODE_R1)
     {
         cmd_vel_[0] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_UP_DOWN]) * 0.5f;
-        cmd_vel_[1] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_LEFT_RIGHT]) * 0.5f;
-        cmd_vel_[2] = static_cast<float>(msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]) * 0.5f;
+        cmd_vel_[1] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_LEFT_RIGHT]) * -0.5f;
+        cmd_vel_[2] = static_cast<float>(msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]) * -0.5f;
     }
 }
 

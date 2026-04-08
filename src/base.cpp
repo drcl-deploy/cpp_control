@@ -70,6 +70,9 @@ void BaseNode::control_loop()
         case ControlMode::POLICY:
             cmd = policy_control();
             break;
+        case ControlMode::LOCOMANIP_POLICY:
+            cmd = locomanip_policy_control();
+            break;
     }
     publish_command(cmd);
 }
@@ -131,6 +134,12 @@ RobotCommand BaseNode::standing_up_control()
 }
 
 RobotCommand BaseNode::policy_control()
+{
+    // Default: zeroing. Level 2 overrides this.
+    return zeroing_control();
+}
+
+RobotCommand BaseNode::locomanip_policy_control()
 {
     // Default: zeroing. Level 2 overrides this.
     return zeroing_control();

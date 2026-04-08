@@ -63,6 +63,7 @@ protected:
 
     // --- Level 2 can override ---
     virtual RobotCommand policy_control();
+    virtual RobotCommand locomanip_policy_control();
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
 
     // --- Built-in control modes ---
