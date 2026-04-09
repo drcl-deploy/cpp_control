@@ -19,10 +19,10 @@ namespace cpp_control
  *   HLC  – high-level controller (visual + proprioceptive → residual actions)
  *   WBC  – whole-body controller (motion tracking, same as TextOp, 431-dim obs)
  *
- * Final motor command:
+ * Final motor command (mirrors training: default + action_scale * (wbc + hlc_scale * hlc)):
  *   q = default_angles[mj]
  *     + action_scale[mj] * wbc_action[il]
- *     + residual_action_scale[mj] * hlc_action[il]
+ *     + action_scale[mj] * hlc_action_scale * hlc_action[il]
  *
  * HLC observation layout:
  *   joint_pos_rel              (29)  JOINT_NAMES_EXPR order (= MJ order, preserve_order=True)
@@ -70,8 +70,8 @@ private:
     std::vector<float> wbc_actions_;
     std::vector<float> wbc_last_actions_;
 
-    // ── Residual action scale (MuJoCo joint order, from config) ─
-    std::vector<float> residual_action_scale_;
+    // ── HLC action scale (scalar, matches training cfg.action_scale) ─
+    float hlc_action_scale_ = 0.1f;
 
     // ── Visual embedding (from external backbone node) ──────────
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr embedding_sub_;

@@ -61,18 +61,9 @@ G1ResidualNode::G1ResidualNode(const std::string& node_name) : G1Node(node_name)
         embedding_dim_ = yaml["embedding_dim"].as<int>();
     embedding_.resize(embedding_dim_, 0.0f);
 
-    // Residual action scale (MuJoCo order)
-    if (yaml["residual_action_scale"])
-    {
-        auto ras = yaml["residual_action_scale"].as<std::vector<double>>();
-        residual_action_scale_.resize(ras.size());
-        for (size_t i = 0; i < ras.size(); ++i)
-            residual_action_scale_[i] = static_cast<float>(ras[i]);
-    }
-    else
-    {
-        residual_action_scale_.assign(NQ, 0.1f);
-    }
+    // HLC action scale (scalar, matches training cfg.action_scale)
+    if (yaml["hlc_action_scale"])
+        hlc_action_scale_ = yaml["hlc_action_scale"].as<float>();
 
     // HLC observation size
     hlc_num_obs_ = 3 * NQ + embedding_dim_ + 9 + 6;  // joint_pos + joint_vel + actions + embed + goal9d + ori6d
@@ -378,7 +369,7 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     obs.reserve(hlc_num_obs_);
 
     // ─ 0. joint_pos_rel (29) in JOINT_NAMES_EXPR order (= MJ order)
-    //      HLC was trained with preserve_order=True + JOINT_NAMES_EXPR
+    //      Verified: JOINT_NAMES_EXPR == MJ_JOINTS (preserve_order=True)
     for (int mj = 0; mj < NQ; ++mj)
         obs.push_back(robot_state_.joint_positions[mj] - default_angles_[mj]);
 
@@ -393,12 +384,14 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     // ─ 3. image_features (embedding_dim) ─────────────────────────
     obs::append_features(obs, embedding_);
 
-    // ─ 4. object_goal9d_anchor (9) — goal relative to robot ─────
-    //      pos[3] + rot_6d[6]  in robot body frame
-    obs::append_pose9d_body_relative(
-        obs,
-        robot_init_pos_, robot_state_.imu_quaternion,
-        object_goal_pos_, object_goal_quat_);
+    // ─ 4. object_goal9d_anchor (9) — goal relative to robot body frame
+    //      pos[3] + rot_6d[6]. Anchor pos is {0,0,0} (no odom).
+    {
+        constexpr std::array<float, 3> robot_pos = {0.0f, 0.0f, 0.0f};
+        obs::append_pose9d_body_relative(
+            obs, robot_pos, robot_state_.imu_quaternion,
+            object_goal_pos_, object_goal_quat_);
+    }
 
     // ─ 5. robot_ori_mat6d_w (6) — root orientation in world ─────
     obs::append_rotation_6d(obs, robot_state_.imu_quaternion);
@@ -524,12 +517,12 @@ RobotCommand G1ResidualNode::policy_control()
     {
         int il = mj_to_il_[mj];
 
-        // WBC target
+        // WBC target + HLC residual (mirrors training chain:
+        //   joint = default + action_scale * (wbc_raw + hlc_scale * hlc_raw))
         float q_target = default_angles_[mj] + action_scale_[mj] * wbc_actions_[il];
 
-        // Add HLC residual (motion tracking only)
         if (run_hlc)
-            q_target += residual_action_scale_[mj] * hlc_actions_[il];
+            q_target += action_scale_[mj] * hlc_action_scale_ * hlc_actions_[il];
 
         cmd.motor_commands[mj].q  = q_target;
         cmd.motor_commands[mj].kp = kps_[mj];
