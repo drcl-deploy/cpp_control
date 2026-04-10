@@ -3,9 +3,6 @@
 namespace cpp_control
 {
 
-/// LB (left bumper) button index for switching to locomotion policy
-constexpr size_t XMODE_LB = 4;
-
 G1LocomanipNode::G1LocomanipNode(const std::string& node_name) : G1Node(node_name)
 {
     // Initialize robot (Level 0+1) now that vtable is ready
@@ -172,8 +169,7 @@ RobotCommand G1LocomanipNode::locomanip_policy_control()
 void G1LocomanipNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 {
     // X button → base set NOMINAL_POSE; override to locomotion POLICY
-    if (msg->buttons.size() > joy::XMODE_X && msg->buttons[joy::XMODE_X] == 1
-        && control_mode_ == ControlMode::NOMINAL_POSE)
+    if (just_pressed(msg, joy::XMODE_X) && control_mode_ == ControlMode::NOMINAL_POSE)
     {
         control_mode_ = ControlMode::POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);
@@ -184,7 +180,7 @@ void G1LocomanipNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
     }
 
     // A button (base sets POLICY) → override to LOCOMANIP_POLICY
-    if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1)
+    if (just_pressed(msg, joy::XMODE_A))
     {
         control_mode_ = ControlMode::LOCOMANIP_POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);
@@ -197,7 +193,7 @@ void G1LocomanipNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
     // Y button → DAMPING is already handled by base class
 
     // LB button → switch to locomotion POLICY
-    if (msg->buttons.size() > XMODE_LB && msg->buttons[XMODE_LB] == 1)
+    if (just_pressed(msg, joy::XMODE_LB))
     {
         control_mode_ = ControlMode::POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);
@@ -207,13 +203,19 @@ void G1LocomanipNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
         RCLCPP_INFO(this->get_logger(), "-> locomotion policy");
     }
 
-    // Velocity from sticks (locomanip uses triggers for yaw)
+    // Velocity from sticks
     if (msg->axes.size() > joy::XMODE_R1)
     {
+        // Locomotion: left stick vx/vy, right stick yaw
+        cmd_vel_[0] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_UP_DOWN]) * 0.5f;
+        cmd_vel_[1] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_LEFT_RIGHT]) * 0.5f;
+        cmd_vel_[2] = static_cast<float>(msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]) * -0.5f;
+
+        // Locomanip: left stick vx/vy, triggers for yaw
         locomanip_cmd_vel_[0] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_UP_DOWN]) * 0.5f;
         locomanip_cmd_vel_[1] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_LEFT_RIGHT]) * 0.5f;
 
-        const float left_trigger = static_cast<float>(msg->axes[joy::XMODE_L1]);
+        const float left_trigger  = static_cast<float>(msg->axes[joy::XMODE_L1]);
         const float right_trigger = static_cast<float>(msg->axes[joy::XMODE_R1]);
         locomanip_cmd_vel_[2] = left_trigger - right_trigger;
     }
@@ -249,6 +251,10 @@ void G1LocomanipNode::on_gamepad()
     cmd_vel_[0] = gamepad_.ly * 0.5f;
     cmd_vel_[1] = gamepad_.lx * -0.5f;
     cmd_vel_[2] = gamepad_.rx * -0.5f;
+
+    locomanip_cmd_vel_[0] = gamepad_.ly * 0.5f;
+    locomanip_cmd_vel_[1] = gamepad_.lx * -0.5f;
+    locomanip_cmd_vel_[2] = gamepad_.rx * -0.5f;
 }
 #endif
 

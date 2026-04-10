@@ -145,6 +145,16 @@ RobotCommand BaseNode::locomanip_policy_control()
     return zeroing_control();
 }
 
+// ── Joystick helpers ─────────────────────────────────────────
+
+bool BaseNode::just_pressed(const sensor_msgs::msg::Joy::SharedPtr& msg, size_t idx) const
+{
+    if (idx >= msg->buttons.size())
+        return false;
+    return msg->buttons[idx] == 1 &&
+           (idx < prev_buttons_.size() ? prev_buttons_[idx] == 0 : true);
+}
+
 // ── Joystick ──────────────────────────────────────────────────
 
 void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
