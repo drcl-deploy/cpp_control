@@ -83,8 +83,10 @@ private:
     // ── Object goal (target pose, world frame, wxyz) ────────────
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr object_goal_sub_;
     void on_object_goal(std_msgs::msg::Float32MultiArray::SharedPtr msg);
-    std::array<float, 3> object_goal_pos_  = {0, 0, 0};
-    std::array<float, 4> object_goal_quat_ = {1, 0, 0, 0};
+    // Hardcoded object goal in world frame (from training env)
+    // TODO: read from object_motion.npz via npz_to_motion.py
+    std::array<float, 3> object_goal_pos_  = {1.1409f, 0.4356f, 0.3540f};
+    std::array<float, 4> object_goal_quat_ = {0.6763f, 0.6694f, 0.2159f, 0.2188f};
     bool object_goal_ready_ = false;
 
     // ── Motion data (for WBC, same as TextOp) ───────────────────

@@ -178,9 +178,11 @@ void G1ResidualNode::on_object_goal(std_msgs::msg::Float32MultiArray::SharedPtr 
                               msg->data.size());
         return;
     }
-    object_goal_pos_  = {msg->data[0], msg->data[1], msg->data[2]};
-    object_goal_quat_ = {msg->data[3], msg->data[4], msg->data[5], msg->data[6]};
-    object_goal_ready_ = true;
+    // TODO: re-enable once npz_to_motion.py publishes real object goals
+    // For now, keep hardcoded defaults from header to avoid zero-overwrite
+    // object_goal_pos_  = {msg->data[0], msg->data[1], msg->data[2]};
+    // object_goal_quat_ = {msg->data[3], msg->data[4], msg->data[5], msg->data[6]};
+    // object_goal_ready_ = true;
 }
 
 // ── Motion data callback (identical to TextOp) ───────────────────
@@ -368,33 +370,77 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     std::vector<float> obs;
     obs.reserve(hlc_num_obs_);
 
+    // helper: print first/last N floats of a range
+    auto print_vec = [this](const char* name, const std::vector<float>& v,
+                            int from, int count) {
+        constexpr int SHOW = 6;
+        int n = std::min(count, static_cast<int>(v.size()) - from);
+        std::string s;
+        if (n <= 2 * SHOW) {
+            for (int i = 0; i < n; ++i)
+                s += std::to_string(v[from + i]) + (i + 1 < n ? ", " : "");
+        } else {
+            for (int i = 0; i < SHOW; ++i)
+                s += std::to_string(v[from + i]) + ", ";
+            s += "... ";
+            for (int i = n - SHOW; i < n; ++i)
+                s += std::to_string(v[from + i]) + (i + 1 < n ? ", " : "");
+        }
+        RCLCPP_INFO(this->get_logger(),
+                     "  [HLC obs] %-22s (%3d) idx %4d : [%s]",
+                     name, count, from, s.c_str());
+    };
+
+    RCLCPP_INFO(this->get_logger(),
+                "═══════════════════════ HLC OBS ═══════════════════════");
+
+    int idx0;
+
     // ─ 0. joint_pos_rel (29) in JOINT_NAMES_EXPR order (= MJ order)
     //      Verified: JOINT_NAMES_EXPR == MJ_JOINTS (preserve_order=True)
+    idx0 = static_cast<int>(obs.size());
     for (int mj = 0; mj < NQ; ++mj)
         obs.push_back(robot_state_.joint_positions[mj] - default_angles_[mj]);
+    print_vec("joint_pos_rel", obs, idx0, NQ);
 
     // ─ 1. joint_vel (29) in JOINT_NAMES_EXPR order (= MJ order) ─
+    idx0 = static_cast<int>(obs.size());
     for (int mj = 0; mj < NQ; ++mj)
         obs.push_back(robot_state_.joint_velocities[mj]);
+    print_vec("joint_vel", obs, idx0, NQ);
 
     // ─ 2. hlc_last_actions (29) in IsaacLab order ───────────────
+    idx0 = static_cast<int>(obs.size());
     for (int il = 0; il < NQ; ++il)
         obs.push_back(hlc_last_actions_[il]);
+    print_vec("hlc_last_actions", obs, idx0, NQ);
 
     // ─ 3. image_features (embedding_dim) ─────────────────────────
+    // make all the enmbeding to zero
+    // std::fill(embedding_.begin(), embedding_.end(), 0.0f);
+    idx0 = static_cast<int>(obs.size());
     obs::append_features(obs, embedding_);
+    print_vec("image_features", obs, idx0, embedding_dim_);
 
     // ─ 4. object_goal9d_anchor (9) — goal relative to robot body frame
     //      pos[3] + rot_6d[6]. Anchor pos is {0,0,0} (no odom).
+    idx0 = static_cast<int>(obs.size());
     {
         constexpr std::array<float, 3> robot_pos = {0.0f, 0.0f, 0.0f};
         obs::append_pose9d_body_relative(
             obs, robot_pos, robot_state_.imu_quaternion,
             object_goal_pos_, object_goal_quat_);
     }
+    print_vec("goal9d_anchor", obs, idx0, 9);
 
     // ─ 5. robot_ori_mat6d_w (6) — root orientation in world ─────
+    idx0 = static_cast<int>(obs.size());
     obs::append_rotation_6d(obs, robot_state_.imu_quaternion);
+    print_vec("ori6d_w", obs, idx0, 6);
+
+    RCLCPP_INFO(this->get_logger(),
+                "  [HLC obs] TOTAL: %d (expected %d)",
+                static_cast<int>(obs.size()), hlc_num_obs_);
 
     return obs;
 }
@@ -499,6 +545,9 @@ RobotCommand G1ResidualNode::policy_control()
 
     // --- HLC inference (only in motion tracking mode) ---
     bool run_hlc = !stand_mode_ && (policy_ != nullptr);
+    // RCLCPP_INFO(this->get_logger(),
+    //             "policy_control: stand=%d policy=%p run_hlc=%d mot_t=%d/%d",
+    //             stand_mode_, static_cast<void*>(policy_.get()), run_hlc, mot_t_, mot_T_);
     if (run_hlc)
     {
         auto hlc_obs = build_hlc_observation();
@@ -530,7 +579,10 @@ RobotCommand G1ResidualNode::policy_control()
     }
 
     // Update last actions for next observation
-    wbc_last_actions_ = wbc_actions_;
+    // WBC last_actions must reflect the combined action (WBC + residual),
+    // matching training where process_actions receives the sum.
+    for (int il = 0; il < NQ; ++il)
+        wbc_last_actions_[il] = wbc_actions_[il] + hlc_action_scale_ * hlc_actions_[il];
     hlc_last_actions_ = hlc_actions_;
 
     // Advance motion time (clamps at settle frame; skip if standing)
