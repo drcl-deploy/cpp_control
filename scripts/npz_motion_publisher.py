@@ -136,6 +136,11 @@ class NPZMotionPublisher(Node):
         if obj_quat.ndim == 3:
             obj_quat = obj_quat[:, 0, :]
 
+        # print iintial frasme 
+        print("\n")
+        print(f'Object pose at first frame:')
+        print(f'pos=\"{obj_pos[0, 0]:.4f} {obj_pos[0, 1]:.4f} {obj_pos[0, 2]:.4f}\" quat=\"{obj_quat[0, 0]:.4f} {obj_quat[0, 1]:.4f} {obj_quat[0, 2]:.4f} {obj_quat[0, 3]:.4f}\"')
+        print("\n")
         # Goal = last frame (mirrors training: _final_object_pos_w_list)
         goal_pos = obj_pos[-1]   # [3]
         goal_quat = obj_quat[-1]  # [4] wxyz
