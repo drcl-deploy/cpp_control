@@ -15,6 +15,10 @@ struct RobotState
     std::array<float, 3> imu_gyroscope = {0.0f, 0.0f, 0.0f};
     std::array<float, 3> imu_accelerometer = {0.0f, 0.0f, 0.0f};
 
+    // Base linear velocity in world frame (from odometry / SportModeState).
+    // Defaults to zero — only populated when a subscriber provides data.
+    std::array<float, 3> base_lin_vel_w = {0.0f, 0.0f, 0.0f};
+
     std::vector<float> joint_positions;
     std::vector<float> joint_velocities;
     std::vector<float> joint_torques;

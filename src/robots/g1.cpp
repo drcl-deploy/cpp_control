@@ -100,6 +100,14 @@ void G1Node::init_unitree()
     lowstate_sub_hg_ = this->create_subscription<unitree_hg::msg::LowState>(
         lowstate_topic, 10,
         [this](unitree_hg::msg::LowState::SharedPtr msg) { this->subscribe_low_state(msg); });
+
+    // SportModeState: odometry velocity (world frame)
+    // Mirrors OG textop deployment: position zeroed, velocity from odom.
+    std::string sportmode_topic = this->declare_parameter("sportmode_topic", "/sportmodestate");
+    sportmode_sub_ = this->create_subscription<unitree_go::msg::SportModeState>(
+        sportmode_topic, 10,
+        [this](unitree_go::msg::SportModeState::SharedPtr msg) { this->subscribe_sport_mode_state(msg); });
+    RCLCPP_INFO(this->get_logger(), "Subscribing to SportModeState: %s", sportmode_topic.c_str());
 }
 
 void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
@@ -126,6 +134,13 @@ void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
 
     // Gamepad (mode switching + let Level 2 read velocities)
     handle_gamepad(*msg);
+}
+
+void G1Node::subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedPtr msg)
+{
+    // Mirror OG textop deployment: position zeroed, velocity from odom.
+    // robot_state_.base_lin_vel_w stores world-frame velocity.
+    robot_state_.base_lin_vel_w = {msg->velocity[0], msg->velocity[1], msg->velocity[2]};
 }
 
 void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)

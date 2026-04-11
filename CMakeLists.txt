@@ -18,6 +18,7 @@ find_package(yaml-cpp REQUIRED)
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
+find_package(unitree_go QUIET)
 find_package(messages QUIET)
 
 if(unitree_hg_FOUND)
@@ -90,6 +91,9 @@ if(unitree_hg_FOUND OR messages_FOUND)
   set(G1_DEPS rclcpp geometry_msgs)
   if(unitree_hg_FOUND)
     list(APPEND G1_DEPS unitree_hg)
+    if(unitree_go_FOUND)
+      list(APPEND G1_DEPS unitree_go)
+    endif()
   endif()
   if(messages_FOUND)
     list(APPEND G1_DEPS messages)

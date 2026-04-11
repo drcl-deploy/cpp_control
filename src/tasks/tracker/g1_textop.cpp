@@ -196,10 +196,15 @@ std::vector<float> G1TextopNode::build_observation()
     // ─ 3. projected gravity (3) ─────────────────────────────────
     obs::append_projected_gravity(obs, robot_state_);
 
-    // ─ 4. base_lin_vel (3) : zeroed (no odom available) ─────────
-    obs.push_back(0.0f);
-    obs.push_back(0.0f);
-    obs.push_back(0.0f);
+    // ─ 4. base_lin_vel (3) : world vel rotated to body frame ────
+    //      Mirrors OG textop deployment: quat_rotate_inverse(imu_quat, odom_vel_w)
+    {
+        auto vel_b = math::quat_rotate_inverse(robot_state_.imu_quaternion,
+                                               robot_state_.base_lin_vel_w);
+        obs.push_back(vel_b[0]);
+        obs.push_back(vel_b[1]);
+        obs.push_back(vel_b[2]);
+    }
 
     // ─ 5. base_ang_vel (3) ──────────────────────────────────────
     obs::append_gyro(obs, robot_state_);
