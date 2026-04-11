@@ -1,1 +1,2 @@
 thirdparty/onnxruntime-linux-x64-*
+*.onnx
