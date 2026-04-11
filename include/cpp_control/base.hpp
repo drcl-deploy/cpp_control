@@ -70,6 +70,9 @@ protected:
     // --- Edge-detection helper for on_joy overrides ---
     bool just_pressed(const sensor_msgs::msg::Joy::SharedPtr& msg, size_t idx) const;
 
+    // --- Returns true if a joystick message arrived within the last timeout_s seconds ---
+    bool joy_is_active(double timeout_s = 0.5) const;
+
     // --- Built-in control modes ---
     RobotCommand zeroing_control();
     RobotCommand damping_control();
@@ -103,6 +106,8 @@ private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
 
     std::vector<int> prev_buttons_;
+    bool joy_active_ = false;
+    rclcpp::Time last_joy_time_;
 
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;

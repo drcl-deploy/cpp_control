@@ -57,6 +57,26 @@ The locomotion policy is configured separately in `config/locomotion/g1.yaml`.
 
 ---
 
+## using joystick and gamepad together
+
+Both inputs can be connected at the same time. They share the same velocity command variables, so they need a priority rule to avoid overwriting each other.
+
+**Joystick takes priority for velocity when connected.**
+
+- While the joystick is publishing (i.e., `/joy` messages arrive), the gamepad velocity inputs are ignored. The gamepad can still be used for mode switching (X, A, Y, B, up).
+- If the joystick stops publishing for more than 0.5 seconds, the gamepad resumes velocity control automatically.
+
+This makes the recommended workflow straightforward:
+
+```
+[gamepad]  B → X → up (stand up and enter locomotion)
+[joystick] drive and switch modes with A / X / LB
+```
+
+The gamepad can be kept plugged in throughout — it will handle the initial stand-up without interfering with joystick velocity once the joystick is active.
+
+---
+
 ## button mapping
 
 ### Unitree wireless gamepad

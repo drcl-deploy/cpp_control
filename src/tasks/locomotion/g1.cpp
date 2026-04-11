@@ -72,10 +72,13 @@ RobotCommand G1LocomotionNode::policy_control()
 
 void G1LocomotionNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 {
-    if (msg->axes.size() > joy::XMODE_R1)
+    if (msg->axes.size() > joy::XMODE_LEFT_JOY_UP_DOWN)
     {
-        cmd_vel_[0] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_UP_DOWN]) * 0.5f;
+        cmd_vel_[0] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_UP_DOWN])    * 0.5f;
         cmd_vel_[1] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_LEFT_RIGHT]) * 0.5f;
+    }
+    if (msg->axes.size() > joy::XMODE_RIGHT_JOY_LEFT_RIGHT)
+    {
         cmd_vel_[2] = static_cast<float>(msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]) * -0.5f;
     }
 }
@@ -85,9 +88,12 @@ void G1LocomotionNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 #ifdef HAS_UNITREE_HG
 void G1LocomotionNode::on_gamepad()
 {
-    cmd_vel_[0] = gamepad_.ly * 0.5f;
-    cmd_vel_[1] = gamepad_.lx * -0.5f;
-    cmd_vel_[2] = gamepad_.rx * -0.5f;
+    if (!joy_is_active())
+    {
+        cmd_vel_[0] = gamepad_.ly * 0.5f;
+        cmd_vel_[1] = gamepad_.lx * -0.5f;
+        cmd_vel_[2] = gamepad_.rx * -0.5f;
+    }
 }
 #endif
 
