@@ -5,6 +5,9 @@ Publish motion data from an NPZ file to /tracker/motion as a Float32MultiArray.
 The data is packed as a [T, 65] array where each row contains:
     joint_pos (29, IsaacLab order) | joint_vel (29) | anchor_pos (3) | anchor_ori (4, wxyz)
 
+If an object_motion.npz file exists alongside the motion NPZ, the object goal
+(last-frame pos[3] + quat_wxyz[4]) is published to /object_goal.
+
 Usage:
     ros2 run cpp_control npz_motion_publisher.py /path/to/motion.npz
     python3 scripts/npz_motion_publisher.py /path/to/motion.npz
@@ -21,10 +24,14 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 
 class NPZMotionPublisher(Node):
 
-    def __init__(self, npz_path: str, topic: str = '/tracker/motion'):
+    def __init__(self, npz_path: str, topic: str = '/tracker/motion',
+                 object_goal_topic: str = '/object_goal'):
         super().__init__('npz_motion_publisher')
         self.publisher = self.create_publisher(Float32MultiArray, topic, 10)
+        self.object_goal_publisher = self.create_publisher(
+            Float32MultiArray, object_goal_topic, 10)
         self.npz_path = npz_path
+        self._object_goal_msg = None
         self.load_and_publish()
 
     def load_and_publish(self):
@@ -78,6 +85,9 @@ class NPZMotionPublisher(Node):
         msg.layout.data_offset = 0
         msg.data = packed.flatten().tolist()
 
+        # ── Object goal (from object_motion.npz if present) ──────
+        self._load_object_goal()
+
         # Publish (with a short timer to ensure subscriber is ready)
         self._msg = msg
         self._pub_count = 0
@@ -86,8 +96,64 @@ class NPZMotionPublisher(Node):
         self.get_logger().info(
             f'Loaded {self.npz_path}: T={T}, Nq={Nq}. Publishing to /tracker/motion ...')
 
+    def _load_object_goal(self):
+        """Look for object_motion.npz next to the motion NPZ. If found,
+        extract last-frame object pos[3] + quat_wxyz[4] as the goal."""
+        obj_path = os.path.join(os.path.dirname(self.npz_path), 'object_motion.npz')
+        if not os.path.exists(obj_path):
+            self.get_logger().info(
+                f'No object_motion.npz found at {obj_path}, skipping object goal')
+            return
+
+        obj_data = np.load(obj_path)
+
+        # Try common key names for object pose
+        pos_key = None
+        quat_key = None
+        for k in ['obj_pos_w', 'pos_w', 'position']:
+            if k in obj_data:
+                pos_key = k
+                break
+        for k in ['obj_quat_w', 'quat_w', 'orientation']:
+            if k in obj_data:
+                quat_key = k
+                break
+
+        if pos_key is None or quat_key is None:
+            self.get_logger().warn(
+                f'object_motion.npz keys: {list(obj_data.keys())}. '
+                f'Could not find pos/quat keys, skipping object goal')
+            obj_data.close()
+            return
+
+        obj_pos = obj_data[pos_key].astype(np.float32)   # [T, 3] or [T, N, 3]
+        obj_quat = obj_data[quat_key].astype(np.float32)  # [T, 4] or [T, N, 4]
+        obj_data.close()
+
+        # Handle [T, N, ...] → take first object
+        if obj_pos.ndim == 3:
+            obj_pos = obj_pos[:, 0, :]
+        if obj_quat.ndim == 3:
+            obj_quat = obj_quat[:, 0, :]
+
+        # Goal = last frame (mirrors training: _final_object_pos_w_list)
+        goal_pos = obj_pos[-1]   # [3]
+        goal_quat = obj_quat[-1]  # [4] wxyz
+
+        # Pack as 7 floats: pos[3] + quat_wxyz[4]
+        goal_msg = Float32MultiArray()
+        goal_msg.data = goal_pos.tolist() + goal_quat.tolist()
+        self._object_goal_msg = goal_msg
+
+        self.get_logger().info(
+            f'Object goal from {obj_path}: pos=[{goal_pos[0]:.4f}, {goal_pos[1]:.4f}, '
+            f'{goal_pos[2]:.4f}], quat=[{goal_quat[0]:.4f}, {goal_quat[1]:.4f}, '
+            f'{goal_quat[2]:.4f}, {goal_quat[3]:.4f}]')
+
     def _publish_once(self):
         self.publisher.publish(self._msg)
+        if self._object_goal_msg is not None:
+            self.object_goal_publisher.publish(self._object_goal_msg)
         self._pub_count += 1
         self.get_logger().info(f'Published motion data ({self._pub_count})')
         if self._pub_count >= 5:
@@ -99,11 +165,13 @@ def main():
     parser = argparse.ArgumentParser(description='Publish NPZ motion as Float32MultiArray')
     parser.add_argument('npz_file', help='Path to .npz motion file')
     parser.add_argument('--topic', default='/tracker/motion', help='ROS2 topic')
+    parser.add_argument('--object_goal_topic', default='/object_goal',
+                        help='Topic for object goal (pos+quat)')
     args, unknown = parser.parse_known_args()
 
     rclpy.init()
     try:
-        node = NPZMotionPublisher(args.npz_file, args.topic)
+        node = NPZMotionPublisher(args.npz_file, args.topic, args.object_goal_topic)
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass

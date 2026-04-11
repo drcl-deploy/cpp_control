@@ -178,11 +178,13 @@ void G1ResidualNode::on_object_goal(std_msgs::msg::Float32MultiArray::SharedPtr 
                               msg->data.size());
         return;
     }
-    // TODO: re-enable once npz_to_motion.py publishes real object goals
-    // For now, keep hardcoded defaults from header to avoid zero-overwrite
-    // object_goal_pos_  = {msg->data[0], msg->data[1], msg->data[2]};
-    // object_goal_quat_ = {msg->data[3], msg->data[4], msg->data[5], msg->data[6]};
-    // object_goal_ready_ = true;
+    object_goal_pos_  = {msg->data[0], msg->data[1], msg->data[2]};
+    object_goal_quat_ = {msg->data[3], msg->data[4], msg->data[5], msg->data[6]};
+    object_goal_ready_ = true;
+    RCLCPP_INFO(this->get_logger(),
+                "Object goal received: pos=[%.4f, %.4f, %.4f] quat=[%.4f, %.4f, %.4f, %.4f]",
+                msg->data[0], msg->data[1], msg->data[2],
+                msg->data[3], msg->data[4], msg->data[5], msg->data[6]);
 }
 
 // ── Motion data callback (identical to TextOp) ───────────────────
