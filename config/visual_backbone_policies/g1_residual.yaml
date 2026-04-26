@@ -66,7 +66,7 @@ action_scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
 
 # ── Motion padding for smooth stand ↔ motion transitions ───────
 motion_pad_length: 0.5   # seconds of linear interpolation before/after motion
-pre_motion_pad: true      # pad nominal → motion[0] at start
+pre_motion_pad: false     # pad nominal → motion[0] at start
 post_motion_pad: true     # pad motion[-1] → nominal at end
 
 # ── Joint names (MuJoCo order) ──────────────────────────────────

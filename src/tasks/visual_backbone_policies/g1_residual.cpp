@@ -320,22 +320,25 @@ void G1ResidualNode::pad_pending_motion()
 
             std::vector<float> pos(NQ);
             for (int j = 0; j < NQ; ++j)
-                pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
+                // pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
+                pos[j] = nominal_il[j];
 
             std::array<float, 3> apos;
             for (int i = 0; i < 3; ++i)
-                apos[i] = (1.0f - a) * last_apos[i] + a * zero_pos[i];
+                // apos[i] = (1.0f - a) * last_apos[i] + a * zero_pos[i];
+                apos[i] = last_apos[i];
 
             std::array<float, 4> aori;
             float norm = 0.0f;
             for (int i = 0; i < 4; ++i)
             {
-                aori[i] = (1.0f - a) * last_aori[i] + a * identity_ori[i];
-                norm += aori[i] * aori[i];
+                // aori[i] = (1.0f - a) * last_aori[i] + a * identity_ori[i];
+                // norm += aori[i] * aori[i];
+                aori[i] = last_aori[i];
             }
-            norm = std::sqrt(norm);
-            for (int i = 0; i < 4; ++i)
-                aori[i] /= norm;
+            // norm = std::sqrt(norm);
+            // for (int i = 0; i < 4; ++i)
+            //     aori[i] /= norm;
 
             pend_joint_pos_.push_back(pos);
             pend_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
