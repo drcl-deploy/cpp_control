@@ -131,6 +131,14 @@ G1ResidualNode::G1ResidualNode(const std::string& node_name) : G1Node(node_name)
         [this](std_msgs::msg::Float32MultiArray::SharedPtr msg) { on_motion(msg); });
     RCLCPP_INFO(this->get_logger(), "Subscribing to motion: %s", motion_topic.c_str());
 
+    // ── Debug publishers (viser_ghost viewer) ─────────────────
+    ghost_motion_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
+        "/g1_residual/ghost_motion_state", 10);
+    residual_action_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
+        "/g1_residual/hlc_debug/residual_action", 10);
+    goal_pose_anchor_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+        "/g1_residual/hlc_debug/goal_pose_anchor", 10);
+
     RCLCPP_INFO(this->get_logger(), "G1 VBP Residual node ready  (HLC obs=%d, WBC obs=%d)",
                 hlc_num_obs_, WBC_NUM_OBS);
 }
@@ -327,7 +335,8 @@ void G1ResidualNode::pad_pending_motion()
             for (int i = 0; i < 3; ++i)
                 // apos[i] = (1.0f - a) * last_apos[i] + a * zero_pos[i];
                 apos[i] = last_apos[i];
-
+            
+            apos[2] = 0.76f;  // hardcoded target height for stand mode
             std::array<float, 4> aori;
             float norm = 0.0f;
             for (int i = 0; i < 4; ++i)
@@ -594,6 +603,59 @@ RobotCommand G1ResidualNode::policy_control()
     for (int il = 0; il < NQ; ++il)
         wbc_last_actions_[il] = wbc_actions_[il] + hlc_action_scale_ * hlc_actions_[il];
     hlc_last_actions_ = hlc_actions_;
+
+    // ── Debug: ghost motion state (for viser viewer) ─────────────
+    if (mot_ready_ && !stand_mode_ && ghost_motion_pub_)
+    {
+        std_msgs::msg::Float32MultiArray gmsg;
+        gmsg.data.reserve(NQ + 3 + 4);
+        const auto& jp  = mot_joint_pos_[mot_t_];           // IL order
+        const auto& ap  = mot_anchor_pos_[mot_t_];
+        const auto& aq  = mot_anchor_ori_[mot_t_];
+        gmsg.data.insert(gmsg.data.end(), jp.begin(), jp.end());
+        gmsg.data.insert(gmsg.data.end(), {ap[0], ap[1], ap[2]});
+        gmsg.data.insert(gmsg.data.end(), {aq[0], aq[1], aq[2], aq[3]});
+        ghost_motion_pub_->publish(gmsg);
+    }
+
+    // ── Debug: residual action (MJ order, units of q - default_angles) ──
+    if (run_hlc && residual_action_pub_)
+    {
+        std_msgs::msg::Float32MultiArray rmsg;
+        rmsg.data.reserve(NQ);
+        for (int mj = 0; mj < NQ; ++mj)
+            rmsg.data.push_back(action_scale_[mj] * hlc_action_scale_
+                                * hlc_actions_[mj_to_il_[mj]]);
+        residual_action_pub_->publish(rmsg);
+    }
+
+    // ── Debug: object goal in anchor frame ──────────────────────
+    // Mirrors the HLC obs slot `goal9d_anchor`: pos = R(imu)^T * (goal_w - 0),
+    // quat = qinv(imu) * goal_quat. Anchor translation is hardcoded to zero
+    // upstream, so anchor_to_world = (origin, imu_quat).
+    if (run_hlc && goal_pose_anchor_pub_)
+    {
+        const auto& iq = robot_state_.imu_quaternion;
+        std::array<float, 3> dp = {
+                                    object_goal_pos_[0], 
+                                    object_goal_pos_[1], 
+                                    object_goal_pos_[2]};
+        auto pos_b  = math::quat_rotate_inverse(iq, dp);
+        auto quat_b = math::qmul(math::qinv(iq), object_goal_quat_);
+
+        geometry_msgs::msg::PoseStamped pmsg;
+        pmsg.header.stamp = this->get_clock()->now();
+        pmsg.header.frame_id = "anchor";
+        pmsg.pose.position.x = pos_b[0];
+        pmsg.pose.position.y = pos_b[1];
+        pmsg.pose.position.z = pos_b[2];
+        // ROS quat is xyzw; ours is wxyz
+        pmsg.pose.orientation.w = quat_b[0];
+        pmsg.pose.orientation.x = quat_b[1];
+        pmsg.pose.orientation.y = quat_b[2];
+        pmsg.pose.orientation.z = quat_b[3];
+        goal_pose_anchor_pub_->publish(pmsg);
+    }
 
     // Advance motion time (clamps at settle frame; skip if standing)
     if (!stand_mode_ && mot_t_ < mot_T_ - 1)

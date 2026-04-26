@@ -156,7 +156,9 @@ install(DIRECTORY launch config models include
   DESTINATION share/${PROJECT_NAME}/
 )
 
-install(PROGRAMS scripts/npz_motion_publisher.py
+install(PROGRAMS
+  scripts/npz_motion_publisher.py
+  scripts/viser_ghost_g1_residual.py
   DESTINATION lib/${PROJECT_NAME}/
 )
 

@@ -5,6 +5,7 @@
 #include "common/observation_utils.hpp"
 
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
 #include <array>
 #include <vector>
@@ -92,6 +93,16 @@ private:
     // ── Motion data (for WBC, same as TextOp) ───────────────────
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr motion_sub_;
     void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
+
+    // ── Debug publishers (for viser_ghost viewer) ───────────────
+    // Ghost motion frame (joint_pos IL, anchor_pos, anchor_quat_wxyz) = 36 floats.
+    // Published only while mot_ready_ && !stand_mode_.
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr ghost_motion_pub_;
+    // Residual action term in MJ order (action_scale * hlc_action_scale * hlc_action), 29 floats.
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr residual_action_pub_;
+    // Object goal pose expressed in the HLC anchor frame (robot body frame, with
+    // anchor translation = 0 — exactly what the HLC observation slot encodes).
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_anchor_pub_;
 
     std::vector<std::vector<float>> mot_joint_pos_;   // [T][NQ] IsaacLab order
     std::vector<std::vector<float>> mot_joint_vel_;   // [T][NQ]
