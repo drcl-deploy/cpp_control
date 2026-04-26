@@ -481,12 +481,24 @@ std::vector<float> G1ResidualNode::build_wbc_observation()
     }
 
     // ─ 1. anchor_pos_b (15) : zeroed (no odom) ──────────────────
-    for (int i = 0; i < FUTURE_STEPS * 3; ++i)
-        obs.push_back(0.0f);
-
-    // ─ 2. anchor_ori_b (30) : relative orientation as 6D rotation
+    auto robot_pos = robot_state_.base_pos_w;
     auto robot_quat = robot_state_.imu_quaternion;
 
+    for (int i = 0; i < FUTURE_STEPS * 3; ++i)
+        obs.push_back(0.0f);
+    // for (int s = 0; s < FUTURE_STEPS; ++s)
+    // {
+    //     int idx = std::min(mot_t_ + s, mot_T_ - 1);
+    //     auto [ref_pos_r, ref_quat_r] = transform_ref_to_robot(mot_anchor_pos_[idx], mot_anchor_ori_[idx]);
+
+    //     auto [rel_pos, rel_quat] = math::subtract_frames(
+    //                                                 robot_pos, robot_quat, ref_pos_r, ref_quat_r);
+
+    //     for (int i = 0; i < 3; ++i)
+    //         obs.push_back(rel_pos[i]);
+    // }
+
+    // ─ 2. anchor_ori_b (30) : relative orientation as 6D rotation
     if (!frame_init_)
         setup_init_frame();
 
@@ -498,6 +510,8 @@ std::vector<float> G1ResidualNode::build_wbc_observation()
 
         auto [_, rel_quat] = math::subtract_frames(
             robot_init_pos_, robot_quat, ref_pos_r, ref_quat_r);
+        // auto [_, rel_quat] = math::subtract_frames(
+        //     robot_pos, robot_quat, ref_pos_r, ref_quat_r);
 
         auto r6d = math::quat_to_rotation_6d(rel_quat);
         for (int i = 0; i < 6; ++i)

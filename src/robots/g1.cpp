@@ -140,6 +140,7 @@ void G1Node::subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedP
 {
     // Mirror OG textop deployment: position zeroed, velocity from odom.
     // robot_state_.base_lin_vel_w stores world-frame velocity.
+    robot_state_.base_pos_w = {msg->position[0], msg->position[1], msg->position[2]};
     robot_state_.base_lin_vel_w = {msg->velocity[0], msg->velocity[1], msg->velocity[2]};
 }
 

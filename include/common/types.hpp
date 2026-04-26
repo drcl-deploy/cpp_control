@@ -17,6 +17,7 @@ struct RobotState
 
     // Base linear velocity in world frame (from odometry / SportModeState).
     // Defaults to zero — only populated when a subscriber provides data.
+    std::array<float, 3> base_pos_w = {0.0f, 0.0f, 0.0f};
     std::array<float, 3> base_lin_vel_w = {0.0f, 0.0f, 0.0f};
 
     std::vector<float> joint_positions;
