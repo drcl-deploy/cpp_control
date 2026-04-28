@@ -56,6 +56,10 @@ endif()
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 set(CMAKE_BUILD_RPATH "${ONNXRUNTIME_LIB_DIR}")
 set(CMAKE_INSTALL_RPATH "${ONNXRUNTIME_LIB_DIR}")
+# Use RPATH (not RUNPATH) so it takes precedence over LD_LIBRARY_PATH.
+# Without this, /opt/ros/humble/lib (in LD_LIBRARY_PATH) would supply
+# its older libonnxruntime.so.1 before the thirdparty 1.22.0 is found.
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--disable-new-dtags")
 
 include_directories(include)
 if(ONNXRUNTIME_INCLUDE_DIRS)
@@ -127,6 +131,21 @@ if(messages_FOUND)
     rclcpp std_msgs sensor_msgs geometry_msgs messages)
 
   list(APPEND INSTALL_TARGETS mini_pi_locomotion_node mini_pi_dive_node)
+endif()
+
+# ── Level 1 + tasks: hector_v2 (needs messages) ──────────────
+if(messages_FOUND)
+  add_library(cpp_control_hector_v2 STATIC src/robots/hector_v2.cpp)
+  target_link_libraries(cpp_control_hector_v2 cpp_control_base)
+  ament_target_dependencies(cpp_control_hector_v2 rclcpp messages geometry_msgs)
+
+  # Task: locomotion (hector_v2)
+  add_executable(hector_v2_locomotion_node src/tasks/locomotion/hector_v2.cpp)
+  target_link_libraries(hector_v2_locomotion_node cpp_control_hector_v2)
+  ament_target_dependencies(hector_v2_locomotion_node
+    rclcpp std_msgs sensor_msgs geometry_msgs messages)
+
+  list(APPEND INSTALL_TARGETS hector_v2_locomotion_node)
 endif()
 
 # ── Install ───────────────────────────────────────────────────
