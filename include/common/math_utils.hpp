@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace cpp_control
 {
@@ -112,6 +114,45 @@ inline std::array<float, 4> heading_quat(const std::array<float, 4>& q)
     return {std::cos(hy), 0.0f, 0.0f, std::sin(hy)};
 }
 
+/// Spherical linear interpolation between two wxyz quaternions.
+/// tau in [0,1]: tau=0 -> q1, tau=1 -> q2. Picks the shorter arc.
+/// Not batched (single quaternion pair), matching the reference impl.
+inline std::array<float, 4> quat_slerp(const std::array<float, 4>& q1,
+                                        const std::array<float, 4>& q2,
+                                        float tau)
+{
+    if (tau <= 0.0f) return q1;
+    if (tau >= 1.0f) return q2;
+
+    constexpr float eps4 = 4.0f * std::numeric_limits<float>::epsilon();
+
+    float d = q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
+
+    // Already (anti-)aligned — interpolation is a no-op up to sign.
+    if (std::fabs(std::fabs(d) - 1.0f) < eps4) return q1;
+
+    // Shorter arc: flip q2 if dot is negative.
+    std::array<float, 4> q2s = q2;
+    if (d < 0.0f) {
+        d = -d;
+        q2s = {-q2[0], -q2[1], -q2[2], -q2[3]};
+    }
+
+    const float angle = std::acos(std::clamp(d, -1.0f, 1.0f));
+    if (std::fabs(angle) < eps4) return q1;
+
+    const float isin = 1.0f / std::sin(angle);
+    const float s1 = std::sin((1.0f - tau) * angle) * isin;
+    const float s2 = std::sin(tau * angle) * isin;
+
+    return {
+        s1 * q1[0] + s2 * q2s[0],
+        s1 * q1[1] + s2 * q2s[1],
+        s1 * q1[2] + s2 * q2s[2],
+        s1 * q1[3] + s2 * q2s[3],
+    };
+}
+
 // ── Frame math ───────────────────────────────────────────────
 // Used by the TextOp tracker to compute relative poses between
 // the robot base and reference motion anchors/waypoints.
@@ -136,3 +177,12 @@ subtract_frames(const std::array<float, 3>& pos_a,
 
 }  // namespace math
 }  // namespace cpp_control
+
+inline std::array<float, 4> yaw_quat(const std::array<float, 4>& q)
+{
+    const float qw = q[0], qx = q[1], qy = q[2], qz = q[3];
+    const float half_yaw = 0.5f * std::atan2(2.0f * (qw * qz + qx * qy),
+                                             1.0f - 2.0f * (qy * qy + qz * qz));
+    return {std::cos(half_yaw), 0.0f, 0.0f, std::sin(half_yaw)};
+}
+

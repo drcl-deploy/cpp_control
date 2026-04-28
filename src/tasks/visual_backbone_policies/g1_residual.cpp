@@ -261,6 +261,9 @@ void G1ResidualNode::commit_pending_motion()
     mot_joint_vel_ = std::move(pend_joint_vel_);
     mot_anchor_pos_ = std::move(pend_anchor_pos_);
     mot_anchor_ori_ = std::move(pend_anchor_ori_);
+
+    // DEBUG: force mot_joint_vel_ to zero
+    // for (auto& v : mot_joint_vel_) std::fill(v.begin(), v.end(), 0.0f);
     mot_T_ = pend_T_;
     mot_t_ = 0;
     mot_ready_ = true;
@@ -319,35 +322,20 @@ void G1ResidualNode::pad_pending_motion()
         const auto last_pos  = pend_joint_pos_.back();
         const auto last_apos = pend_anchor_pos_.back();
         const auto last_aori = pend_anchor_ori_.back();
-        constexpr std::array<float, 3> zero_pos = {0.0f, 0.0f, 0.0f};
-        constexpr std::array<float, 4> identity_ori = {1.0f, 0.0f, 0.0f, 0.0f};
+        const auto last_aori_yaw = math::heading_quat(last_aori);
 
         for (int f = 0; f < pad_frames; ++f)
         {
             float a = static_cast<float>(f + 1) / static_cast<float>(pad_frames + 1);
-
+            // joint pos interpolate
             std::vector<float> pos(NQ);
             for (int j = 0; j < NQ; ++j)
-                // pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
-                pos[j] = nominal_il[j];
-
-            std::array<float, 3> apos;
-            for (int i = 0; i < 3; ++i)
-                // apos[i] = (1.0f - a) * last_apos[i] + a * zero_pos[i];
-                apos[i] = last_apos[i];
-            
+                pos[j] = (1.0f - a) * last_pos[j] + a * nominal_il[j];
+            // anchor pos, no interpolation
+            std::array<float, 3> apos = last_apos;
             apos[2] = 0.76f;  // hardcoded target height for stand mode
-            std::array<float, 4> aori;
-            float norm = 0.0f;
-            for (int i = 0; i < 4; ++i)
-            {
-                // aori[i] = (1.0f - a) * last_aori[i] + a * identity_ori[i];
-                // norm += aori[i] * aori[i];
-                aori[i] = last_aori[i];
-            }
-            // norm = std::sqrt(norm);
-            // for (int i = 0; i < 4; ++i)
-            //     aori[i] /= norm;
+            
+            auto aori = math::quat_slerp(last_aori, last_aori_yaw, a);
 
             pend_joint_pos_.push_back(pos);
             pend_joint_vel_.push_back(std::vector<float>(NQ, 0.0f));
@@ -385,28 +373,28 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     obs.reserve(hlc_num_obs_);
 
     // helper: print first/last N floats of a range
-    auto print_vec = [this](const char* name, const std::vector<float>& v,
-                            int from, int count) {
-        constexpr int SHOW = 6;
-        int n = std::min(count, static_cast<int>(v.size()) - from);
-        std::string s;
-        if (n <= 2 * SHOW) {
-            for (int i = 0; i < n; ++i)
-                s += std::to_string(v[from + i]) + (i + 1 < n ? ", " : "");
-        } else {
-            for (int i = 0; i < SHOW; ++i)
-                s += std::to_string(v[from + i]) + ", ";
-            s += "... ";
-            for (int i = n - SHOW; i < n; ++i)
-                s += std::to_string(v[from + i]) + (i + 1 < n ? ", " : "");
-        }
-        RCLCPP_INFO(this->get_logger(),
-                     "  [HLC obs] %-22s (%3d) idx %4d : [%s]",
-                     name, count, from, s.c_str());
-    };
+    // auto print_vec = [this](const char* name, const std::vector<float>& v,
+    //                         int from, int count) {
+    //     constexpr int SHOW = 6;
+    //     int n = std::min(count, static_cast<int>(v.size()) - from);
+    //     std::string s;
+    //     if (n <= 2 * SHOW) {
+    //         for (int i = 0; i < n; ++i)
+    //             s += std::to_string(v[from + i]) + (i + 1 < n ? ", " : "");
+    //     } else {
+    //         for (int i = 0; i < SHOW; ++i)
+    //             s += std::to_string(v[from + i]) + ", ";
+    //         s += "... ";
+    //         for (int i = n - SHOW; i < n; ++i)
+    //             s += std::to_string(v[from + i]) + (i + 1 < n ? ", " : "");
+    //     }
+    //     RCLCPP_INFO(this->get_logger(),
+    //                  "  [HLC obs] %-22s (%3d) idx %4d : [%s]",
+    //                  name, count, from, s.c_str());
+    // };
 
-    RCLCPP_INFO(this->get_logger(),
-                "═══════════════════════ HLC OBS ═══════════════════════");
+    // RCLCPP_INFO(this->get_logger(),
+    //             "═══════════════════════ HLC OBS ═══════════════════════");
 
     int idx0;
 
@@ -415,26 +403,26 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     idx0 = static_cast<int>(obs.size());
     for (int mj = 0; mj < NQ; ++mj)
         obs.push_back(robot_state_.joint_positions[mj] - default_angles_[mj]);
-    print_vec("joint_pos_rel", obs, idx0, NQ);
+    // print_vec("joint_pos_rel", obs, idx0, NQ);
 
     // ─ 1. joint_vel (29) in JOINT_NAMES_EXPR order (= MJ order) ─
     idx0 = static_cast<int>(obs.size());
     for (int mj = 0; mj < NQ; ++mj)
         obs.push_back(robot_state_.joint_velocities[mj]);
-    print_vec("joint_vel", obs, idx0, NQ);
+    // print_vec("joint_vel", obs, idx0, NQ);
 
     // ─ 2. hlc_last_actions (29) in IsaacLab order ───────────────
     idx0 = static_cast<int>(obs.size());
     for (int il = 0; il < NQ; ++il)
         obs.push_back(hlc_last_actions_[il]);
-    print_vec("hlc_last_actions", obs, idx0, NQ);
+    // print_vec("hlc_last_actions", obs, idx0, NQ);
 
     // ─ 3. image_features (embedding_dim) ─────────────────────────
     // make all the enmbeding to zero
     // std::fill(embedding_.begin(), embedding_.end(), 0.0f);
     idx0 = static_cast<int>(obs.size());
     obs::append_features(obs, embedding_);
-    print_vec("image_features", obs, idx0, embedding_dim_);
+    // print_vec("image_features", obs, idx0, embedding_dim_);
 
     // ─ 4. object_goal9d_anchor (9) — goal relative to robot body frame
     //      pos[3] + rot_6d[6]. Anchor pos is {0,0,0} (no odom).
@@ -445,16 +433,16 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
             obs, robot_pos, robot_state_.imu_quaternion,
             object_goal_pos_, object_goal_quat_);
     }
-    print_vec("goal9d_anchor", obs, idx0, 9);
+    // print_vec("goal9d_anchor", obs, idx0, 9);
 
     // ─ 5. robot_ori_mat6d_w (6) — root orientation in world ─────
     idx0 = static_cast<int>(obs.size());
     obs::append_rotation_6d(obs, robot_state_.imu_quaternion);
-    print_vec("ori6d_w", obs, idx0, 6);
+    // print_vec("ori6d_w", obs, idx0, 6);
 
-    RCLCPP_INFO(this->get_logger(),
-                "  [HLC obs] TOTAL: %d (expected %d)",
-                static_cast<int>(obs.size()), hlc_num_obs_);
+    // RCLCPP_INFO(this->get_logger(),
+    //             "  [HLC obs] TOTAL: %d (expected %d)",
+    //             static_cast<int>(obs.size()), hlc_num_obs_);
 
     return obs;
 }
@@ -480,28 +468,32 @@ std::vector<float> G1ResidualNode::build_wbc_observation()
             obs.push_back(mot_joint_vel_[idx][j]);
     }
 
-    // ─ 1. anchor_pos_b (15) : zeroed (no odom) ──────────────────
+    // ─ 1. anchor_pos_b (15) : training-equivalent, odom-based ──
     auto robot_pos = robot_state_.base_pos_w;
     auto robot_quat = robot_state_.imu_quaternion;
 
+    if (!frame_init_)
+        setup_init_frame();
+
+    // Toggle: zero (no-odom baseline) vs computed (training mirror).
     for (int i = 0; i < FUTURE_STEPS * 3; ++i)
         obs.push_back(0.0f);
     // for (int s = 0; s < FUTURE_STEPS; ++s)
     // {
     //     int idx = std::min(mot_t_ + s, mot_T_ - 1);
-    //     auto [ref_pos_r, ref_quat_r] = transform_ref_to_robot(mot_anchor_pos_[idx], mot_anchor_ori_[idx]);
+    //     auto [ref_pos_r, ref_quat_r] =
+    //         transform_ref_to_robot(mot_anchor_pos_[idx], mot_anchor_ori_[idx]);
 
-    //     auto [rel_pos, rel_quat] = math::subtract_frames(
-    //                                                 robot_pos, robot_quat, ref_pos_r, ref_quat_r);
+    //     auto [rel_pos, _] = math::subtract_frames(
+    //         robot_pos, robot_quat, ref_pos_r, ref_quat_r);
 
     //     for (int i = 0; i < 3; ++i)
     //         obs.push_back(rel_pos[i]);
     // }
 
     // ─ 2. anchor_ori_b (30) : relative orientation as 6D rotation
-    if (!frame_init_)
-        setup_init_frame();
-
+    //   Translation arg is irrelevant to rel_quat; using robot_pos to mirror
+    //   training's subtract_frame_transforms call signature.
     for (int s = 0; s < FUTURE_STEPS; ++s)
     {
         int idx = std::min(mot_t_ + s, mot_T_ - 1);
@@ -758,7 +750,10 @@ void G1ResidualNode::on_gamepad()
 
 void G1ResidualNode::setup_init_frame()
 {
+    // Snapshot robot's odom pose at frame init so the M→W rebase has a fixed
+    // world anchor (not the moving current pos, not hardcoded zero).
     robot_init_pos_ = {0.0f, 0.0f, 0.0f};
+    // robot_init_pos_ = robot_state_.base_pos_w;
     robot_init_hq_  = math::heading_quat(robot_state_.imu_quaternion);
 
     ref_init_pos_  = mot_anchor_pos_[mot_t_];

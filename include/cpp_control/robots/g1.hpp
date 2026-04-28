@@ -83,8 +83,8 @@ namespace cpp_control
         rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr lowstate_sub_hg_;
 
         // --- SportModeState (odometry: position + velocity) ---
-        void subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedPtr msg);
-        rclcpp::Subscription<unitree_go::msg::SportModeState>::SharedPtr sportmode_sub_;
+        // void subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedPtr msg);
+        // rclcpp::Subscription<unitree_go::msg::SportModeState>::SharedPtr sportmode_sub_;
 #endif
 
 #ifdef HAS_MESSAGES
