@@ -72,7 +72,7 @@ private:
     std::vector<float> wbc_last_actions_;
 
     // ── HLC action scale (scalar, matches training cfg.action_scale) ─
-    float hlc_action_scale_ = 0.0f;
+    float hlc_action_scale_ = 0.1f;
 
     // ── Visual embedding (from external backbone node) ──────────
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr embedding_sub_;
