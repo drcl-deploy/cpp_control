@@ -247,6 +247,20 @@ void G1LocomanipNode::on_gamepad()
         RCLCPP_INFO(this->get_logger(), "-> locomanip policy");
     }
 
+    // D-pad left → spread hands apart; D-pad right → bring hands in
+    // Step per tick at ~500Hz: 0.0002m → ~0.1m/s while held
+    constexpr float kYStep = 0.0002f;
+    if (gamepad_.left.pressed)
+    {
+        left_hand_pos_[1]  = std::min(left_hand_pos_[1]  + kYStep,  0.50f);
+        right_hand_pos_[1] = std::max(right_hand_pos_[1] - kYStep, -0.50f);
+    }
+    if (gamepad_.right.pressed)
+    {
+        left_hand_pos_[1]  = std::max(left_hand_pos_[1]  - kYStep,  0.05f);
+        right_hand_pos_[1] = std::min(right_hand_pos_[1] + kYStep, -0.05f);
+    }
+
     // Only update velocity from gamepad when joystick is not active.
     // on_gamepad fires at ~500Hz; if the joystick is connected its idle values (0)
     // would otherwise overwrite whatever the joystick just wrote.

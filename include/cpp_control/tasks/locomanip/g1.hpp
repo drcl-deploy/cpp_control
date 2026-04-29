@@ -62,9 +62,9 @@ protected:
     std::array<float, 3> locomanip_cmd_vel_ = {0.0f, 0.0f, 0.0f};
 
     // --- End-effector pose from XR controllers ---
-    std::array<float, 3> left_hand_pos_  = {0.2f, 0.13f, 0.1f};
+    std::array<float, 3> left_hand_pos_  = {0.20f,  0.13f, 0.08f};
     std::array<float, 4> left_hand_quat_ = {1.0f, 0.0f, 0.0f, 0.0f};   // w, x, y, z
-    std::array<float, 3> right_hand_pos_  = {0.2f, -0.13f, 0.1f};
+    std::array<float, 3> right_hand_pos_  = {0.20f, -0.13f, 0.08f};
     std::array<float, 4> right_hand_quat_ = {1.0f, 0.0f, 0.0f, 0.0f};  // w, x, y, z
 
     // --- Locomanip policy (locomotion policy is in base policy_) ---
