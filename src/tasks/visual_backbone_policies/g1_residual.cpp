@@ -420,22 +420,23 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     // print_vec("hlc_last_actions", obs, idx0, NQ);
 
     // ─ 3. image_features (embedding_dim) ─────────────────────────
-    // make all the enmbeding to zero
+    // DEBUG: zero out the latent to see the policy's blind response.
     // std::fill(embedding_.begin(), embedding_.end(), 0.0f);
     idx0 = static_cast<int>(obs.size());
     obs::append_features(obs, embedding_);
     // print_vec("image_features", obs, idx0, embedding_dim_);
 
     // ─ 4. object_goal9d_anchor (9) — goal relative to robot body frame
-    //      pos[3] + rot_6d[6]. Anchor pos is {0,0,0} (no odom).
+    //      pos[3] + rot_6d[6]. Anchor = (base_pos_w, imu_quat), mirroring
+    //      IsaacLab's object_goal9d_command_anchor where anchor entity is the
+    //      robot root.
     idx0 = static_cast<int>(obs.size());
-    {
-        constexpr std::array<float, 3> robot_pos = {0.0f, 0.0f, 0.0f};
-        obs::append_pose9d_body_relative(
-            obs, robot_pos, robot_state_.imu_quaternion,
-            object_goal_pos_, object_goal_quat_);
-    }
-    // print_vec("goal9d_anchor", obs, idx0, 9);
+    obs::append_pose9d_body_relative(
+        obs, robot_state_.base_pos_w, robot_state_.imu_quaternion,
+        object_goal_pos_, object_goal_quat_);
+    // DEBUG: zero the goal9d slot to ablate goal contribution from the policy.
+    // for (int i = 0; i < 9; ++i) obs[idx0 + i] = 0.0f;
+    // print_vec("goal9d_anchor", obs, idx0,` 9);
 
     // ─ 5. robot_ori_mat6d_w (6) — root orientation in world ─────
     idx0 = static_cast<int>(obs.size());
@@ -646,16 +647,18 @@ RobotCommand G1ResidualNode::policy_control()
     }
 
     // ── Debug: object goal in anchor frame ──────────────────────
-    // Mirrors the HLC obs slot `goal9d_anchor`: pos = R(imu)^T * (goal_w - 0),
-    // quat = qinv(imu) * goal_quat. Anchor translation is hardcoded to zero
-    // upstream, so anchor_to_world = (origin, imu_quat).
+    // Publishes EXACTLY the signal the policy sees in the goal9d_anchor obs
+    // slot: pos_b = R(imu)^T * (goal_w - base_pos_w), quat_b = qinv(imu) * goal_quat.
+    // Viewer parents this under /anchor_frame = (base_pos_w, imu_quat); the scene
+    // graph composition is the exact inverse, so the marker lands on goal_w.
     if (run_hlc && goal_pose_anchor_pub_)
     {
         const auto& iq = robot_state_.imu_quaternion;
+        const auto& rp = robot_state_.base_pos_w;
         std::array<float, 3> dp = {
-                                    object_goal_pos_[0], 
-                                    object_goal_pos_[1], 
-                                    object_goal_pos_[2]};
+                                    object_goal_pos_[0] - rp[0],
+                                    object_goal_pos_[1] - rp[1],
+                                    object_goal_pos_[2] - rp[2]};
         auto pos_b  = math::quat_rotate_inverse(iq, dp);
         auto quat_b = math::qmul(math::qinv(iq), object_goal_quat_);
 
