@@ -66,6 +66,8 @@ G1ResidualNode::G1ResidualNode(const std::string& node_name) : G1Node(node_name)
         hlc_action_scale_ = yaml["hlc_action_scale"].as<float>();
 
     // HLC observation size
+    // joint_pos + joint_vel + hlc_last_actions + embed + goal9d + ori6d + wbc_last_actions
+    // hlc_num_obs_ = 4 * NQ + embedding_dim_ + 9 + 6;
     hlc_num_obs_ = 3 * NQ + embedding_dim_ + 9 + 6;  // joint_pos + joint_vel + actions + embed + goal9d + ori6d
     if (yaml["hlc_num_obs"])
         hlc_num_obs_ = yaml["hlc_num_obs"].as<int>();
@@ -439,6 +441,14 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
     idx0 = static_cast<int>(obs.size());
     obs::append_rotation_6d(obs, robot_state_.imu_quaternion);
     // print_vec("ori6d_w", obs, idx0, 6);
+
+    // ─ 6. low_level_actions (29) — WBC's last action, IsaacLab order
+    //      Mirrors training's `last_low_level_action`, which is the action
+    //      fed into WBC's process_actions (i.e. wbc_raw + hlc_scale*hlc_raw).
+    // idx0 = static_cast<int>(obs.size());
+    // for (int il = 0; il < NQ; ++il)
+    //     obs.push_back(wbc_last_actions_[il]);
+    // print_vec("low_level_actions", obs, idx0, NQ);
 
     // RCLCPP_INFO(this->get_logger(),
     //             "  [HLC obs] TOTAL: %d (expected %d)",
