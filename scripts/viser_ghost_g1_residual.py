@@ -168,11 +168,12 @@ class ViserGhostG1(Node):
         self._server.scene.add_label("/object_goal/label", 
                                      text="object_goal_w",
                                      position=(0.0, 0.0, 0.15))
-        # Anchor frame: sits at world origin, rotated by the robot's IMU quat.
-        # This matches the C++ HLC obs definition (robot_pos hardcoded to {0,0,0}),
-        # so anchor_to_world = (origin, imu_quat). The goal child below carries
-        # body-relative coords; rendered through this parent it should overlay
-        # with /object_goal iff the obs slot is consistent.
+        # Anchor frame: tracks the robot root in world — position from
+        # /sportmodestate, orientation from /lowstate IMU. This mirrors the
+        # C++ HLC obs anchor (base_pos_w, imu_quat) used in append_pose9d_body_relative.
+        # The goal child below carries body-relative (pos_b, quat_b); the scene
+        # graph composition (parent ∘ child) is the exact inverse of that obs
+        # transform, so the rendered marker lands on /object_goal in world.
         self._anchor_root = self._server.scene.add_frame(
             "/anchor_frame", 
             show_axes=True, axes_length=0.2, axes_radius=0.01
@@ -182,7 +183,7 @@ class ViserGhostG1(Node):
                                      position=(0.0, 0.0, 0.15))
         self._hlc_goal_root = self._server.scene.add_frame(
             "/anchor_frame/object_goal_pose_anchor",
-            show_axes=True, axes_length=0.15, axes_radius=0.008,
+            show_axes=True, axes_length=0.3, axes_radius=0.001
         )
 
         # ── GUI: visibility toggles ──────────────────────────────
