@@ -45,7 +45,8 @@ enum class ControlMode
     DAMPING,
     NOMINAL_POSE,
     STANDING_UP,   // smooth interpolation to default_angles, then auto → POLICY
-    POLICY
+    POLICY,
+    LOCOMANIP_POLICY
 };
 
 }  // namespace cpp_control

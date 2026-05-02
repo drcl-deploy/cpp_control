@@ -9,6 +9,13 @@ Usage:
 import os
 import platform
 from ament_index_python.packages import get_package_share_directory
+
+# ONNX Runtime library path based on architecture
+_SRC_DIR = os.path.join(os.path.expanduser('~'), 'drcl_deploy', 'src', 'cpp_control', 'thirdparty')
+if platform.machine() in ['x86_64', 'amd64']:
+    ONNX_RUNTIME_LIB = os.path.join(_SRC_DIR, 'onnxruntime-linux-x64-1.22.0', 'lib')
+else:
+    ONNX_RUNTIME_LIB = os.path.join(_SRC_DIR, 'onnxruntime-linux-aarch64-1.22.0', 'lib')
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -38,6 +45,7 @@ def generate_launch_description():
             executable='g1_locomotion_node',
             name='g1_locomotion_node',
             output='screen',
+            additional_env={'LD_LIBRARY_PATH': ONNX_RUNTIME_LIB + ':' + os.environ.get('LD_LIBRARY_PATH', '')},
             parameters=[{
                 'config_path': LaunchConfiguration('config_path'),
                 'onnx_model_path': LaunchConfiguration('onnx_model_path'),

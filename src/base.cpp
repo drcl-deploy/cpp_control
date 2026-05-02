@@ -70,6 +70,9 @@ void BaseNode::control_loop()
         case ControlMode::POLICY:
             cmd = policy_control();
             break;
+        case ControlMode::LOCOMANIP_POLICY:
+            cmd = locomanip_policy_control();
+            break;
     }
     publish_command(cmd);
 }
@@ -136,49 +139,76 @@ RobotCommand BaseNode::policy_control()
     return zeroing_control();
 }
 
+RobotCommand BaseNode::locomanip_policy_control()
+{
+    // Default: zeroing. Level 2 overrides this.
+    return zeroing_control();
+}
+
+// ── Joystick helpers ─────────────────────────────────────────
+
+bool BaseNode::just_pressed(const sensor_msgs::msg::Joy::SharedPtr& msg, size_t idx) const
+{
+    if (idx >= msg->buttons.size())
+        return false;
+    return msg->buttons[idx] == 1 &&
+           (idx < prev_buttons_.size() ? prev_buttons_[idx] == 0 : true);
+}
+
+bool BaseNode::joy_is_active(double timeout_s) const
+{
+    if (!joy_active_)
+        return false;
+    return (this->now() - last_joy_time_).seconds() < timeout_s;
+}
+
 // ── Joystick ──────────────────────────────────────────────────
 
 void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
 {
-    if (msg->buttons.size() <= joy::XMODE_Y)
-        return;
+    joy_active_ = true;
+    last_joy_time_ = this->now();
 
-    auto pressed = [&](size_t idx) -> bool {
-        return msg->buttons[idx] == 1 &&
-               (idx < prev_buttons_.size() ? prev_buttons_[idx] == 0 : true);
-    };
+    // Mode switching — only when joystick has enough buttons
+    if (msg->buttons.size() > joy::XMODE_Y)
+    {
+        auto pressed = [&](size_t idx) -> bool {
+            return msg->buttons[idx] == 1 &&
+                   (idx < prev_buttons_.size() ? prev_buttons_[idx] == 0 : true);
+        };
 
-    if (pressed(joy::XMODE_X))
-    {
-        control_mode_ = ControlMode::NOMINAL_POSE;
-        alpha_ = 0.0f;
-        for (int i = 0; i < num_motors(); ++i)
-            pre_nominal_pos_[i] = robot_state_.joint_positions[i];
-        std::fill(actions_.begin(), actions_.end(), 0.0f);
-        std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
-        RCLCPP_INFO(this->get_logger(), "-> nominal_pose");
-    }
-    else if (pressed(joy::XMODE_A))
-    {
-        control_mode_ = ControlMode::POLICY;
-        std::fill(actions_.begin(), actions_.end(), 0.0f);
-        std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
-        if (policy_)
-            policy_->reset_memory();
-        RCLCPP_INFO(this->get_logger(), "-> policy");
-    }
-    else if (pressed(joy::XMODE_B))
-    {
-        control_mode_ = ControlMode::ZEROING;
-        RCLCPP_INFO(this->get_logger(), "-> zeroing");
-    }
-    else if (pressed(joy::XMODE_Y))
-    {
-        control_mode_ = ControlMode::DAMPING;
-        RCLCPP_INFO(this->get_logger(), "-> damping");
+        if (pressed(joy::XMODE_X))
+        {
+            control_mode_ = ControlMode::NOMINAL_POSE;
+            alpha_ = 0.0f;
+            for (int i = 0; i < num_motors(); ++i)
+                pre_nominal_pos_[i] = robot_state_.joint_positions[i];
+            std::fill(actions_.begin(), actions_.end(), 0.0f);
+            std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
+            RCLCPP_INFO(this->get_logger(), "-> nominal_pose");
+        }
+        else if (pressed(joy::XMODE_A))
+        {
+            control_mode_ = ControlMode::POLICY;
+            std::fill(actions_.begin(), actions_.end(), 0.0f);
+            std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
+            if (policy_)
+                policy_->reset_memory();
+            RCLCPP_INFO(this->get_logger(), "-> policy");
+        }
+        else if (pressed(joy::XMODE_B))
+        {
+            control_mode_ = ControlMode::ZEROING;
+            RCLCPP_INFO(this->get_logger(), "-> zeroing");
+        }
+        else if (pressed(joy::XMODE_Y))
+        {
+            control_mode_ = ControlMode::DAMPING;
+            RCLCPP_INFO(this->get_logger(), "-> damping");
+        }
     }
 
-    // Let Level 2 add task-specific joystick behaviour (velocity, etc.)
+    // Always call on_joy — velocity and task-specific behaviour regardless of button count
     on_joy(msg);
 
     prev_buttons_.assign(msg->buttons.begin(), msg->buttons.end());

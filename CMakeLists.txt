@@ -105,7 +105,13 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(g1_locomotion_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
-  list(APPEND INSTALL_TARGETS g1_locomotion_node)
+  # Task: locomanip (g1)
+  add_executable(g1_locomanip_node src/tasks/locomanip/g1.cpp)
+  target_link_libraries(g1_locomanip_node cpp_control_g1)
+  ament_target_dependencies(g1_locomanip_node
+    rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
+
+  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_locomanip_node)
 endif()
 
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────

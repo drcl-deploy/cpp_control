@@ -17,14 +17,15 @@ namespace cpp_control
 /// Joystick button/axis indices (X-mode layout)
 namespace joy
 {
-constexpr size_t XMODE_A = 0;
-constexpr size_t XMODE_B = 1;
-constexpr size_t XMODE_X = 2;
-constexpr size_t XMODE_Y = 3;
-constexpr size_t XMODE_LEFT_JOY_LEFT_RIGHT = 0;
-constexpr size_t XMODE_LEFT_JOY_UP_DOWN = 1;
+constexpr size_t XMODE_A  = 0;
+constexpr size_t XMODE_B  = 1;
+constexpr size_t XMODE_X  = 2;
+constexpr size_t XMODE_Y  = 3;
+constexpr size_t XMODE_LB = 4;
+constexpr size_t XMODE_LEFT_JOY_LEFT_RIGHT  = 0;
+constexpr size_t XMODE_LEFT_JOY_UP_DOWN     = 1;
 constexpr size_t XMODE_RIGHT_JOY_LEFT_RIGHT = 3;
-constexpr size_t XMODE_RIGHT_JOY_UP_DOWN = 4;
+constexpr size_t XMODE_RIGHT_JOY_UP_DOWN    = 4;
 constexpr size_t XMODE_L1 = 2;
 constexpr size_t XMODE_R1 = 5;
 }  // namespace joy
@@ -63,7 +64,14 @@ protected:
 
     // --- Level 2 can override ---
     virtual RobotCommand policy_control();
+    virtual RobotCommand locomanip_policy_control();
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
+
+    // --- Edge-detection helper for on_joy overrides ---
+    bool just_pressed(const sensor_msgs::msg::Joy::SharedPtr& msg, size_t idx) const;
+
+    // --- Returns true if a joystick message arrived within the last timeout_s seconds ---
+    bool joy_is_active(double timeout_s = 0.5) const;
 
     // --- Built-in control modes ---
     RobotCommand zeroing_control();
@@ -98,6 +106,8 @@ private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
 
     std::vector<int> prev_buttons_;
+    bool joy_active_ = false;
+    rclcpp::Time last_joy_time_;
 
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
