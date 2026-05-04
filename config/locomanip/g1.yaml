@@ -67,3 +67,9 @@ joint_names: ["left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint
 # Hand link names for FK computation
 left_hand_link: "left_wrist_yaw_link"
 right_hand_link: "right_wrist_yaw_link"
+
+# Full path to robot URDF for pinocchio arm force control
+urdf_path: "/home/junchao/drcl_deploy/src/assets/source/g1/g1_bm.urdf"
+
+# Inward grip force magnitude (Newtons) applied when binary_cmd=1
+ee_force: 50.0

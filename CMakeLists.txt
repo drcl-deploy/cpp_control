@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(pinocchio REQUIRED)
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
@@ -63,13 +64,13 @@ if(ONNXRUNTIME_INCLUDE_DIRS)
 endif()
 
 # ── Shared library: common (config, onnx, optionally crc) ────
-set(COMMON_SOURCES src/config_loader.cpp src/onnx_policy.cpp)
+set(COMMON_SOURCES src/config_loader.cpp src/onnx_policy.cpp src/arm_force_controller.cpp)
 if(unitree_hg_FOUND)
   list(APPEND COMMON_SOURCES src/motor_crc_hg.cpp)
 endif()
 
 add_library(cpp_control_common STATIC ${COMMON_SOURCES})
-target_link_libraries(cpp_control_common ${ONNXRUNTIME_LIBRARIES} yaml-cpp)
+target_link_libraries(cpp_control_common ${ONNXRUNTIME_LIBRARIES} yaml-cpp pinocchio::pinocchio)
 ament_target_dependencies(cpp_control_common rclcpp)
 
 if(unitree_hg_FOUND)

@@ -1,4 +1,5 @@
 #include "cpp_control/tasks/locomanip/g1.hpp"
+#include <Eigen/Core>
 
 namespace cpp_control
 {
@@ -52,6 +53,36 @@ G1LocomanipNode::G1LocomanipNode(const std::string& node_name) : G1Node(node_nam
                 left_topic.c_str(), right_topic.c_str());
     RCLCPP_INFO(this->get_logger(),
                 "Modes: X=nominal_pose, A=locomanip, LB=locomotion, B=zero, Y=damping");
+
+    // ── Arm force controller (pinocchio) ─────────────────────────
+    RCLCPP_INFO(this->get_logger(), "ArmForceController init: config=%s urdf='%s' left='%s' right='%s'",
+        config_ ? "ok" : "NULL",
+        config_ ? config_->urdf_path.c_str() : "",
+        config_ ? config_->left_hand_link.c_str() : "",
+        config_ ? config_->right_hand_link.c_str() : "");
+
+    if (config_ && !config_->urdf_path.empty())
+    {
+        try
+        {
+            arm_force_ctrl_ = std::make_unique<ArmForceController>(
+                config_->urdf_path,
+                joint_names_,
+                config_->left_hand_link,
+                config_->right_hand_link);
+            RCLCPP_INFO(this->get_logger(), "ArmForceController ready: force=%.1fN", config_->ee_force);
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(this->get_logger(), "ArmForceController init FAILED: %s", e.what());
+        }
+    }
+    else
+    {
+        RCLCPP_ERROR(this->get_logger(), "ArmForceController skipped: config=%s urdf_path='%s'",
+            config_ ? "ok" : "NULL",
+            config_ ? config_->urdf_path.c_str() : "");
+    }
 }
 
 // ── XR Callbacks ─────────────────────────────────────────────
@@ -161,6 +192,23 @@ RobotCommand G1LocomanipNode::locomanip_policy_control()
     }
 
     last_actions_ = actions_;
+
+    // Apply inward end-effector force via J^T * F when binary_cmd_ is active
+    if (binary_cmd_ > 0.5f && arm_force_ctrl_)
+    {
+        double f = config_ ? config_->ee_force : 10.0;
+        Eigen::Vector3d fl(0.0, -f, 0.0);  // left hand: push inward (−y)
+        Eigen::Vector3d fr(0.0,  f, 0.0);  // right hand: push inward (+y)
+        auto tau_ff = arm_force_ctrl_->compute(robot_state_.joint_positions, fl, fr);
+        for (int i = 0; i < n && i < static_cast<int>(tau_ff.size()); ++i)
+            cmd.motor_commands[i].tau += tau_ff[i];
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+            "[force] applying %.1fN inward grip: left_tau=[%.2f, %.2f, %.2f, %.2f] right_tau=[%.2f, %.2f, %.2f, %.2f]",
+            f,
+            tau_ff[15], tau_ff[16], tau_ff[17], tau_ff[18],
+            tau_ff[22], tau_ff[23], tau_ff[24], tau_ff[25]);
+    }
+
     return cmd;
 }
 
@@ -246,6 +294,9 @@ void G1LocomanipNode::on_gamepad()
             locomanip_policy_->reset_memory();
         RCLCPP_INFO(this->get_logger(), "-> locomanip policy");
     }
+
+    // D-pad down → grip force on; released → off
+    binary_cmd_ = gamepad_.down.pressed ? 1.0f : 0.0f;
 
     // D-pad left → spread hands apart; D-pad right → bring hands in
     // Step per tick at ~500Hz: 0.0002m → ~0.1m/s while held

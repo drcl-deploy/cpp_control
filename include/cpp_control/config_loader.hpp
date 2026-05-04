@@ -39,6 +39,12 @@ struct Config
     // Joint names for 29DOF (mujoco order)
     std::vector<std::string> joint_names;
 
+    // Arm force control
+    std::string urdf_path;
+    std::string left_hand_link  = "left_wrist_yaw_link";
+    std::string right_hand_link = "right_wrist_yaw_link";
+    double ee_force = 10.0;  // Newtons, inward grip force
+
     // Motor-to-action index mapping
     std::vector<int> motor2action_id;
 

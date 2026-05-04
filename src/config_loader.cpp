@@ -122,6 +122,16 @@ Config::Config(const std::string& config_path)
             joint_names = config["joint_names"].as<std::vector<std::string>>();
         }
 
+        // Arm force control
+        if (config["urdf_path"])
+            urdf_path = config["urdf_path"].as<std::string>();
+        if (config["left_hand_link"])
+            left_hand_link = config["left_hand_link"].as<std::string>();
+        if (config["right_hand_link"])
+            right_hand_link = config["right_hand_link"].as<std::string>();
+        if (config["ee_force"])
+            ee_force = config["ee_force"].as<double>();
+
         std::cout << "Config loaded successfully (" << joint_names.size() << " joints)" << std::endl;
     }
     catch (const std::exception& e)

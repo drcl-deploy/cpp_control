@@ -57,7 +57,7 @@ def generate_launch_description():
             raise ValueError("ONNX model path not found in locomanip config")
 
     return LaunchDescription([
-        DeclareLaunchArgument('config_path', default_value=default_loco_config),
+        DeclareLaunchArgument('config_path', default_value=default_manip_config),
         DeclareLaunchArgument('onnx_model_path', default_value=default_loco_model),
         DeclareLaunchArgument('locomanip_onnx_path', default_value=default_manip_model),
         DeclareLaunchArgument('left_xr_topic', default_value='/xr/left_controller'),

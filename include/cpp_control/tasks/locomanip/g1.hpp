@@ -2,6 +2,7 @@
 
 #include "cpp_control/robots/g1.hpp"
 #include "common/observation_utils.hpp"
+#include "common/arm_force_controller.hpp"
 
 #include <geometry_msgs/msg/pose.hpp>
 
@@ -62,13 +63,19 @@ protected:
     std::array<float, 3> locomanip_cmd_vel_ = {0.0f, 0.0f, 0.0f};
 
     // --- End-effector pose from XR controllers ---
-    std::array<float, 3> left_hand_pos_  = {0.20f,  0.13f, 0.08f};
+    std::array<float, 3> left_hand_pos_  = {0.30f,  0.13f, 0.08f};
     std::array<float, 4> left_hand_quat_ = {1.0f, 0.0f, 0.0f, 0.0f};   // w, x, y, z
-    std::array<float, 3> right_hand_pos_  = {0.20f, -0.13f, 0.08f};
+    std::array<float, 3> right_hand_pos_  = {0.30f, -0.13f, 0.08f};
     std::array<float, 4> right_hand_quat_ = {1.0f, 0.0f, 0.0f, 0.0f};  // w, x, y, z
+
+    // --- Binary hybrid command (0 or 1), set by L1 gamepad button ---
+    float binary_cmd_ = 0.0f;
 
     // --- Locomanip policy (locomotion policy is in base policy_) ---
     std::unique_ptr<ONNXPolicy> locomanip_policy_;
+
+    // --- Arm force controller (pinocchio J^T * F) ---
+    std::unique_ptr<ArmForceController> arm_force_ctrl_;
 
 private:
     void left_xr_callback(geometry_msgs::msg::Pose::SharedPtr msg);
