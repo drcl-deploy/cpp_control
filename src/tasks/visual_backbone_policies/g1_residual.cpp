@@ -421,34 +421,39 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
 
     // ─ 3. image_features (embedding_dim) ─────────────────────────
     // DEBUG: zero out the latent to see the policy's blind response.
-    // std::fill(embedding_.begin(), embedding_.end(), 0.0f);
+    std::fill(embedding_.begin(), embedding_.end(), 0.0f);
     idx0 = static_cast<int>(obs.size());
     obs::append_features(obs, embedding_);
     // print_vec("image_features", obs, idx0, embedding_dim_);
 
-    // ─ 4. object_goal9d_anchor (9) — goal relative to robot body frame
-    //      pos[3] + rot_6d[6]. Anchor = (base_pos_w, imu_quat), mirroring
-    //      IsaacLab's object_goal9d_command_anchor where anchor entity is the
-    //      robot root.
+    // ─ 4. object_goal9d_command (9) — goal in world frame
+    //      pos[3] + rot_6d[6]. Mirrors IsaacLab's object_goal9d_command
+    //      (no anchoring); /object_goal is published in the same world frame.
     idx0 = static_cast<int>(obs.size());
-    obs::append_pose9d_body_relative(
-        obs, robot_state_.base_pos_w, robot_state_.imu_quaternion,
-        object_goal_pos_, object_goal_quat_);
-    // DEBUG: zero the goal9d slot to ablate goal contribution from the policy.
-    // for (int i = 0; i < 9; ++i) obs[idx0 + i] = 0.0f;
-    // print_vec("goal9d_anchor", obs, idx0,` 9);
+    for (int i = 0; i < 3; ++i)
+        obs.push_back(object_goal_pos_[i]);
+    {
+        auto goal_r6d = math::quat_to_rotation_6d(object_goal_quat_);
+        for (int i = 0; i < 6; ++i)
+            obs.push_back(goal_r6d[i]);
+    }
 
     // ─ 5. robot_ori_mat6d_w (6) — root orientation in world ─────
     idx0 = static_cast<int>(obs.size());
-    obs::append_rotation_6d(obs, robot_state_.imu_quaternion);
+    {
+        auto root_r6d = math::quat_to_rotation_6d(robot_state_.imu_quaternion);
+        for (int i = 0; i < 6; ++i)
+            obs.push_back(root_r6d[i]);
+    }
     // print_vec("ori6d_w", obs, idx0, 6);
 
     // ─ 6. low_level_actions (29) — WBC's last action, IsaacLab order
     //      Mirrors training's `last_low_level_action`, which is the action
     //      fed into WBC's process_actions (i.e. wbc_raw + hlc_scale*hlc_raw).
-    // idx0 = static_cast<int>(obs.size());
-    // for (int il = 0; il < NQ; ++il)
-    //     obs.push_back(wbc_last_actions_[il]);
+    idx0 = static_cast<int>(obs.size());
+    for (int il = 0; il < NQ; ++il)
+        obs.push_back(wbc_last_actions_[il]);
+
     // print_vec("low_level_actions", obs, idx0, NQ);
 
     // RCLCPP_INFO(this->get_logger(),
