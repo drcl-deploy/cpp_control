@@ -116,6 +116,8 @@ private:
     bool stand_mode_ = false;
     bool prev_rb_    = false;
     void init_stand_motion();
+    // Shared entry path for RB / R1 / motion-completion auto-switch.
+    void enter_stand_mode();
 
     // ── Pending motion (staged while standing) ──────────────────
     std::vector<std::vector<float>> pend_joint_pos_;

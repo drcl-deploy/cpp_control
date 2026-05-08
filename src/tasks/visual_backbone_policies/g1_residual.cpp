@@ -351,6 +351,23 @@ void G1ResidualNode::pad_pending_motion()
                 pend_T_, do_pre ? "on" : "off", do_post ? "on" : "off", pad);
 }
 
+void G1ResidualNode::enter_stand_mode()
+{
+    stand_mode_ = true;
+    if (!mot_ready_)
+        init_stand_motion();
+    frame_init_ = false;
+    control_mode_ = ControlMode::POLICY;
+    std::fill(hlc_actions_.begin(), hlc_actions_.end(), 0.0f);
+    std::fill(hlc_last_actions_.begin(), hlc_last_actions_.end(), 0.0f);
+    std::fill(wbc_actions_.begin(), wbc_actions_.end(), 0.0f);
+    std::fill(wbc_last_actions_.begin(), wbc_last_actions_.end(), 0.0f);
+    if (policy_)
+        policy_->reset_memory();
+    if (wbc_policy_)
+        wbc_policy_->reset_memory();
+}
+
 void G1ResidualNode::init_stand_motion()
 {
     std::vector<float> nominal_il(NQ);
@@ -421,7 +438,7 @@ std::vector<float> G1ResidualNode::build_hlc_observation()
 
     // ─ 3. image_features (embedding_dim) ─────────────────────────
     // DEBUG: zero out the latent to see the policy's blind response.
-    std::fill(embedding_.begin(), embedding_.end(), 0.0f);
+    // std::fill(embedding_.begin(), embedding_.end(), 0.0f);
     idx0 = static_cast<int>(obs.size());
     obs::append_features(obs, embedding_);
     // print_vec("image_features", obs, idx0, embedding_dim_);
@@ -685,6 +702,14 @@ RobotCommand G1ResidualNode::policy_control()
     if (!stand_mode_ && mot_t_ < mot_T_ - 1)
         mot_t_++;
 
+    // Auto-switch to stand mode once playback hits the last frame.
+    // Mirrors RB/R1: drops residual, locks WBC at settle, awaits next motion.
+    if (!stand_mode_ && mot_ready_ && mot_t_ >= mot_T_ - 1)
+    {
+        enter_stand_mode();
+        RCLCPP_INFO(this->get_logger(), "-> stand (motion complete, T=%d)", mot_T_);
+    }
+
     return cmd;
 }
 
@@ -697,19 +722,7 @@ void G1ResidualNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
     bool rb = (msg->buttons.size() > RB) && (msg->buttons[RB] == 1);
     if (rb && !prev_rb_)
     {
-        stand_mode_ = true;
-        if (!mot_ready_)
-            init_stand_motion();
-        frame_init_ = false;
-        control_mode_ = ControlMode::POLICY;
-        std::fill(hlc_actions_.begin(), hlc_actions_.end(), 0.0f);
-        std::fill(hlc_last_actions_.begin(), hlc_last_actions_.end(), 0.0f);
-        std::fill(wbc_actions_.begin(), wbc_actions_.end(), 0.0f);
-        std::fill(wbc_last_actions_.begin(), wbc_last_actions_.end(), 0.0f);
-        if (policy_)
-            policy_->reset_memory();
-        if (wbc_policy_)
-            wbc_policy_->reset_memory();
+        enter_stand_mode();
         RCLCPP_INFO(this->get_logger(), "-> stand (WBC @ settle)");
     }
     prev_rb_ = rb;
@@ -733,19 +746,7 @@ void G1ResidualNode::on_gamepad()
 {
     if (gamepad_.R1.on_press)
     {
-        stand_mode_ = true;
-        if (!mot_ready_)
-            init_stand_motion();
-        frame_init_ = false;
-        control_mode_ = ControlMode::POLICY;
-        std::fill(hlc_actions_.begin(), hlc_actions_.end(), 0.0f);
-        std::fill(hlc_last_actions_.begin(), hlc_last_actions_.end(), 0.0f);
-        std::fill(wbc_actions_.begin(), wbc_actions_.end(), 0.0f);
-        std::fill(wbc_last_actions_.begin(), wbc_last_actions_.end(), 0.0f);
-        if (policy_)
-            policy_->reset_memory();
-        if (wbc_policy_)
-            wbc_policy_->reset_memory();
+        enter_stand_mode();
         RCLCPP_INFO(this->get_logger(), "[GP] -> stand (WBC @ default pose)");
     }
 
