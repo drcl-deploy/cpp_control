@@ -154,7 +154,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
         std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
         RCLCPP_INFO(this->get_logger(), "[GP] -> nominal_pose");
     }
-    if (gamepad_.up.on_press || gamepad_.A.on_press)
+    if (gamepad_.start.on_press || gamepad_.A.on_press)
     {
         control_mode_ = ControlMode::POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);

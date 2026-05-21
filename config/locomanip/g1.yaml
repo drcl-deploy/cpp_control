@@ -14,7 +14,7 @@ lowcmd_topic: "/lowcmd"
 lowstate_topic: "/lowstate"
 
 # Model path (relative path resolved by launch file)
-onnx_path: "loco-manipulation/falcon_symetry.onnx"
+onnx_path: "loco-manipulation/flat_spring.onnx"
 
 # Control gains for 29DOF (stiffness) - from deploy_mjlab.yaml
 kps: [40.2, 99.1, 40.2, 99.1, 28.5, 28.5,
@@ -48,9 +48,9 @@ action_scale: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
 # Observation: ang_vel(3) + gravity(3) + cmd_vel(3) +
 #              left_hand_pos(3) + left_hand_quat(4) +
 #              right_hand_pos(3) + right_hand_quat(4) +
-#              joint_pos(29) + joint_vel(29) + last_action(29) = 110
+#              joint_pos(29) + joint_vel(29) + last_action(29) + binary_cmd(1) = 111
 num_actions: 29
-num_obs: 110
+num_obs: 111
 
 # Joint names for 29DOF (mujoco order)
 joint_names: ["left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",

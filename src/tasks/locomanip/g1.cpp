@@ -100,7 +100,7 @@ std::vector<float> G1LocomanipNode::build_locomanip_observation()
 {
     int n = num_motors();
     std::vector<float> obs;
-    obs.reserve(3 + 3 + 3 + 3 + 4 + 3 + 4 + n + n + n);  // 110
+    obs.reserve(3 + 3 + 3 + 3 + 4 + 3 + 4 + n + n + n + 1);  // 111
 
     obs::append_imu_obs(obs, robot_state_);
     obs::append_cmd_vel(obs, locomanip_cmd_vel_);
@@ -108,6 +108,7 @@ std::vector<float> G1LocomanipNode::build_locomanip_observation()
     obs::append_pose(obs, right_hand_pos_, right_hand_quat_);
     obs::append_joint_obs(obs, robot_state_, default_angles_);
     obs::append_last_actions(obs, last_actions_, n);
+    obs.push_back(binary_cmd_);
 
     return obs;
 }
@@ -201,22 +202,45 @@ void G1LocomanipNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
         RCLCPP_INFO(this->get_logger(), "-> locomotion policy");
     }
 
-    // vx / vy from left stick; locomanip yaw from triggers
-    if (msg->axes.size() > joy::XMODE_R1)
+    // vx / vy from left stick
+    if (msg->axes.size() > joy::XMODE_LEFT_JOY_LEFT_RIGHT)
     {
         locomanip_cmd_vel_[0] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_UP_DOWN])    * 0.5f;
         locomanip_cmd_vel_[1] = static_cast<float>(msg->axes[joy::XMODE_LEFT_JOY_LEFT_RIGHT]) * 0.5f;
         cmd_vel_[0] = locomanip_cmd_vel_[0];
         cmd_vel_[1] = locomanip_cmd_vel_[1];
-        const float left_trigger  = static_cast<float>(msg->axes[joy::XMODE_L1]);
-        const float right_trigger = static_cast<float>(msg->axes[joy::XMODE_R1]);
-        locomanip_cmd_vel_[2] = left_trigger - right_trigger;
     }
 
-    // Locomotion yaw from right stick
+    // Yaw rate from right stick (axis 3) for both locomotion and locomanip
     if (msg->axes.size() > joy::XMODE_RIGHT_JOY_LEFT_RIGHT)
     {
-        cmd_vel_[2] = static_cast<float>(msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]) * -0.5f;
+        const float yaw = static_cast<float>(msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]) * -0.5f;
+        cmd_vel_[2] = yaw;
+        locomanip_cmd_vel_[2] = yaw;
+    }
+
+    // RT (axis 5) rising edge → +0.1 force cmd (clamped to 1.0), 0.5s debounce
+    // LT (axis 2) pressed → zero force cmd
+    if (msg->axes.size() > joy::XMODE_R1)
+    {
+        const bool rt_pressed = msg->axes[joy::XMODE_R1] > 0.9f;
+        if (rt_pressed && !joy_rt_was_pressed_)
+        {
+            double now_sec = this->now().seconds();
+            if (now_sec - last_force_inc_time_sec_ >= 0.5)
+            {
+                binary_cmd_ = std::min(binary_cmd_ + 0.1f, 1.0f);
+                last_force_inc_time_sec_ = now_sec;
+                RCLCPP_INFO(this->get_logger(), "force cmd = %.2f", binary_cmd_);
+            }
+        }
+        joy_rt_was_pressed_ = rt_pressed;
+
+        if (msg->axes[joy::XMODE_L1] > 0.9f && binary_cmd_ != 0.0f)
+        {
+            binary_cmd_ = 0.0f;
+            RCLCPP_INFO(this->get_logger(), "force cmd = 0");
+        }
     }
 }
 
@@ -225,17 +249,6 @@ void G1LocomanipNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 #ifdef HAS_UNITREE_HG
 void G1LocomanipNode::on_gamepad()
 {
-    // Gamepad up → locomotion policy
-    if (gamepad_.up.pressed)
-    {
-        control_mode_ = ControlMode::POLICY;
-        std::fill(actions_.begin(), actions_.end(), 0.0f);
-        std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
-        if (policy_)
-            policy_->reset_memory();
-        RCLCPP_INFO(this->get_logger(), "-> locomotion policy");
-    }
-
     // Gamepad A → locomanip policy
     if (gamepad_.A.pressed)
     {
@@ -245,6 +258,25 @@ void G1LocomanipNode::on_gamepad()
         if (locomanip_policy_)
             locomanip_policy_->reset_memory();
         RCLCPP_INFO(this->get_logger(), "-> locomanip policy");
+    }
+
+    // D-pad up → +0.1 to force cmd (clamped to 1.0), with 0.5s debounce between presses
+    if (gamepad_.up.on_press)
+    {
+        double now_sec = this->now().seconds();
+        if (now_sec - last_force_inc_time_sec_ >= 0.5)
+        {
+            binary_cmd_ = std::min(binary_cmd_ + 0.1f, 1.0f);
+            last_force_inc_time_sec_ = now_sec;
+            RCLCPP_INFO(this->get_logger(), "force cmd = %.2f", binary_cmd_);
+        }
+    }
+
+    // D-pad down → zero force cmd
+    if (gamepad_.down.on_press)
+    {
+        binary_cmd_ = 0.0f;
+        RCLCPP_INFO(this->get_logger(), "force cmd = 0");
     }
 
     // D-pad left → spread hands apart; D-pad right → bring hands in
