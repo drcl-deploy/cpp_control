@@ -18,6 +18,7 @@ find_package(yaml-cpp REQUIRED)
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
+find_package(unitree_go QUIET)
 find_package(messages QUIET)
 
 if(unitree_hg_FOUND)
@@ -37,11 +38,16 @@ endif()
 
 # ── ONNX Runtime ──────────────────────────────────────────────
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    set(ONNXRUNTIME_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-x64-1.22.0"
-        CACHE PATH "ONNX Runtime root directory")
+    set(_ort_arch "x64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(ONNXRUNTIME_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-aarch64-1.22.0"
-        CACHE PATH "ONNX Runtime root directory")
+    set(_ort_arch "aarch64")
+endif()
+file(GLOB _ort_candidates "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-${_ort_arch}-*")
+list(SORT _ort_candidates ORDER DESCENDING)  # pick highest version
+list(LENGTH _ort_candidates _ort_count)
+if(_ort_count GREATER 0)
+    list(GET _ort_candidates 0 _ort_found)
+    set(ONNXRUNTIME_ROOT_DIR "${_ort_found}" CACHE PATH "ONNX Runtime root directory")
 endif()
 
 if(EXISTS "${ONNXRUNTIME_ROOT_DIR}")
@@ -90,6 +96,9 @@ if(unitree_hg_FOUND OR messages_FOUND)
   set(G1_DEPS rclcpp geometry_msgs)
   if(unitree_hg_FOUND)
     list(APPEND G1_DEPS unitree_hg)
+    if(unitree_go_FOUND)
+      list(APPEND G1_DEPS unitree_go)
+    endif()
   endif()
   if(messages_FOUND)
     list(APPEND G1_DEPS messages)
