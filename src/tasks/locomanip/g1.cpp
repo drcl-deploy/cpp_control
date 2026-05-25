@@ -60,7 +60,7 @@ void G1LocomanipNode::left_xr_callback(geometry_msgs::msg::Pose::SharedPtr msg)
 {
     left_hand_pos_[0] = static_cast<float>(msg->position.x);
     left_hand_pos_[1] = static_cast<float>(msg->position.y);
-    left_hand_pos_[2] = static_cast<float>(msg->position.z) + 0.5f;
+    left_hand_pos_[2] = static_cast<float>(msg->position.z);
 
     left_hand_quat_[0] = static_cast<float>(msg->orientation.w);
     left_hand_quat_[1] = static_cast<float>(msg->orientation.x);
@@ -72,7 +72,7 @@ void G1LocomanipNode::right_xr_callback(geometry_msgs::msg::Pose::SharedPtr msg)
 {
     right_hand_pos_[0] = static_cast<float>(msg->position.x);
     right_hand_pos_[1] = static_cast<float>(msg->position.y);
-    right_hand_pos_[2] = static_cast<float>(msg->position.z) + 0.5f;
+    right_hand_pos_[2] = static_cast<float>(msg->position.z);
 
     right_hand_quat_[0] = static_cast<float>(msg->orientation.w);
     right_hand_quat_[1] = static_cast<float>(msg->orientation.x);
