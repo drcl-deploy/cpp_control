@@ -46,6 +46,10 @@ Config::Config(const std::string& config_path)
         {
             onnx_path = config["onnx_path"].as<std::string>();
         }
+        if (config["hlc_onnx_path"])
+        {
+            hlc_onnx_path = config["hlc_onnx_path"].as<std::string>();
+        }
         if (config["motion_path"])
         {
             motion_path = config["motion_path"].as<std::string>();

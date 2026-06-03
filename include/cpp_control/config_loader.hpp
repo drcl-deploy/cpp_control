@@ -19,7 +19,8 @@ struct Config
 
     // Model paths
     std::string policy_path;
-    std::string onnx_path;
+    std::string onnx_path;       // WBC (or single-policy tasks)
+    std::string hlc_onnx_path;   // HLC (vibe residual)
     std::string motion_path;
 
     // Control gains for 29DOF

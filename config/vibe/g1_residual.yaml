@@ -1,5 +1,11 @@
-# Configuration for G1 Tracker / TextOp (29DOF, ProjGravObs, 431-dim)
-# Ported from textop_ctrl/config/g1_29dof.yaml
+# Configuration for G1 VIBE (Vision Backbone Behavior) Policy — Residual Action
+#
+# Two-policy setup:
+#   HLC  (high-level)  : visual + proprioceptive obs  →  29D residual actions
+#   WBC  (whole-body)  : motion-tracking obs (431D)   →  29D base actions
+#
+# Motor command:
+#   q = default_angles[mj] + action_scale[mj] * wbc[il] + residual_action_scale[mj] * hlc[il]
 
 control_dt: 0.02  # 50Hz control loop
 
@@ -11,9 +17,25 @@ workflow: "unitree"
 lowcmd_topic: "/lowcmd"
 lowstate_topic: "/lowstate"
 
-onnx_path: "tracker/g1_textop/exported/policy.onnx"
+# ── ONNX models ─────────────────────────────────────────────────
+# HLC (primary) — resolved relative to models/ by launch file
+hlc_onnx_path: "vibe/g1_residual/exported/policy.onnx"
 
-# Control gains (MuJoCo joint order) — from textop_ctrl deploy config
+# WBC (whole-body controller, same weights as textop)
+wbc_onnx_path: "tracker/g1_textop/exported/policy.onnx"
+
+# ── Visual backbone ─────────────────────────────────────────────
+embedding_dim: 1152
+
+# ── Model dimensions ────────────────────────────────────────────
+num_actions: 29
+
+# HLC observation size: 29*3 + embedding_dim + 9 + 6 = 1254
+hlc_num_obs: 1254
+num_obs: 1254  # primary policy obs (HLC)
+
+# ── Control gains (MuJoCo joint order) ──────────────────────────
+# Same as textop WBC training
 kps: [40.18, 99.10, 40.18, 99.10, 28.50, 28.50,
       40.18, 99.10, 40.18, 99.10, 28.50, 28.50,
       40.18, 28.50, 28.50,
@@ -26,30 +48,28 @@ kds: [2.56, 6.31, 2.56, 6.31, 1.81, 1.81,
       0.91, 0.91, 0.91, 0.91, 0.91, 1.07, 1.07,
       0.91, 0.91, 0.91, 0.91, 0.91, 1.07, 1.07]
 
-# Default standing pose (MuJoCo order)
+# ── Default standing pose (MuJoCo order) ────────────────────────
 default_angles: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
                  -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
                  0.0, 0.0, 0.0,
                  0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,
                  0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
 
-# Action scaling (MuJoCo order) — non-uniform, from IsaacLab training
+# ── WBC action scale (MuJoCo order) ────────────────────────────
+# Applied to WBC raw output: q += action_scale[mj] * wbc_action[il]
+# Same non-uniform scaling as textop training
 action_scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
                0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
                0.5475, 0.4386, 0.4386,
                0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745,
                0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745]
 
-# Model dimensions
-num_actions: 29
-num_obs: 431
-
-# Motion padding for smooth stand ↔ motion transitions
+# ── Motion padding for smooth stand ↔ motion transitions ───────
 motion_pad_length: 0.5   # seconds of linear interpolation before/after motion
-pre_motion_pad: false      # pad nominal → motion[0] at start
+pre_motion_pad: false     # pad nominal → motion[0] at start
 post_motion_pad: true     # pad motion[-1] → nominal at end
 
-# Joint names (MuJoCo order)
+# ── Joint names (MuJoCo order) ──────────────────────────────────
 joint_names: ["left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
               "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
               "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",

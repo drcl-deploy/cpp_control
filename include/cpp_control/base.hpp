@@ -54,7 +54,7 @@ public:
     virtual ~BaseNode() = default;
 
 protected:
-    // --- Call from derived constructor after vtable is ready ---
+    // --- Call from any derived constructor; runs only once ---
     void init();
     // --- Level 1 must implement ---
     virtual void init_robot() = 0;
@@ -99,6 +99,7 @@ private:
 
     std::vector<int> prev_buttons_;
 
+    bool init_done_ = false;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 };

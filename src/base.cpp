@@ -27,6 +27,9 @@ BaseNode::BaseNode(const std::string& node_name) : rclcpp::Node(node_name)
 
 void BaseNode::init()
 {
+    if (init_done_) return;
+    init_done_ = true;
+
     // Let Level 1 set up robot-specific things
     init_robot();
 

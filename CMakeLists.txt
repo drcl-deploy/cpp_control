@@ -108,25 +108,45 @@ if(unitree_hg_FOUND OR messages_FOUND)
   target_link_libraries(cpp_control_g1 cpp_control_base)
   ament_target_dependencies(cpp_control_g1 ${G1_DEPS})
 
+  # Tracker library (motion handling, WBC obs, frame alignment)
+  add_library(cpp_control_g1_textop_tracker STATIC src/tasks/tracker/g1_textop_tracker.cpp)
+  target_compile_definitions(cpp_control_g1_textop_tracker PRIVATE CPP_CONTROL_TEXTOP_TRACKER_LIB)
+  target_link_libraries(cpp_control_g1_textop_tracker cpp_control_g1)
+  ament_target_dependencies(cpp_control_g1_textop_tracker
+    rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
+
   # Task: locomotion (g1)
   add_executable(g1_locomotion_node src/tasks/locomotion/g1.cpp)
   target_link_libraries(g1_locomotion_node cpp_control_g1)
   ament_target_dependencies(g1_locomotion_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
-  # Task: tracker (g1 textop)
-  add_executable(g1_textop_node src/tasks/tracker/g1_textop.cpp)
+  # Task: tracker (g1 textop — standalone WBC)
+  add_executable(g1_textop_node src/tasks/tracker/g1_textop_tracker.cpp)
   target_link_libraries(g1_textop_node cpp_control_g1)
   ament_target_dependencies(g1_textop_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
-  # Task: visual_backbone_policies (g1 residual)
-  add_executable(g1_vbp_residual_node src/tasks/visual_backbone_policies/g1_residual.cpp)
-  target_link_libraries(g1_vbp_residual_node cpp_control_g1)
-  ament_target_dependencies(g1_vbp_residual_node
+  # Task: vibe (g1 residual) — direct executable
+  add_executable(g1_vibe_residual_node src/tasks/vibe/g1_residual.cpp)
+  target_link_libraries(g1_vibe_residual_node cpp_control_g1_textop_tracker)
+  ament_target_dependencies(g1_vibe_residual_node
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
 
-  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vbp_residual_node)
+  # Library: vibe residual (for v2 to inherit from, compiled without main)
+  add_library(cpp_control_vibe_residual STATIC src/tasks/vibe/g1_residual.cpp)
+  target_compile_definitions(cpp_control_vibe_residual PRIVATE CPP_CONTROL_VIBE_RESIDUAL_LIB)
+  target_link_libraries(cpp_control_vibe_residual cpp_control_g1_textop_tracker)
+  ament_target_dependencies(cpp_control_vibe_residual
+    rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+
+  # Task: vibe (g1 residual v2 — extended HLC obs)
+  add_executable(g1_vibe_residual_v2_node src/tasks/vibe/g1_residual_v2.cpp)
+  target_link_libraries(g1_vibe_residual_v2_node cpp_control_vibe_residual)
+  ament_target_dependencies(g1_vibe_residual_v2_node
+    rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+
+  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vibe_residual_node g1_vibe_residual_v2_node)
 endif()
 
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────

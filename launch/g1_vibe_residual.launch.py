@@ -1,13 +1,13 @@
 """
-Launch G1 Visual Backbone Policy — Residual Action.
+Launch G1 VIBE (Vision Backbone Behavior) Policy — Residual Action.
 
 Runs two ONNX policies (HLC + WBC) with visual embedding input from Theia.
 
 Usage:
-    ros2 launch cpp_control g1_visual_backbone_residual.launch.py
-    ros2 launch cpp_control g1_visual_backbone_residual.launch.py onnx_model_path:=/path/to/hlc.onnx
-    ros2 launch cpp_control g1_visual_backbone_residual.launch.py wandb_path:=entity/project/run_id
-    ros2 launch cpp_control g1_visual_backbone_residual.launch.py wandb_path:=entity/project/run_id/model_1500.pt
+    ros2 launch cpp_control g1_vibe_residual.launch.py
+    ros2 launch cpp_control g1_vibe_residual.launch.py hlc_onnx_model_path:=/path/to/hlc.onnx
+    ros2 launch cpp_control g1_vibe_residual.launch.py wandb_path:=entity/project/run_id
+    ros2 launch cpp_control g1_vibe_residual.launch.py wandb_path:=entity/project/run_id/model_1500.pt
 """
 
 import os
@@ -93,13 +93,13 @@ def _resolve_wandb_hlc(wandb_path: str) -> str:
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
 
-    default_config = os.path.join(pkg, 'config', 'visual_backbone_policies', 'g1_residual.yaml')
+    default_config = os.path.join(pkg, 'config', 'vibe', 'g1_residual.yaml')
 
     # Read ONNX paths from config
     with open(default_config, 'r') as f:
         config = yaml.safe_load(f)
 
-    hlc_model = config.get('onnx_path', '')
+    hlc_model = config.get('hlc_onnx_path', '')
     if hlc_model:
         hlc_model = os.path.join(pkg, 'models', hlc_model)
 
@@ -124,8 +124,8 @@ def generate_launch_description():
         DeclareLaunchArgument('config_path', default_value=default_config),
         DeclareLaunchArgument('wandb_path', default_value=wandb_path,
                               description='Optional wandb run path (entity/project/run_id[/model_xxx.onnx]). '
-                                          'If set, overrides onnx_model_path with the cached download.'),
-        DeclareLaunchArgument('onnx_model_path', default_value=hlc_model,
+                                          'If set, overrides hlc_onnx_model_path with the cached download.'),
+        DeclareLaunchArgument('hlc_onnx_model_path', default_value=hlc_model,
                               description='HLC policy ONNX (auto-filled from wandb_path if provided)'),
         DeclareLaunchArgument('wbc_onnx_model_path', default_value=wbc_model,
                               description='WBC policy ONNX (textop)'),
@@ -135,12 +135,12 @@ def generate_launch_description():
 
         Node(
             package='cpp_control',
-            executable='g1_vbp_residual_node',
-            name='g1_vbp_residual_node',
+            executable='g1_vibe_residual_node',
+            name='g1_vibe_residual_node',
             output='screen',
             parameters=[{
                 'config_path': LaunchConfiguration('config_path'),
-                'onnx_model_path': LaunchConfiguration('onnx_model_path'),
+                'hlc_onnx_model_path': LaunchConfiguration('hlc_onnx_model_path'),
                 'wbc_onnx_model_path': LaunchConfiguration('wbc_onnx_model_path'),
                 'embedding_topic': LaunchConfiguration('embedding_topic'),
                 'object_goal_topic': LaunchConfiguration('object_goal_topic'),
