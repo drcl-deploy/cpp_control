@@ -58,6 +58,40 @@ current sonic port/term layout (base; adapter adds `augmentation`):
 | `policy` | 930 | `base_ang_vel`(30) `joint_pos`(290) `joint_vel`(290) `actions`(290) `gravity_dir`(30) — all 10-frame histories |
 | `augmentation` | 290 | `motion_cmd` — future `[jp \| jv]` window, F inferred from dim, skip = `cmd_frame_skip` param |
 
+## joint orderings — read this before loading any clip
+
+the single most common downfall. there are exactly TWO joint orderings in this
+pipeline (G1 29-dof), and one permutation between them:
+
+| ordering | layout | who uses it |
+|---|---|---|
+| **MJ** (MuJoCo XML DFS) | left leg(6) · right leg(6) · waist(3) · left arm(7) · right arm(7) | mjlab, the ported SONIC checkpoint, the manifest, **G1 hardware motors** (unitree_hg index == MJ index, asserted at startup), this node's internals |
+| **IL** (IsaacLab BFS) | breadth-first: both hip pitches first, then hip rolls, ... | the retargeted dataset (`motion.npz` joints AND bodies), the original textop WBC |
+
+single source of truth for the permutation: `mocke/mdp/joint_maps.py`
+(`IL2MJ`/`MJ2IL`, FK-verified); the node carries the same table baked in
+(`G1_IL2MJ` in [g1_sonic.cpp](../../src/tasks/tracker/g1_sonic.cpp)).
+
+**which is my motion.npz?**
+
+| clue | verdict |
+|---|---|
+| mjlab demo clip (`/tmp/mjlab_cache/*_demo_motion.npz`), 30 bodies | MJ-native → no flag |
+| vibe retargeted dataset (`data/retargeted_motions/.../motion.npz`), **37 bodies**, int64 fps | IL → `il_ordered:=true` |
+| `jp[0]` slots 0,1 nearly equal (both hip pitches) while slot 3 isn't a knee-sized value | smells IL |
+
+symptoms of getting it wrong (no crash — dims match either way!): robot
+"stands cooked", limbs subtly wrong, mild hopping in place, tracking that
+never resembles the clip. if it looks drunk, check the ordering first.
+
+exotic sources: pass an explicit `motion_joint_perm` (29 ints, output slot →
+source column) instead of `il_ordered` — they are mutually exclusive.
+
+bodies: the anchor is `anchor_body_index` **in the npz body axis**. pelvis is
+index 0 in both IL and MJ body lists, so the default survives both formats;
+any other anchor must be looked up per-format (`G1_TRACKED_BODIES` in
+joint_maps.py for IL indices).
+
 ## build overview
 
 ```
@@ -108,8 +142,8 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 ./build/cpp_control/deploy_selftest /path/to/policy.onnx
 ```
 
-IL-ordered clips (vibe retargeted dataset — 37 IL bodies, BFS joints) need the
-baked IL→MJ remap; MJ-native clips (mjlab demo) don't:
+IL-ordered clips (see [joint orderings](#joint-orderings--read-this-before-loading-any-clip))
+need the flag; MJ-native clips don't:
 
 ```bash
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
