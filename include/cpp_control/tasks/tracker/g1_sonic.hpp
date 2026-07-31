@@ -64,6 +64,7 @@ private:
     // params
     int future_steps_ = 10;
     int frame_skip_ = 5;
+    int cmd_frame_skip_ = 1;  ///< adapter motion_cmd window (FutureMotionCommandCfg default)
     int anchor_body_ = 0;   ///< pelvis in the mjlab G1 body table
     int start_frame_ = 0;
     std::string output_name_;

@@ -21,6 +21,7 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
     future_steps_ = this->declare_parameter("future_steps", 10);
     frame_skip_ = this->declare_parameter("frame_skip", 5);
     anchor_body_ = this->declare_parameter("anchor_body_index", 0);
+    cmd_frame_skip_ = this->declare_parameter("cmd_frame_skip", 1);
     start_frame_ = this->declare_parameter("motion_start_frame", 0);
     auto joint_perm = this->declare_parameter("motion_joint_perm", std::vector<int64_t>{});
 
@@ -161,8 +162,27 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
         return {dst, &spec, [this](float* out) { fill_tokenizer(out); }};
     }
 
+    // ── adapter stream (mocke env_cfg adapter=True: FutureMotionCommand.command) ──
+    // [jp(f0..fF-1).flat | jv(f0..fF-1).flat] at cmd_frame_skip; F from the dim.
+    if (spec.name == "motion_cmd")
+    {
+        const int J = clip_->num_joints;
+        if (spec.dim % (2 * J) != 0)
+            throw std::runtime_error("g1_sonic: motion_cmd dim " + std::to_string(spec.dim) +
+                                     " not divisible by 2*J");
+        const int F = spec.dim / (2 * J);
+        return {dst, &spec, [this, F, J](float* out) {
+                    for (int s = 0; s < F; ++s)
+                    {
+                        const int f = playback_->future_frame(s * cmd_frame_skip_);
+                        std::memcpy(out + s * J, clip_->jp(f), J * sizeof(float));
+                        std::memcpy(out + (F + s) * J, clip_->jv(f), J * sizeof(float));
+                    }
+                }};
+    }
+
     std::ostringstream known;
-    known << "base_ang_vel joint_pos joint_vel actions gravity_dir g1_tokenizer";
+    known << "base_ang_vel joint_pos joint_vel actions gravity_dir g1_tokenizer motion_cmd";
     throw std::runtime_error("g1_sonic: no writer for term '" + spec.name +
                              "' — known terms: " + known.str());
 }
