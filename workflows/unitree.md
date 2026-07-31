@@ -23,6 +23,22 @@ colcon build
 
 * make sure to update unitree_ros2/setup.sh as per your system paths and network interface
 
+### python venv
+
+one venv for every python-side tool (launch helpers, exporters, viewers) — uv,
+system-site-packages so ros2 python (rclpy, launch) stays importable, prompt
+named without the dot-dir noise:
+
+```
+cd unitree_ros2
+uv venv venv --python 3.10 --system-site-packages --prompt unitree
+source /opt/ros/humble/setup.bash   # ros first, then venv
+source venv/bin/activate
+```
+
+install python deps only in here (`uv pip install <pkg>`); the c++ stack needs
+none of it.
+
 ### mujoco 
 
 download [mujoco 3.3.6 release](https://github.com/google-deepmind/mujoco/releases/tag/3.3.6), and extract it to the `~/.mujoco` directory;

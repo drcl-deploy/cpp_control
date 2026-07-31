@@ -37,6 +37,16 @@ source install/setup.sh
 colcon build --symlink-install --packages-select cpp_control
 ```
 
+### python venv
+
+same pattern as [unitree.md](unitree.md#python-venv), at the workspace root:
+
+```
+cd drcl_deploy
+uv venv venv --python 3.10 --system-site-packages --prompt drcl
+source /opt/ros/humble/setup.bash && source venv/bin/activate
+```
+
 ## usage 
 * in terminal1, spawn simulation 
 ```

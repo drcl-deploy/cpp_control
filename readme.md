@@ -40,7 +40,7 @@ graph LR
 
 ## install
 
-refer to corresponding deployment workflow:
+refer to corresponding deployment workflow (incl. the python venv):
 *  [unitree.md](workflows/unitree.md) 
 *  [drcl_deploy.md](workflows/drcl_deploy.md)
 
@@ -140,19 +140,12 @@ cpp_control/
 
 ### deploy artifacts (vibe.onnx.v1)
 
-`tasks/tracker/g1_sonic` consumes the artifact pair written by vibe's
-`export-onnx` — one self-contained graph + its manifest:
-
-| file | role |
-|---|---|
-| `policy.onnx` | multi-named-input graph (normalizers, LoRA, FSQ folded in) |
-| `policy.manifest.json` | per-port term tables (name/dim/offset/history) + action meta (joint order, gains, scale, defaults) + `step_dt` |
-
-the node binds every port **by name** from the manifest and takes gains/defaults
-from it — the checkpoint is the authority, yaml only carries plumbing. unknown
-term names fail at startup, listing the known registry
-([common/obs_terms.hpp](include/common/obs_terms.hpp),
-[tasks/tracker/g1_sonic.cpp](src/tasks/tracker/g1_sonic.cpp) `make_binding`).
+`tasks/tracker/g1_sonic` consumes an exported artifact pair — one
+self-contained graph (`policy.onnx`) + its manifest (`policy.manifest.json`).
+the node binds every port **by name** from the manifest and takes
+gains/defaults/joint-order from it — the checkpoint is the authority, yaml only
+carries plumbing. full contract, export flow and usage:
+[docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md).
 
 ### adding a new task
 
