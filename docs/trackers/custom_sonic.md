@@ -108,9 +108,20 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 ./build/cpp_control/deploy_selftest /path/to/policy.onnx
 ```
 
-joystick: `X` nominal pose → `A` engage policy (clip yaw-aligns to the robot at
-that instant) → `B` zero · `Y` damp. launch args: `manifest_path` (default:
-sibling of the onnx), `motion_start_frame`, `config_path`.
+IL-ordered clips (vibe retargeted dataset — 37 IL bodies, BFS joints) need the
+baked IL→MJ remap; MJ-native clips (mjlab demo) don't:
+
+```bash
+ros2 launch cpp_control g1_sonic_tracker.launch.py \
+    onnx_path:=... motion_path:=.../cube_frontflip/sample4/motion.npz il_ordered:=true
+```
+
+joystick: `X` nominal pose → `A` track the clip from frame 0 (yaw-aligns to the
+robot at that instant; pressing `A` again restarts) · **`RB`/`R1` stand mode** —
+SONIC tracks a synthetic 1-frame nominal-pose reference at the robot's heading
+(the hardware idle while loading/exporting motions) · `B` zero · `Y` damp.
+launch args: `manifest_path` (default: sibling of the onnx), `motion_start_frame`,
+`il_ordered`, `config_path`.
 
 note vs mjlab play: deployment cannot teleport the robot to the clip's start
 pose — the clip is heading-aligned to wherever the robot stands, so engage from

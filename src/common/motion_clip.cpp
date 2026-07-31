@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
 
 #include "cnpy/cnpy.h"
@@ -64,7 +65,29 @@ MotionClip MotionClip::load(const std::string& path, const std::vector<int>& joi
     clip.body_quat_w = to_floats(bq);
 
     if (npz.count("fps"))
-        clip.fps = to_floats(npz.at("fps"))[0];
+    {
+        // fps dtype varies by producer (mjlab demo: float64; retargeted dataset:
+        // int64). cnpy keeps only word_size, so disambiguate by sane range —
+        // an int64 misread as double is denormal (~1e-322), never a real rate.
+        const auto& arr = npz.at("fps");
+        auto sane = [](double v) { return v > 0.5 && v < 10000.0; };
+        double fps = 0.0;
+        if (arr.word_size == 8)
+        {
+            const double as_f64 = arr.data<double>()[0];
+            const auto as_i64 = static_cast<double>(arr.data<int64_t>()[0]);
+            fps = sane(as_f64) ? as_f64 : as_i64;
+        }
+        else if (arr.word_size == 4)
+        {
+            const double as_f32 = arr.data<float>()[0];
+            const auto as_i32 = static_cast<double>(arr.data<int32_t>()[0]);
+            fps = sane(as_f32) ? as_f32 : as_i32;
+        }
+        if (!sane(fps))
+            throw std::runtime_error("MotionClip: unreadable fps in " + path);
+        clip.fps = static_cast<float>(fps);
+    }
 
     if (!joint_perm.empty())
     {

@@ -10,6 +10,14 @@
 namespace cpp_control
 {
 
+// IL (IsaacLab BFS) -> MJ (MuJoCo DFS) joint permutation for G1 29-dof.
+// Single source of truth: mocke/mdp/joint_maps.py (retargeted motion.npz
+// stores joints IL-ordered; pelvis is body 0 in BOTH body orderings).
+static const std::vector<int> G1_IL2MJ = {
+    0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18,
+    2, 5, 8, 11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28,
+};
+
 // ── Constructor ──────────────────────────────────────────────────
 
 G1SonicNode::G1SonicNode(const std::string& node_name)
@@ -23,6 +31,7 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
     anchor_body_ = this->declare_parameter("anchor_body_index", 0);
     cmd_frame_skip_ = this->declare_parameter("cmd_frame_skip", 1);
     start_frame_ = this->declare_parameter("motion_start_frame", 0);
+    const bool il_ordered = this->declare_parameter("il_ordered", false);
     auto joint_perm = this->declare_parameter("motion_joint_perm", std::vector<int64_t>{});
 
     if (onnx_path.empty() || motion_path.empty())
@@ -35,11 +44,20 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
 
     manifest_ = deploy::DeployManifest::load(manifest_path);
     std::vector<int> perm(joint_perm.begin(), joint_perm.end());
+    if (il_ordered)
+    {
+        if (!perm.empty())
+            throw std::runtime_error("g1_sonic: il_ordered and motion_joint_perm are exclusive");
+        perm = G1_IL2MJ;
+    }
     clip_ = std::make_unique<MotionClip>(MotionClip::load(motion_path, perm));
     playback_ = std::make_unique<MotionPlayback>(*clip_, anchor_body_);
 
     init();
     apply_manifest_action_meta();
+    make_stand_clip();
+    active_clip_ = clip_.get();
+    active_pb_ = playback_.get();
 
     if (config_ && std::abs(config_->control_dt - manifest_.step_dt) > 1e-6)
         RCLCPP_WARN(this->get_logger(),
@@ -52,9 +70,33 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
     bind_ports();
 
     RCLCPP_INFO(this->get_logger(),
-                "g1_sonic ready: %s (%s) | %zu input ports | clip %d frames @ %.0f fps",
+                "g1_sonic ready: %s (%s) | %zu input ports | clip %d frames @ %.0f fps%s",
                 onnx_path.c_str(), manifest_.model_class.c_str(),
-                manifest_.inputs.size(), clip_->num_frames, static_cast<double>(clip_->fps));
+                manifest_.inputs.size(), clip_->num_frames, static_cast<double>(clip_->fps),
+                il_ordered ? " (IL->MJ remapped)" : "");
+}
+
+// ── Stand reference (textop enter_stand_mode equivalent) ─────────
+
+void G1SonicNode::make_stand_clip()
+{
+    auto stand = std::make_unique<MotionClip>();
+    stand->num_frames = 1;
+    stand->num_joints = G1_NUM_MOTOR;
+    stand->num_bodies = 1;
+    stand->fps = clip_->fps;
+    stand->joint_pos.assign(default_angles_.begin(), default_angles_.end());
+    stand->joint_vel.assign(G1_NUM_MOTOR, 0.0f);
+    stand->body_quat_w = {1.0f, 0.0f, 0.0f, 0.0f};
+    stand_clip_ = std::move(stand);
+    stand_playback_ = std::make_unique<MotionPlayback>(*stand_clip_, 0);
+}
+
+void G1SonicNode::enter_stand()
+{
+    stand_mode_ = true;
+    pending_engage_ = true;
+    control_mode_ = ControlMode::POLICY;
 }
 
 // ── Manifest is the authority on action metadata ─────────────────
@@ -174,9 +216,9 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
         return {dst, &spec, [this, F, J](float* out) {
                     for (int s = 0; s < F; ++s)
                     {
-                        const int f = playback_->future_frame(s * cmd_frame_skip_);
-                        std::memcpy(out + s * J, clip_->jp(f), J * sizeof(float));
-                        std::memcpy(out + (F + s) * J, clip_->jv(f), J * sizeof(float));
+                        const int f = active_pb_->future_frame(s * cmd_frame_skip_);
+                        std::memcpy(out + s * J, active_clip_->jp(f), J * sizeof(float));
+                        std::memcpy(out + (F + s) * J, active_clip_->jv(f), J * sizeof(float));
                     }
                 }};
     }
@@ -194,13 +236,13 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
 
 void G1SonicNode::fill_tokenizer(float* dst)
 {
-    const int F = future_steps_, J = clip_->num_joints, skip = frame_skip_;
+    const int F = future_steps_, J = active_clip_->num_joints, skip = frame_skip_;
 
     for (int s = 0; s < F; ++s)
     {
-        const int f = playback_->future_frame(s * skip);
-        std::memcpy(&tokenizer_flat_[s * J], clip_->jp(f), J * sizeof(float));
-        std::memcpy(&tokenizer_flat_[(F + s) * J], clip_->jv(f), J * sizeof(float));
+        const int f = active_pb_->future_frame(s * skip);
+        std::memcpy(&tokenizer_flat_[s * J], active_clip_->jp(f), J * sizeof(float));
+        std::memcpy(&tokenizer_flat_[(F + s) * J], active_clip_->jv(f), J * sizeof(float));
     }
 
     const auto& robot_quat = robot_state_.imu_quaternion;
@@ -208,8 +250,8 @@ void G1SonicNode::fill_tokenizer(float* dst)
     for (int s = 0; s < F; ++s)
     {
         std::memcpy(dst + s * row, &tokenizer_flat_[s * 2 * J], 2 * J * sizeof(float));
-        const int f = playback_->future_frame(s * skip);
-        auto rot_dif = math::qmul(math::qinv(robot_quat), playback_->aligned_anchor_quat(f));
+        const int f = active_pb_->future_frame(s * skip);
+        auto rot_dif = math::qmul(math::qinv(robot_quat), active_pb_->aligned_anchor_quat(f));
         auto r6d = math::quat_to_rotation_6d(rot_dif);
         std::memcpy(dst + s * row + 2 * J, r6d.data(), 6 * sizeof(float));
     }
@@ -219,12 +261,18 @@ void G1SonicNode::fill_tokenizer(float* dst)
 
 void G1SonicNode::engage_reset()
 {
-    playback_->start(robot_state_.imu_quaternion, start_frame_);
+    active_clip_ = stand_mode_ ? stand_clip_.get() : clip_.get();
+    active_pb_ = stand_mode_ ? stand_playback_.get() : playback_.get();
+    active_pb_->start(robot_state_.imu_quaternion, stand_mode_ ? 0 : start_frame_);
     for (auto& h : histories_)
         h->reset();
     std::fill(policy_actions_.begin(), policy_actions_.end(), 0.0f);
     clip_end_logged_ = false;
-    RCLCPP_INFO(this->get_logger(), "sonic engaged: frame %d, heading aligned", start_frame_);
+    if (stand_mode_)
+        RCLCPP_INFO(this->get_logger(), "sonic engaged: STAND (nominal-pose reference)");
+    else
+        RCLCPP_INFO(this->get_logger(), "sonic engaged: track from frame %d, heading aligned",
+                    start_frame_);
 }
 
 // ── Control ──────────────────────────────────────────────────────
@@ -233,11 +281,15 @@ RobotCommand G1SonicNode::policy_control()
 {
     const double dt = config_ ? config_->control_dt : 0.02;
 
-    // Fresh engage = first policy tick after any other mode (mode switches
-    // don't reach Level 2, so detect the gap in policy_control call times).
+    // Fresh engage = first policy tick after any other mode (detected via the
+    // gap in policy_control call times) OR an explicit stand<->track switch
+    // (pending_engage_, since those never leave POLICY).
     const auto now = this->now();
-    if ((now - last_policy_tick_).seconds() > 5.0 * dt)
+    if (pending_engage_ || (now - last_policy_tick_).seconds() > 5.0 * dt)
+    {
         engage_reset();
+        pending_engage_ = false;
+    }
     last_policy_tick_ = now;
 
     for (auto& update : history_updates_)
@@ -261,8 +313,8 @@ RobotCommand G1SonicNode::policy_control()
         mc.kd = kds_[i];
     }
 
-    playback_->step(dt);
-    if (playback_->finished() && !clip_end_logged_)
+    active_pb_->step(dt);
+    if (!stand_mode_ && active_pb_->finished() && !clip_end_logged_)
     {
         clip_end_logged_ = true;
         RCLCPP_INFO(this->get_logger(), "clip finished — holding last frame");
@@ -270,6 +322,42 @@ RobotCommand G1SonicNode::policy_control()
 
     return cmd;
 }
+
+// ── Joystick / Gamepad (textop parity: RB/R1 = stand, A = track) ─
+
+void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
+{
+    const bool rb = msg->buttons.size() > joy::XMODE_R1 && msg->buttons[joy::XMODE_R1] == 1;
+    if (rb && !prev_rb_joy_)
+    {
+        enter_stand();
+        RCLCPP_INFO(this->get_logger(), "-> stand (SONIC @ nominal)");
+    }
+    prev_rb_joy_ = rb;
+
+    // A (base already switched to POLICY): leave stand, (re)start the clip.
+    if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1)
+    {
+        stand_mode_ = false;
+        pending_engage_ = true;
+    }
+}
+
+#ifdef HAS_UNITREE_HG
+void G1SonicNode::on_gamepad()
+{
+    if (gamepad_.R1.on_press)
+    {
+        enter_stand();
+        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (SONIC @ nominal)");
+    }
+    if (gamepad_.A.on_press)
+    {
+        stand_mode_ = false;
+        pending_engage_ = true;
+    }
+}
+#endif
 
 }  // namespace cpp_control
 

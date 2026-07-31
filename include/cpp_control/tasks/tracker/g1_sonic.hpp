@@ -24,6 +24,12 @@ namespace cpp_control
  *
  * Works unchanged for the base-SONIC export (ports: tokenizer, policy) and
  * the SONIC+adapter export (+ augmentation ports) — the manifest decides.
+ *
+ * Motion clips: MJ-native (mjlab demo) or IL-ordered retargeted-dataset npz
+ * (`il_ordered:=true` applies the baked IL2MJ permutation).
+ *
+ * Stand mode (RB / R1): SONIC tracks a synthetic 1-frame reference — nominal
+ * pose, identity anchor at the robot's heading. A (re)starts the loaded clip.
  */
 class G1SonicNode : public G1Node
 {
@@ -32,6 +38,10 @@ public:
 
 protected:
     RobotCommand policy_control() override;
+    void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
+#ifdef HAS_UNITREE_HG
+    void on_gamepad() override;
+#endif
 
 private:
     /// One manifest term bound to its slice of a session input buffer.
@@ -45,6 +55,8 @@ private:
     void apply_manifest_action_meta();
     void bind_ports();
     Binding make_binding(float* dst, const deploy::TermSpec& spec);
+    void make_stand_clip();
+    void enter_stand();
     void engage_reset();
     void fill_tokenizer(float* dst);
 
@@ -53,6 +65,15 @@ private:
     std::unique_ptr<deploy::OnnxSession> session_;
     std::unique_ptr<MotionClip> clip_;
     std::unique_ptr<MotionPlayback> playback_;
+
+    // stand mode: synthetic 1-frame reference (nominal pose, identity anchor)
+    std::unique_ptr<MotionClip> stand_clip_;
+    std::unique_ptr<MotionPlayback> stand_playback_;
+    MotionClip* active_clip_ = nullptr;      ///< clip the obs writers read
+    MotionPlayback* active_pb_ = nullptr;
+    bool stand_mode_ = false;
+    bool pending_engage_ = false;  ///< explicit re-engage (stand <-> track switches)
+    bool prev_rb_joy_ = false;
 
     // obs state
     std::vector<std::unique_ptr<obs::HistoryTerm>> histories_;

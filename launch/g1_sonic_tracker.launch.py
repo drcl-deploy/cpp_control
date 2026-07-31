@@ -35,6 +35,8 @@ def generate_launch_description():
         DeclareLaunchArgument('manifest_path', default_value=''),
         DeclareLaunchArgument('motion_path', default_value=default_motion),
         DeclareLaunchArgument('motion_start_frame', default_value='0'),
+        DeclareLaunchArgument('il_ordered', default_value='false',
+                              description='motion npz is IL-ordered (retargeted dataset)'),
 
         Node(
             package='cpp_control',
@@ -47,6 +49,7 @@ def generate_launch_description():
                 'manifest_path': LaunchConfiguration('manifest_path'),
                 'motion_path': LaunchConfiguration('motion_path'),
                 'motion_start_frame': LaunchConfiguration('motion_start_frame'),
+                'il_ordered': LaunchConfiguration('il_ordered'),
             }],
         ),
     ])

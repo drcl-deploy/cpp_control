@@ -161,6 +161,15 @@ static void test_motion()
     // joint permutation: reversed columns
     auto clip_perm = MotionClip::load(path, {2, 1, 0});
     CHECK(clip_perm.jp(2)[0] == 22.f && clip_perm.jp(2)[2] == 20.f);
+
+    // int64 fps (retargeted-dataset producer) must read as 50, not denormal garbage
+    const std::string path_i = tmp_path("g1_sonic_selftest_motion_ifps.npz");
+    std::vector<int64_t> fps_i = {50};
+    cnpy::npz_save(path_i, "joint_pos", jp.data(), {(size_t)T, (size_t)J}, "w");
+    cnpy::npz_save(path_i, "joint_vel", jv.data(), {(size_t)T, (size_t)J}, "a");
+    cnpy::npz_save(path_i, "body_quat_w", bq.data(), {(size_t)T, (size_t)B, 4}, "a");
+    cnpy::npz_save(path_i, "fps", fps_i.data(), {1}, "a");
+    CHECK(MotionClip::load(path_i).fps == 50.f);
     std::puts("ok  motion");
 }
 

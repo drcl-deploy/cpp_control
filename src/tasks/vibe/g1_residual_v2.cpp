@@ -16,6 +16,9 @@ G1VibeResidualV2Node::G1VibeResidualV2Node(const std::string& node_name)
 
     RCLCPP_INFO(this->get_logger(), "G1 VIBE Residual V2 node ready (HLC obs=%d, WBC obs=%d)",
                 hlc_num_obs_, WBC_NUM_OBS);
+
+    // print out the action scale
+    RCLCPP_INFO(this->get_logger(), "HLC action scale: %f", hlc_action_scale_);
 }
 
 // ── HLC Observation (v2 layout) ──────────────────────────────────
