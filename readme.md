@@ -60,6 +60,15 @@ ros2 launch cpp_control g1_locomotion.launch.py
 # Custom ONNX model
 ros2 launch cpp_control g1_locomotion.launch.py onnx_model_path:=/path/to/model.onnx
 
+# G1 SONIC tracker (exported vibe policy: base or +adapter, manifest-driven)
+# drop policy.onnx + policy.manifest.json + motion.npz under models/tracker/
+# (names per config/tracker/g1_sonic.yaml), or pass paths explicitly:
+ros2 launch cpp_control g1_sonic_tracker.launch.py \
+    onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
+
+# deploy infra self-test (+ optional smoke of a real export)
+./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
+
 # MiniPi locomotion
 ros2 launch cpp_control mini_pi_locomotion.launch.py
 
@@ -128,6 +137,22 @@ cpp_control/
 > * [robots/g1.cpp](src/robots/g1.cpp)
 
 ---
+
+### deploy artifacts (vibe.onnx.v1)
+
+`tasks/tracker/g1_sonic` consumes the artifact pair written by vibe's
+`export-onnx` — one self-contained graph + its manifest:
+
+| file | role |
+|---|---|
+| `policy.onnx` | multi-named-input graph (normalizers, LoRA, FSQ folded in) |
+| `policy.manifest.json` | per-port term tables (name/dim/offset/history) + action meta (joint order, gains, scale, defaults) + `step_dt` |
+
+the node binds every port **by name** from the manifest and takes gains/defaults
+from it — the checkpoint is the authority, yaml only carries plumbing. unknown
+term names fail at startup, listing the known registry
+([common/obs_terms.hpp](include/common/obs_terms.hpp),
+[tasks/tracker/g1_sonic.cpp](src/tasks/tracker/g1_sonic.cpp) `make_binding`).
 
 ### adding a new task
 

@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
@@ -86,6 +87,21 @@ if(messages_FOUND)
   target_compile_definitions(cpp_control_common PUBLIC HAS_MESSAGES)
 endif()
 
+# ── Deploy infra: manifest-driven ONNX + motion clips (ROS-free) ──
+add_library(cpp_control_deploy STATIC
+  src/common/deploy_manifest.cpp
+  src/common/onnx_session.cpp
+  src/common/motion_clip.cpp
+  thirdparty/cnpy/cnpy.cpp)
+target_include_directories(cpp_control_deploy PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
+target_link_libraries(cpp_control_deploy ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB::ZLIB)
+
+# Deploy self-test (unit checks; optionally smoke-runs a real export):
+#   ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
+add_executable(deploy_selftest tests/deploy_selftest.cpp)
+target_link_libraries(deploy_selftest cpp_control_deploy)
+
 # ── Level 0: base ────────────────────────────────────────
 add_library(cpp_control_base STATIC src/base.cpp)
 target_link_libraries(cpp_control_base cpp_control_common)
@@ -146,7 +162,13 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(g1_vibe_residual_v2_node
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
 
-  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vibe_residual_node g1_vibe_residual_v2_node)
+  # Task: tracker (g1 sonic — exported vibe policy + manifest)
+  add_executable(g1_sonic_node src/tasks/tracker/g1_sonic.cpp)
+  target_link_libraries(g1_sonic_node cpp_control_g1 cpp_control_deploy)
+  ament_target_dependencies(g1_sonic_node
+    rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+
+  list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vibe_residual_node g1_vibe_residual_v2_node g1_sonic_node)
 endif()
 
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────
