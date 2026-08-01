@@ -50,6 +50,7 @@ enum class ControlMode
     DAMPING,
     NOMINAL_POSE,
     STANDING_UP,   // smooth interpolation to default_angles, then auto → POLICY
+    STAND,         // robot-level active stand (g1::SonicStand) — RB, when configured
     POLICY
 };
 

@@ -93,6 +93,7 @@ add_library(cpp_control_deploy STATIC
   src/common/deploy_manifest.cpp
   src/common/onnx_session.cpp
   src/common/g1/motion.cpp
+  src/common/g1/sonic_stand.cpp
   thirdparty/cnpy/cnpy.cpp)
 target_include_directories(cpp_control_deploy PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
@@ -122,7 +123,7 @@ if(unitree_hg_FOUND OR messages_FOUND)
   endif()
 
   add_library(cpp_control_g1 STATIC src/robots/g1.cpp)
-  target_link_libraries(cpp_control_g1 cpp_control_base)
+  target_link_libraries(cpp_control_g1 cpp_control_base cpp_control_deploy)
   ament_target_dependencies(cpp_control_g1 ${G1_DEPS})
 
   # Tracker library (motion handling, WBC obs, frame alignment)

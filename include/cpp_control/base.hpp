@@ -65,6 +65,13 @@ protected:
     virtual RobotCommand policy_control();
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
 
+    // --- Robot-level stand mode (ControlMode::STAND) ---
+    // Level 1 provides an engine (e.g. g1::SonicStand); base wires RB to it.
+    // Tasks with their own stand semantics simply leave it unconfigured.
+    virtual bool has_stand() const { return false; }
+    virtual void engage_stand() {}
+    virtual RobotCommand stand_control() { return nominal_pose_control(); }
+
     // --- Built-in control modes ---
     RobotCommand zeroing_control();
     RobotCommand damping_control();

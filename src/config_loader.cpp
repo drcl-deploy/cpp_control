@@ -54,6 +54,10 @@ Config::Config(const std::string& config_path)
         {
             motion_path = config["motion_path"].as<std::string>();
         }
+        if (config["stand_onnx_path"])
+        {
+            stand_onnx_path = config["stand_onnx_path"].as<std::string>();
+        }
 
         // Control gains for 29DOF
         if (config["kps"])

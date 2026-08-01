@@ -70,6 +70,9 @@ void BaseNode::control_loop()
         case ControlMode::STANDING_UP:
             cmd = standing_up_control();
             break;
+        case ControlMode::STAND:
+            cmd = stand_control();
+            break;
         case ControlMode::POLICY:
             cmd = policy_control();
             break;
@@ -179,6 +182,11 @@ void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
     {
         control_mode_ = ControlMode::DAMPING;
         RCLCPP_INFO(this->get_logger(), "-> damping");
+    }
+    else if (msg->buttons.size() > joy::XMODE_R1 && pressed(joy::XMODE_R1) && has_stand())
+    {
+        engage_stand();
+        RCLCPP_INFO(this->get_logger(), "-> stand (robot-level SONIC)");
     }
 
     // Let Level 2 add task-specific joystick behaviour (velocity, etc.)
