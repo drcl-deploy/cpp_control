@@ -34,9 +34,10 @@ void G1SonicNode::construct(bool bind_now)
     cmd_frame_skip_ = this->declare_parameter("cmd_frame_skip", 1);
     start_frame_ = this->declare_parameter("motion_start_frame", 0);
     const bool il_ordered = this->declare_parameter("il_ordered", false);
+    const std::string motion_topic = this->declare_parameter("motion_topic", "/tracker/motion");
 
-    if (onnx_path.empty() || motion_path.empty())
-        throw std::runtime_error("g1_sonic: onnx_path and motion_path are required");
+    if (onnx_path.empty())
+        throw std::runtime_error("g1_sonic: onnx_path is required");
     if (manifest_path.empty())
     {
         // <model>.onnx → <model>.manifest.json (the exporter writes them side by side)
@@ -44,9 +45,17 @@ void G1SonicNode::construct(bool bind_now)
     }
 
     manifest_ = deploy::DeployManifest::load(manifest_path);
-    motion_ = std::make_unique<g1::Motion>(
-        g1::Motion::from_npz(motion_path, il_ordered ? g1::MJ2IL : std::vector<int>{}));
-    clock_ = std::make_unique<g1::MotionClock>(*motion_, anchor_body_);
+    if (!motion_path.empty())
+    {
+        motion_ = std::make_unique<g1::Motion>(
+            g1::Motion::from_npz(motion_path, il_ordered ? g1::MJ2IL : std::vector<int>{}));
+        clock_ = std::make_unique<g1::MotionClock>(*motion_, anchor_body_);
+    }
+    // No clip -> boot into stand; motions arrive over motion_topic and A starts them.
+    stand_mode_ = (motion_ == nullptr);
+    motion_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+        motion_topic, 10,
+        [this](std_msgs::msg::Float32MultiArray::SharedPtr msg) { on_motion(msg); });
 
     init();
     apply_manifest_action_meta();
@@ -66,18 +75,78 @@ void G1SonicNode::construct(bool bind_now)
         return;  // subclass finishes: extra state, then bind_ports()
     bind_ports();
 
-    RCLCPP_INFO(this->get_logger(),
-                "g1_sonic ready: %s (%s) | %zu input ports | motion %d frames @ %.0f fps%s",
-                onnx_path.c_str(), manifest_.model_class.c_str(),
-                manifest_.inputs.size(), motion_->num_frames, static_cast<double>(motion_->fps),
-                il_ordered ? " (IL->MJ remapped)" : "");
+    if (motion_)
+        RCLCPP_INFO(this->get_logger(),
+                    "g1_sonic ready: %s (%s) | %zu input ports | motion %d frames @ %.0f fps%s",
+                    onnx_path.c_str(), manifest_.model_class.c_str(), manifest_.inputs.size(),
+                    motion_->num_frames, static_cast<double>(motion_->fps),
+                    il_ordered ? " (IL->MJ remapped)" : "");
+    else
+        RCLCPP_INFO(this->get_logger(),
+                    "g1_sonic ready: %s (%s) | %zu input ports | no clip — stand until a "
+                    "motion arrives on %s (publish-motion <npz>)",
+                    onnx_path.c_str(), manifest_.model_class.c_str(), manifest_.inputs.size(),
+                    motion_topic.c_str());
+}
+
+// ── Streamed motion (textop wire: [jp29 | jv29 | apos3 | aquat4], IL order) ──
+
+void G1SonicNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg)
+{
+    constexpr int COLS = 2 * G1_NUM_MOTOR + 3 + 4;
+    if (msg->layout.dim.size() < 2 ||
+        static_cast<int>(msg->layout.dim[1].size) != COLS ||
+        static_cast<int>(msg->data.size()) !=
+            static_cast<int>(msg->layout.dim[0].size) * COLS)
+    {
+        RCLCPP_WARN(this->get_logger(), "bad motion wire (need [T, %d])", COLS);
+        return;
+    }
+    const int T = static_cast<int>(msg->layout.dim[0].size);
+    pend_motion_ = std::make_unique<g1::Motion>(g1::Motion::from_wire(T, msg->data.data()));
+    pend_ready_ = true;
+    RCLCPP_INFO(this->get_logger(), "motion staged (T=%d @ %.0f fps) — A to start", T,
+                static_cast<double>(pend_motion_->fps));
+}
+
+void G1SonicNode::commit_pending_motion()
+{
+    motion_ = std::move(pend_motion_);
+    pend_ready_ = false;
+    // Wire motions carry the anchor body only; clamp the anchor index.
+    int anchor = anchor_body_;
+    if (anchor >= motion_->num_bodies)
+    {
+        RCLCPP_WARN(this->get_logger(), "anchor_body %d > wire bodies %d — using body 0",
+                    anchor_body_, motion_->num_bodies);
+        anchor = 0;
+    }
+    clock_ = std::make_unique<g1::MotionClock>(*motion_, anchor);
+    start_frame_ = 0;  // streamed clips always start at their first frame
+    RCLCPP_INFO(this->get_logger(), "motion committed: %d frames @ %.0f fps",
+                motion_->num_frames, static_cast<double>(motion_->fps));
+}
+
+void G1SonicNode::on_button_a()
+{
+    if (pend_ready_)
+        commit_pending_motion();
+    if (!motion_)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "no motion loaded — staying in stand (publish-motion <npz>)");
+        return;
+    }
+    stand_mode_ = false;
+    pending_engage_ = true;
 }
 
 // ── Stand reference (textop enter_stand_mode equivalent) ─────────
 
 void G1SonicNode::make_stand_motion()
 {
-    stand_motion_ = std::make_unique<g1::Motion>(g1::Motion::stand(default_angles_, motion_->fps));
+    stand_motion_ = std::make_unique<g1::Motion>(
+        g1::Motion::stand(default_angles_, motion_ ? motion_->fps : 50.0f));
     stand_clock_ = std::make_unique<g1::MotionClock>(*stand_motion_, 0);
 }
 
@@ -186,11 +255,11 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::PortSpe
     // ── tokenizer term (mocke/sonic/mdp/observations.py sonic_g1_tokenizer) ──
     if (spec.name == "g1_tokenizer")
     {
-        const int expected = future_steps_ * (2 * motion_->num_joints + 6);
-        if (spec.dim != expected || motion_->num_joints != G1_NUM_MOTOR)
+        const int expected = future_steps_ * (2 * G1_NUM_MOTOR + 6);
+        if (spec.dim != expected)
             throw std::runtime_error("g1_sonic: tokenizer dim " + std::to_string(spec.dim) +
                                      " != F*(2J+6) = " + std::to_string(expected));
-        tokenizer_flat_.assign(2 * future_steps_ * motion_->num_joints, 0.0f);
+        tokenizer_flat_.assign(2 * future_steps_ * G1_NUM_MOTOR, 0.0f);
         return {dst, &spec, [this](float* out) { fill_tokenizer(out); }};
     }
 
@@ -198,7 +267,7 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::PortSpe
     // [jp(f0..fF-1).flat | jv(f0..fF-1).flat] at cmd_frame_skip; F from the dim.
     if (spec.name == "motion_cmd")
     {
-        const int J = motion_->num_joints;
+        const int J = G1_NUM_MOTOR;
         if (spec.dim % (2 * J) != 0)
             throw std::runtime_error("g1_sonic: motion_cmd dim " + std::to_string(spec.dim) +
                                      " not divisible by 2*J");
@@ -325,12 +394,10 @@ void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
     }
     prev_rb_joy_ = rb;
 
-    // A (base already switched to POLICY): leave stand, (re)start the motion.
+    // A (base already switched to POLICY): commit any staged motion, then
+    // leave stand and (re)start it.
     if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1)
-    {
-        stand_mode_ = false;
-        pending_engage_ = true;
-    }
+        on_button_a();
 }
 
 #ifdef HAS_UNITREE_HG
@@ -342,10 +409,7 @@ void G1SonicNode::on_gamepad()
         RCLCPP_INFO(this->get_logger(), "[GP] -> stand (SONIC @ nominal)");
     }
     if (gamepad_.A.on_press)
-    {
-        stand_mode_ = false;
-        pending_engage_ = true;
-    }
+        on_button_a();
 }
 #endif
 

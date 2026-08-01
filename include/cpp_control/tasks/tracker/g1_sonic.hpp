@@ -1,5 +1,7 @@
 #pragma once
 
+#include <std_msgs/msg/float32_multi_array.hpp>
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -25,11 +27,15 @@ namespace cpp_control
  * Works unchanged for the base-SONIC export (ports: tokenizer, policy) and
  * the SONIC+adapter export (+ augmentation ports) — the manifest decides.
  *
- * Motion: g1::Motion (MJ-native mjlab npz, or IL-ordered retargeted-dataset
- * npz via `il_ordered:=true`).
+ * Motion, two ways (hw workflow == textop's):
+ *   - launch-time npz (`motion_path`; `il_ordered:=true` for retargeted clips)
+ *   - streamed over `motion_topic` (textop wire, IL-ordered): each message is
+ *     STAGED; A commits + starts it. `motion_path` empty -> boot into stand
+ *     and wait for streamed motions — the controller never has to die.
  *
  * Stand mode (RB / R1): SONIC tracks a synthetic 1-frame reference — nominal
- * pose, identity anchor at the robot's heading. A (re)starts the loaded clip.
+ * pose, identity anchor at the robot's heading. A (re)starts the loaded clip
+ * (committing any staged one first).
  */
 class G1SonicNode : public G1Node
 {
@@ -60,12 +66,20 @@ protected:
     void enter_stand();
     virtual void engage_reset();
     void fill_tokenizer(float* dst);
+    void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
+    void commit_pending_motion();
+    void on_button_a();  ///< commit staged motion (if any) + track
 
     // deploy artifacts
     deploy::DeployManifest manifest_;
     std::unique_ptr<deploy::OnnxSession> session_;
-    std::unique_ptr<g1::Motion> motion_;
+    std::unique_ptr<g1::Motion> motion_;   ///< null until a clip is loaded/committed
     std::unique_ptr<g1::MotionClock> clock_;
+
+    // streamed motion (staged; committed on A — arrives in stand/non-policy modes)
+    std::unique_ptr<g1::Motion> pend_motion_;
+    bool pend_ready_ = false;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr motion_sub_;
 
     // stand mode: synthetic 1-frame reference (nominal pose, identity anchor)
     std::unique_ptr<g1::Motion> stand_motion_;

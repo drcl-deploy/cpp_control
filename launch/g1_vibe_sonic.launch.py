@@ -7,6 +7,9 @@ whose backbone matches the policy's kv port — validated at first token.
 Usage:
     ros2 launch cpp_control g1_vibe_sonic.launch.py \\
         onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
+    # hardware: no motion_path — boot to stand, stream clips instead:
+    ros2 launch cpp_control g1_vibe_sonic.launch.py onnx_path:=/path/to/model.onnx
+    publish-motion /path/to/motion.npz     # stage; A starts it
     # smoke the attention rows:
     ros2 run cpp_control attn_viewer.py
 
@@ -31,7 +34,8 @@ def generate_launch_description():
         DeclareLaunchArgument('config_path', default_value=default_config),
         DeclareLaunchArgument('onnx_path'),
         DeclareLaunchArgument('manifest_path', default_value=''),
-        DeclareLaunchArgument('motion_path'),
+        DeclareLaunchArgument('motion_path', default_value='',
+                              description='npz clip; empty = stand until streamed'),
         DeclareLaunchArgument('motion_start_frame', default_value='0'),
         DeclareLaunchArgument('il_ordered', default_value='true',
                               description='motion npz is IL-ordered (retargeted dataset)'),

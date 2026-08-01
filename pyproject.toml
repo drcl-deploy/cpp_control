@@ -1,0 +1,18 @@
+# CLI shims only — the ROS package builds with ament_cmake (CMakeLists.txt).
+# One-time: source venv/bin/activate && pip install -e <this dir>
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpp-control-cli"
+version = "0.1.0"
+description = "cpp_control CLI shims (publish-motion)"
+requires-python = ">=3.8"
+
+[project.scripts]
+publish-motion = "npz_motion_publisher:main"
+
+[tool.setuptools]
+package-dir = {"" = "scripts"}
+py-modules = ["npz_motion_publisher"]

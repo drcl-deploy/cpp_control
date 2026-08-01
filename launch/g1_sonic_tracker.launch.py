@@ -5,6 +5,9 @@ Usage:
     ros2 launch cpp_control g1_sonic_tracker.launch.py
     ros2 launch cpp_control g1_sonic_tracker.launch.py \
         onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
+    # hardware: motion_path:='' — boot to stand, stream clips instead:
+    ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
+    publish-motion /path/to/motion.npz     # stage; A starts it
 
 The .manifest.json is expected next to the .onnx (exporter default);
 override with manifest_path:= if it lives elsewhere.

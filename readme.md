@@ -14,6 +14,8 @@ modular, multi-robot, multi-workflow C++ controller deployment for ROS2
    ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
    ```
 3. `colcon build --symlink-install --packages-select cpp_control`
+4. CLI shims (`publish-motion`), one-time:
+   `uv pip install -e cyclonedds_ws/src/cpp_control --python venv/bin/python`
 
 ## usage
 
@@ -24,6 +26,11 @@ ros2 launch cpp_control g1_locomotion.launch.py
 # G1 SONIC tracker (exported vibe policy, manifest-driven)
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
+
+# hardware workflow (sonic + vibe-sonic): controller never dies —
+# boot with no clip (stand), stream motions, A starts each one
+ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
+publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
 
 # G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
 ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
