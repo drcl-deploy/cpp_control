@@ -12,7 +12,7 @@ and plenty of checkpoints (collaborators', older runs) are plain onnx.
 | gains / defaults / scale | node's yaml | the checkpoint's manifest |
 | joint order | reindex tables in the node | manifest `joint_names`, asserted vs config at startup |
 | wrong-layout failure | silent garbage | loud throw (port/term/dim/name mismatch) |
-| consumers | `g1_locomotion`, `mini_pi_{locomotion,dive}`, textop WBC, residual v1/v2 HLC | `g1_sonic`, `g1_adapt_sonic`, `g1::SonicStand` |
+| consumers | `g1_locomotion`, `mini_pi_{locomotion,dive}`, textop WBC, residual v1/v2 HLC | `g1_sonic`, `g1_vibe_sonic`, `g1::SonicStand` |
 | artifact source | any exporter | vibe `export-agent` (schema `vibe.onnx.v1`) |
 
 ## which to use

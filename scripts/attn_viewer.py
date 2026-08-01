@@ -13,7 +13,7 @@ the msg layout label — nothing hardcoded.
 
 Usage:
     ros2 run cpp_control attn_viewer.py
-    python3 scripts/attn_viewer.py --topic /vibe/adapt_sonic/attention_mask
+    python3 scripts/attn_viewer.py --topic /vibe/sonic/attention_mask
 """
 
 import argparse
@@ -68,7 +68,7 @@ class AttnViewer(Node):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--topic', default='/vibe/adapt_sonic/attention_mask')
+    parser.add_argument('--topic', default='/vibe/sonic/attention_mask')
     args = parser.parse_args()
 
     rclpy.init()

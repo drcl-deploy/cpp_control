@@ -1,4 +1,4 @@
-#include "cpp_control/tasks/vibe/g1_adapt_sonic.hpp"
+#include "cpp_control/tasks/vibe/g1_vibe_sonic.hpp"
 
 #include <cstring>
 #include <numeric>
@@ -12,19 +12,19 @@ namespace cpp_control
 
 // ── Constructor ──────────────────────────────────────────────────
 
-G1AdaptSonicNode::G1AdaptSonicNode(const std::string& node_name)
+G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
     : G1SonicNode(node_name, /*bind_now=*/false), last_token_time_(0, 0, RCL_ROS_TIME)
 {
     const std::string tokens_topic = this->declare_parameter("tokens_topic", "/enc/tokens");
     const std::string attn_topic =
-        this->declare_parameter("attention_topic", "/vibe/adapt_sonic/attention_mask");
+        this->declare_parameter("attention_topic", "/vibe/sonic/attention_mask");
     goal_color_ = static_cast<int>(this->declare_parameter("goal_color", 0));
     stale_ticks_ = static_cast<int>(this->declare_parameter("token_stale_ticks", 5));
 
     // kv port shape (P, D) is the manifest's truth about the trained encoder
     const auto* kv = manifest_.find_input("kv_tokens__img_tokens");
     if (!kv || kv->shape.size() != 2)
-        throw std::runtime_error("g1_adapt_sonic: manifest has no (P, D) kv_tokens__img_tokens "
+        throw std::runtime_error("g1_vibe_sonic: manifest has no (P, D) kv_tokens__img_tokens "
                                  "port — not an extractor export?");
     token_rows_ = static_cast<int>(kv->shape[0]);
     token_dim_ = static_cast<int>(kv->shape[1]);
@@ -52,7 +52,7 @@ G1AdaptSonicNode::G1AdaptSonicNode(const std::string& node_name)
         tokens_topic, rclcpp::QoS(1).best_effort().durability_volatile(),
         [this](vision_encoders::msg::ImageTokens::SharedPtr msg) { on_tokens(msg); });
     goal_color_sub_ = this->create_subscription<std_msgs::msg::Int32>(
-        "/vibe/adapt_sonic/goal_color", 10, [this](std_msgs::msg::Int32::SharedPtr msg) {
+        "/vibe/sonic/goal_color", 10, [this](std_msgs::msg::Int32::SharedPtr msg) {
             goal_color_ = msg->data;
             RCLCPP_INFO(this->get_logger(), "goal_color -> %d", goal_color_);
         });
@@ -63,7 +63,7 @@ G1AdaptSonicNode::G1AdaptSonicNode(const std::string& node_name)
     for (const auto& q : query_names_)
         queries << q << ' ';
     RCLCPP_INFO(this->get_logger(),
-                "g1_adapt_sonic ready: %s | kv (%d, %d) <- %s | queries: %s| goal_color=%d | "
+                "g1_vibe_sonic ready: %s | kv (%d, %d) <- %s | queries: %s| goal_color=%d | "
                 "attn -> %s",
                 manifest_.model_class.c_str(), token_rows_, token_dim_, tokens_topic.c_str(),
                 queries.str().c_str(), goal_color_,
@@ -72,7 +72,7 @@ G1AdaptSonicNode::G1AdaptSonicNode(const std::string& node_name)
 
 // ── Extractor-era port writers ───────────────────────────────────
 
-G1SonicNode::Binding G1AdaptSonicNode::make_binding(float* dst, const deploy::PortSpec& port,
+G1SonicNode::Binding G1VibeSonicNode::make_binding(float* dst, const deploy::PortSpec& port,
                                                     const deploy::TermSpec& spec)
 {
     // q_proprio: current values, no history (orcs proprio_terms)
@@ -149,7 +149,7 @@ G1SonicNode::Binding G1AdaptSonicNode::make_binding(float* dst, const deploy::Po
 
 // ── Tokens ───────────────────────────────────────────────────────
 
-void G1AdaptSonicNode::on_tokens(vision_encoders::msg::ImageTokens::SharedPtr msg)
+void G1VibeSonicNode::on_tokens(vision_encoders::msg::ImageTokens::SharedPtr msg)
 {
     if (!tokens_seen_)
     {
@@ -157,11 +157,11 @@ void G1AdaptSonicNode::on_tokens(vision_encoders::msg::ImageTokens::SharedPtr ms
         const int P = msg->grid_h * msg->grid_w, D = msg->dim;
         if (P != token_rows_ || D != token_dim_)
             throw std::runtime_error(
-                "g1_adapt_sonic: encoder '" + msg->header.frame_id + "' emits (" +
+                "g1_vibe_sonic: encoder '" + msg->header.frame_id + "' emits (" +
                 std::to_string(P) + ", " + std::to_string(D) + ") tokens, policy wants (" +
                 std::to_string(token_rows_) + ", " + std::to_string(token_dim_) + ")");
         if (!cls_buf_.empty() && msg->cls.empty())
-            throw std::runtime_error("g1_adapt_sonic: policy has a q_cls port but encoder '" +
+            throw std::runtime_error("g1_vibe_sonic: policy has a q_cls port but encoder '" +
                                      msg->header.frame_id + "' emits no CLS token");
         tokens_seen_ = true;
         RCLCPP_INFO(this->get_logger(), "tokens flowing: %s (%u x %u, dim %u)",
@@ -176,7 +176,7 @@ void G1AdaptSonicNode::on_tokens(vision_encoders::msg::ImageTokens::SharedPtr ms
 
 // ── Control ──────────────────────────────────────────────────────
 
-RobotCommand G1AdaptSonicNode::policy_control()
+RobotCommand G1VibeSonicNode::policy_control()
 {
     const double dt = config_ ? config_->control_dt : 0.02;
     if (!tokens_seen_)
@@ -191,7 +191,7 @@ RobotCommand G1AdaptSonicNode::policy_control()
     return cmd;
 }
 
-void G1AdaptSonicNode::publish_attn()
+void G1VibeSonicNode::publish_attn()
 {
     if (!attn_pub_)
         return;
@@ -221,7 +221,7 @@ void G1AdaptSonicNode::publish_attn()
 int main(int argc, char* argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<cpp_control::G1AdaptSonicNode>());
+    rclcpp::spin(std::make_shared<cpp_control::G1VibeSonicNode>());
     rclcpp::shutdown();
     return 0;
 }

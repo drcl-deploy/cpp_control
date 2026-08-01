@@ -32,10 +32,10 @@ namespace cpp_control
  * Smoke output: the graph's `attn` (queries x patches) is republished on
  * `attention_topic` every policy tick — see scripts/attn_viewer.py.
  */
-class G1AdaptSonicNode : public G1SonicNode
+class G1VibeSonicNode : public G1SonicNode
 {
 public:
-    explicit G1AdaptSonicNode(const std::string& node_name = "g1_adapt_sonic_node");
+    explicit G1VibeSonicNode(const std::string& node_name = "g1_vibe_sonic_node");
 
 protected:
     Binding make_binding(float* dst, const deploy::PortSpec& port,

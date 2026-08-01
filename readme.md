@@ -25,9 +25,9 @@ ros2 launch cpp_control g1_locomotion.launch.py
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
 
-# G1 adapt-SONIC (vision): encoder first, then the node, then the smoke viewer
+# G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
 ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
-ros2 launch cpp_control g1_adapt_sonic.launch.py \
+ros2 launch cpp_control g1_vibe_sonic.launch.py \
     onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
 ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 

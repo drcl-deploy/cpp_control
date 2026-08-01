@@ -14,7 +14,7 @@ npz / wire / stand  ──>  g1::Motion  ──views──>  jp/jv (MJ), jp_il/j
 
 | factory | input | twist | used by |
 |---|---|---|---|
-| `from_npz(path, perm)` | retargeted-dataset / mjlab npz (`joint_pos`, `joint_vel`, `body_{pos,quat,lin_vel,ang_vel}_w`, `fps`) — mocke `MjMotionLoader` twin; `perm = g1::MJ2IL` for IL-ordered clips | from file | sonic, adapt-sonic |
+| `from_npz(path, perm)` | retargeted-dataset / mjlab npz (`joint_pos`, `joint_vel`, `body_{pos,quat,lin_vel,ang_vel}_w`, `fps`) — mocke `MjMotionLoader` twin; `perm = g1::MJ2IL` for IL-ordered clips | from file | sonic, vibe-sonic |
 | `from_wire(T, rows)` | textop topic rows `[jp29 \| jv29 \| anchor_pos3 \| anchor_quat4]`, IL-ordered | zeros (`has_twist=false`) | textop, residual v1/v2 |
 | `stand(defaults)` | nominal pose, identity anchor | zeros (truth) | every stand mode |
 
@@ -53,7 +53,7 @@ consumer samples through:
 | node | reads |
 |---|---|
 | `g1_sonic` | `jp/jv` (tokenizer, motion_cmd), `aligned_root_quat` (tokenizer r6d) |
-| `g1_adapt_sonic` | + `root_{lin,ang}_vel_b` (augmentation twist cmds) |
+| `g1_vibe_sonic` | + `root_{lin,ang}_vel_b` (augmentation twist cmds) |
 | `g1_textop` | `jp_il/jv_il` (WBC command), `root_pos/quat` (frame alignment); pads pre/post directly on the public arrays |
 | `g1::SonicStand` | `stand()` reference + clock alignment |
 

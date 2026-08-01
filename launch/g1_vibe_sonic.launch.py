@@ -5,7 +5,7 @@ Prereqs: an encoder publishing /enc/tokens (vision_encoders encoder.launch.py)
 whose backbone matches the policy's kv port — validated at first token.
 
 Usage:
-    ros2 launch cpp_control g1_adapt_sonic.launch.py \\
+    ros2 launch cpp_control g1_vibe_sonic.launch.py \\
         onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
     # smoke the attention rows:
     ros2 run cpp_control attn_viewer.py
@@ -25,7 +25,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
-    default_config = os.path.join(pkg, 'config', 'vibe', 'g1_adapt_sonic.yaml')
+    default_config = os.path.join(pkg, 'config', 'vibe', 'g1_vibe_sonic.yaml')
 
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),
@@ -41,8 +41,8 @@ def generate_launch_description():
 
         Node(
             package='cpp_control',
-            executable='g1_adapt_sonic_node',
-            name='g1_adapt_sonic_node',
+            executable='g1_vibe_sonic_node',
+            name='g1_vibe_sonic_node',
             output='screen',
             parameters=[{
                 'config_path': LaunchConfiguration('config_path'),
