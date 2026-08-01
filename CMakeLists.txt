@@ -87,11 +87,11 @@ if(messages_FOUND)
   target_compile_definitions(cpp_control_common PUBLIC HAS_MESSAGES)
 endif()
 
-# ── Deploy infra: manifest-driven ONNX + motion clips (ROS-free) ──
+# ── Deploy infra: manifest-driven ONNX + g1 motion (ROS-free) ──
 add_library(cpp_control_deploy STATIC
   src/common/deploy_manifest.cpp
   src/common/onnx_session.cpp
-  src/common/motion_clip.cpp
+  src/common/g1/motion.cpp
   thirdparty/cnpy/cnpy.cpp)
 target_include_directories(cpp_control_deploy PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
@@ -127,7 +127,7 @@ if(unitree_hg_FOUND OR messages_FOUND)
   # Tracker library (motion handling, WBC obs, frame alignment)
   add_library(cpp_control_g1_textop_tracker STATIC src/tasks/tracker/g1_textop_tracker.cpp)
   target_compile_definitions(cpp_control_g1_textop_tracker PRIVATE CPP_CONTROL_TEXTOP_TRACKER_LIB)
-  target_link_libraries(cpp_control_g1_textop_tracker cpp_control_g1)
+  target_link_libraries(cpp_control_g1_textop_tracker cpp_control_g1 cpp_control_deploy)
   ament_target_dependencies(cpp_control_g1_textop_tracker
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
@@ -139,7 +139,7 @@ if(unitree_hg_FOUND OR messages_FOUND)
 
   # Task: tracker (g1 textop — standalone WBC)
   add_executable(g1_textop_node src/tasks/tracker/g1_textop_tracker.cpp)
-  target_link_libraries(g1_textop_node cpp_control_g1)
+  target_link_libraries(g1_textop_node cpp_control_g1 cpp_control_deploy)
   ament_target_dependencies(g1_textop_node
     rclcpp std_msgs sensor_msgs geometry_msgs ${G1_DEPS})
 
@@ -166,6 +166,13 @@ if(unitree_hg_FOUND OR messages_FOUND)
   add_executable(g1_sonic_node src/tasks/tracker/g1_sonic.cpp)
   target_link_libraries(g1_sonic_node cpp_control_g1 cpp_control_deploy)
   ament_target_dependencies(g1_sonic_node
+    rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+
+  # Sonic tracker library (for the adapt-sonic node to inherit from)
+  add_library(cpp_control_g1_sonic STATIC src/tasks/tracker/g1_sonic.cpp)
+  target_compile_definitions(cpp_control_g1_sonic PRIVATE CPP_CONTROL_SONIC_LIB)
+  target_link_libraries(cpp_control_g1_sonic cpp_control_g1 cpp_control_deploy)
+  ament_target_dependencies(cpp_control_g1_sonic
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
 
   list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vibe_residual_node g1_vibe_residual_v2_node g1_sonic_node)

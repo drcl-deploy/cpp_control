@@ -2,26 +2,28 @@
 
 #include <cmath>
 #include <cstring>
-#include <sstream>
 #include <stdexcept>
 
+#include "common/g1/joint_orders.hpp"
 #include "common/math_utils.hpp"
 
 namespace cpp_control
 {
 
-// IL (IsaacLab BFS) -> MJ (MuJoCo DFS) joint permutation for G1 29-dof.
-// Single source of truth: mocke/mdp/joint_maps.py (retargeted motion.npz
-// stores joints IL-ordered; pelvis is body 0 in BOTH body orderings).
-static const std::vector<int> G1_IL2MJ = {
-    0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18,
-    2, 5, 8, 11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28,
-};
-
 // ── Constructor ──────────────────────────────────────────────────
 
 G1SonicNode::G1SonicNode(const std::string& node_name)
+    : G1SonicNode(node_name, /*bind_now=*/true)
+{
+}
+
+G1SonicNode::G1SonicNode(const std::string& node_name, bool bind_now)
     : G1Node(node_name), last_policy_tick_(0, 0, RCL_ROS_TIME)
+{
+    construct(bind_now);
+}
+
+void G1SonicNode::construct(bool bind_now)
 {
     const std::string onnx_path = this->declare_parameter("onnx_path", "");
     std::string manifest_path = this->declare_parameter("manifest_path", "");
@@ -32,7 +34,6 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
     cmd_frame_skip_ = this->declare_parameter("cmd_frame_skip", 1);
     start_frame_ = this->declare_parameter("motion_start_frame", 0);
     const bool il_ordered = this->declare_parameter("il_ordered", false);
-    auto joint_perm = this->declare_parameter("motion_joint_perm", std::vector<int64_t>{});
 
     if (onnx_path.empty() || motion_path.empty())
         throw std::runtime_error("g1_sonic: onnx_path and motion_path are required");
@@ -43,21 +44,15 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
     }
 
     manifest_ = deploy::DeployManifest::load(manifest_path);
-    std::vector<int> perm(joint_perm.begin(), joint_perm.end());
-    if (il_ordered)
-    {
-        if (!perm.empty())
-            throw std::runtime_error("g1_sonic: il_ordered and motion_joint_perm are exclusive");
-        perm = G1_IL2MJ;
-    }
-    clip_ = std::make_unique<MotionClip>(MotionClip::load(motion_path, perm));
-    playback_ = std::make_unique<MotionPlayback>(*clip_, anchor_body_);
+    motion_ = std::make_unique<g1::Motion>(
+        g1::Motion::from_npz(motion_path, il_ordered ? g1::MJ2IL : std::vector<int>{}));
+    clock_ = std::make_unique<g1::MotionClock>(*motion_, anchor_body_);
 
     init();
     apply_manifest_action_meta();
-    make_stand_clip();
-    active_clip_ = clip_.get();
-    active_pb_ = playback_.get();
+    make_stand_motion();
+    active_motion_ = motion_.get();
+    active_clock_ = clock_.get();
 
     if (config_ && std::abs(config_->control_dt - manifest_.step_dt) > 1e-6)
         RCLCPP_WARN(this->get_logger(),
@@ -67,29 +62,23 @@ G1SonicNode::G1SonicNode(const std::string& node_name)
     policy_actions_.assign(G1_NUM_MOTOR, 0.0f);
     session_ = std::make_unique<deploy::OnnxSession>(onnx_path);
     output_name_ = manifest_.outputs.front();
+    if (!bind_now)
+        return;  // subclass finishes: extra state, then bind_ports()
     bind_ports();
 
     RCLCPP_INFO(this->get_logger(),
-                "g1_sonic ready: %s (%s) | %zu input ports | clip %d frames @ %.0f fps%s",
+                "g1_sonic ready: %s (%s) | %zu input ports | motion %d frames @ %.0f fps%s",
                 onnx_path.c_str(), manifest_.model_class.c_str(),
-                manifest_.inputs.size(), clip_->num_frames, static_cast<double>(clip_->fps),
+                manifest_.inputs.size(), motion_->num_frames, static_cast<double>(motion_->fps),
                 il_ordered ? " (IL->MJ remapped)" : "");
 }
 
 // ── Stand reference (textop enter_stand_mode equivalent) ─────────
 
-void G1SonicNode::make_stand_clip()
+void G1SonicNode::make_stand_motion()
 {
-    auto stand = std::make_unique<MotionClip>();
-    stand->num_frames = 1;
-    stand->num_joints = G1_NUM_MOTOR;
-    stand->num_bodies = 1;
-    stand->fps = clip_->fps;
-    stand->joint_pos.assign(default_angles_.begin(), default_angles_.end());
-    stand->joint_vel.assign(G1_NUM_MOTOR, 0.0f);
-    stand->body_quat_w = {1.0f, 0.0f, 0.0f, 0.0f};
-    stand_clip_ = std::move(stand);
-    stand_playback_ = std::make_unique<MotionPlayback>(*stand_clip_, 0);
+    stand_motion_ = std::make_unique<g1::Motion>(g1::Motion::stand(default_angles_, motion_->fps));
+    stand_clock_ = std::make_unique<g1::MotionClock>(*stand_motion_, 0);
 }
 
 void G1SonicNode::enter_stand()
@@ -142,12 +131,13 @@ void G1SonicNode::bind_ports()
             if (term.offset + term.dim > port.dim())
                 throw std::runtime_error("g1_sonic: term '" + term.name +
                                          "' overruns port '" + port.name + "'");
-            bindings_.push_back(make_binding(buf + term.offset, term));
+            bindings_.push_back(make_binding(buf + term.offset, port, term));
         }
     }
 }
 
-G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpec& spec)
+G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::PortSpec& port,
+                                               const deploy::TermSpec& spec)
 {
     auto history_binding = [&](int width, std::function<void(float*)> compute) -> Binding {
         if (spec.history <= 0 || spec.dim != width * spec.history)
@@ -196,11 +186,11 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
     // ── tokenizer term (mocke/sonic/mdp/observations.py sonic_g1_tokenizer) ──
     if (spec.name == "g1_tokenizer")
     {
-        const int expected = future_steps_ * (2 * clip_->num_joints + 6);
-        if (spec.dim != expected || clip_->num_joints != G1_NUM_MOTOR)
+        const int expected = future_steps_ * (2 * motion_->num_joints + 6);
+        if (spec.dim != expected || motion_->num_joints != G1_NUM_MOTOR)
             throw std::runtime_error("g1_sonic: tokenizer dim " + std::to_string(spec.dim) +
                                      " != F*(2J+6) = " + std::to_string(expected));
-        tokenizer_flat_.assign(2 * future_steps_ * clip_->num_joints, 0.0f);
+        tokenizer_flat_.assign(2 * future_steps_ * motion_->num_joints, 0.0f);
         return {dst, &spec, [this](float* out) { fill_tokenizer(out); }};
     }
 
@@ -208,7 +198,7 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
     // [jp(f0..fF-1).flat | jv(f0..fF-1).flat] at cmd_frame_skip; F from the dim.
     if (spec.name == "motion_cmd")
     {
-        const int J = clip_->num_joints;
+        const int J = motion_->num_joints;
         if (spec.dim % (2 * J) != 0)
             throw std::runtime_error("g1_sonic: motion_cmd dim " + std::to_string(spec.dim) +
                                      " not divisible by 2*J");
@@ -216,17 +206,17 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
         return {dst, &spec, [this, F, J](float* out) {
                     for (int s = 0; s < F; ++s)
                     {
-                        const int f = active_pb_->future_frame(s * cmd_frame_skip_);
-                        std::memcpy(out + s * J, active_clip_->jp(f), J * sizeof(float));
-                        std::memcpy(out + (F + s) * J, active_clip_->jv(f), J * sizeof(float));
+                        const int f = active_clock_->future_frame(s * cmd_frame_skip_);
+                        std::memcpy(out + s * J, active_motion_->jp(f), J * sizeof(float));
+                        std::memcpy(out + (F + s) * J, active_motion_->jv(f), J * sizeof(float));
                     }
                 }};
     }
 
-    std::ostringstream known;
-    known << "base_ang_vel joint_pos joint_vel actions gravity_dir g1_tokenizer motion_cmd";
-    throw std::runtime_error("g1_sonic: no writer for term '" + spec.name +
-                             "' — known terms: " + known.str());
+    throw std::runtime_error("g1_sonic: no writer for term '" + spec.name + "' in port '" +
+                             port.name +
+                             "' — known: base_ang_vel joint_pos joint_vel actions gravity_dir "
+                             "g1_tokenizer motion_cmd");
 }
 
 // ── Tokenizer (verbatim sonic_g1_tokenizer op-chain) ─────────────
@@ -236,13 +226,13 @@ G1SonicNode::Binding G1SonicNode::make_binding(float* dst, const deploy::TermSpe
 
 void G1SonicNode::fill_tokenizer(float* dst)
 {
-    const int F = future_steps_, J = active_clip_->num_joints, skip = frame_skip_;
+    const int F = future_steps_, J = active_motion_->num_joints, skip = frame_skip_;
 
     for (int s = 0; s < F; ++s)
     {
-        const int f = active_pb_->future_frame(s * skip);
-        std::memcpy(&tokenizer_flat_[s * J], active_clip_->jp(f), J * sizeof(float));
-        std::memcpy(&tokenizer_flat_[(F + s) * J], active_clip_->jv(f), J * sizeof(float));
+        const int f = active_clock_->future_frame(s * skip);
+        std::memcpy(&tokenizer_flat_[s * J], active_motion_->jp(f), J * sizeof(float));
+        std::memcpy(&tokenizer_flat_[(F + s) * J], active_motion_->jv(f), J * sizeof(float));
     }
 
     const auto& robot_quat = robot_state_.imu_quaternion;
@@ -250,8 +240,8 @@ void G1SonicNode::fill_tokenizer(float* dst)
     for (int s = 0; s < F; ++s)
     {
         std::memcpy(dst + s * row, &tokenizer_flat_[s * 2 * J], 2 * J * sizeof(float));
-        const int f = active_pb_->future_frame(s * skip);
-        auto rot_dif = math::qmul(math::qinv(robot_quat), active_pb_->aligned_anchor_quat(f));
+        const int f = active_clock_->future_frame(s * skip);
+        auto rot_dif = math::qmul(math::qinv(robot_quat), active_clock_->aligned_root_quat(f));
         auto r6d = math::quat_to_rotation_6d(rot_dif);
         std::memcpy(dst + s * row + 2 * J, r6d.data(), 6 * sizeof(float));
     }
@@ -261,13 +251,13 @@ void G1SonicNode::fill_tokenizer(float* dst)
 
 void G1SonicNode::engage_reset()
 {
-    active_clip_ = stand_mode_ ? stand_clip_.get() : clip_.get();
-    active_pb_ = stand_mode_ ? stand_playback_.get() : playback_.get();
-    active_pb_->start(robot_state_.imu_quaternion, stand_mode_ ? 0 : start_frame_);
+    active_motion_ = stand_mode_ ? stand_motion_.get() : motion_.get();
+    active_clock_ = stand_mode_ ? stand_clock_.get() : clock_.get();
+    active_clock_->engage(robot_state_.imu_quaternion, stand_mode_ ? 0 : start_frame_);
     for (auto& h : histories_)
         h->reset();
     std::fill(policy_actions_.begin(), policy_actions_.end(), 0.0f);
-    clip_end_logged_ = false;
+    motion_end_logged_ = false;
     if (stand_mode_)
         RCLCPP_INFO(this->get_logger(), "sonic engaged: STAND (nominal-pose reference)");
     else
@@ -313,11 +303,11 @@ RobotCommand G1SonicNode::policy_control()
         mc.kd = kds_[i];
     }
 
-    active_pb_->step(dt);
-    if (!stand_mode_ && active_pb_->finished() && !clip_end_logged_)
+    active_clock_->step(dt);
+    if (!stand_mode_ && active_clock_->finished() && !motion_end_logged_)
     {
-        clip_end_logged_ = true;
-        RCLCPP_INFO(this->get_logger(), "clip finished — holding last frame");
+        motion_end_logged_ = true;
+        RCLCPP_INFO(this->get_logger(), "motion finished — holding last frame");
     }
 
     return cmd;
@@ -335,7 +325,7 @@ void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
     }
     prev_rb_joy_ = rb;
 
-    // A (base already switched to POLICY): leave stand, (re)start the clip.
+    // A (base already switched to POLICY): leave stand, (re)start the motion.
     if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1)
     {
         stand_mode_ = false;
@@ -363,6 +353,7 @@ void G1SonicNode::on_gamepad()
 
 // ── Entry point ──────────────────────────────────────────────────
 
+#ifndef CPP_CONTROL_SONIC_LIB
 int main(int argc, char* argv[])
 {
     rclcpp::init(argc, argv);
@@ -370,3 +361,4 @@ int main(int argc, char* argv[])
     rclcpp::shutdown();
     return 0;
 }
+#endif

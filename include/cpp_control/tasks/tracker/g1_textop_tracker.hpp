@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpp_control/robots/g1.hpp"
+#include "common/g1/motion.hpp"
 #include "common/math_utils.hpp"
 #include "common/observation_utils.hpp"
 
@@ -17,8 +18,7 @@ namespace cpp_control
  *
  * Intermediate class (level 1.5) between G1Node and task nodes that need
  * whole-body motion tracking.  Provides:
- *   - IsaacLab / MuJoCo joint reindexing
- *   - Motion subscription + parsing + padding + commit
+ *   - Motion subscription + parsing + padding + commit (g1::Motion)
  *   - WBC observation building (431 dims)
  *   - Frame alignment (ref -> robot)
  *   - Stand mode state machine
@@ -52,7 +52,7 @@ protected:
     static constexpr int NQ            = 29;
     static constexpr int WBC_NUM_OBS   = 431;
 
-    // ── IsaacLab <-> MuJoCo reindexing ──────────────────────────
+    // ── IsaacLab <-> MuJoCo reindexing (views of common/g1/joint_orders) ──
     std::array<int, NQ> mj_to_il_{};
     std::array<int, NQ> il_to_mj_{};
 
@@ -61,20 +61,12 @@ protected:
     std::vector<float> build_wbc_observation();
     std::vector<float> wbc_last_actions_;
 
-    // ── Motion buffers (active) ─────────────────────────────────
-    std::vector<std::vector<float>> mot_joint_pos_;   // [T][NQ] IsaacLab order
-    std::vector<std::vector<float>> mot_joint_vel_;   // [T][NQ]
-    std::vector<std::array<float, 3>> mot_anchor_pos_;
-    std::vector<std::array<float, 4>> mot_anchor_ori_;  // wxyz
+    // ── Motion (active + pending staged while standing) ─────────
+    g1::Motion mot_;   ///< active reference (MJ-canonical; anchor = body 0)
+    g1::Motion pend_;
     int  mot_T_     = 0;
     int  mot_t_     = 0;
     bool mot_ready_ = false;
-
-    // ── Motion buffers (pending, staged while standing) ─────────
-    std::vector<std::vector<float>> pend_joint_pos_;
-    std::vector<std::vector<float>> pend_joint_vel_;
-    std::vector<std::array<float, 3>> pend_anchor_pos_;
-    std::vector<std::array<float, 4>> pend_anchor_ori_;
     int  pend_T_     = 0;
     bool pend_ready_ = false;
 
@@ -110,7 +102,6 @@ protected:
 
 private:
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr motion_sub_;
-    void build_reindex_tables();
 };
 
 }  // namespace cpp_control

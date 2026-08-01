@@ -260,9 +260,10 @@ RobotCommand G1VibeResidualNode::policy_control()
     {
         std_msgs::msg::Float32MultiArray gmsg;
         gmsg.data.reserve(NQ + 3 + 4);
-        const auto& jp  = mot_joint_pos_[mot_t_];           // IL order
-        const auto& ap  = mot_anchor_pos_[mot_t_];
-        const auto& aq  = mot_anchor_ori_[mot_t_];
+        std::array<float, NQ> jp;  // IL order
+        mot_.jp_il(mot_t_, jp.data());
+        const auto ap = mot_.root_pos(mot_t_);
+        const auto aq = mot_.root_quat(mot_t_);
         gmsg.data.insert(gmsg.data.end(), jp.begin(), jp.end());
         gmsg.data.insert(gmsg.data.end(), {ap[0], ap[1], ap[2]});
         gmsg.data.insert(gmsg.data.end(), {aq[0], aq[1], aq[2], aq[3]});

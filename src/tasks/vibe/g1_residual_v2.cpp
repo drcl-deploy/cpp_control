@@ -67,17 +67,18 @@ std::vector<float> G1VibeResidualV2Node::build_hlc_observation()
     }
 
     // ─ 8. joint_state_command (290) — future joint pos+vel, IL order
+    std::array<float, NQ> row;
     for (int s = 0; s < FUTURE_STEPS; ++s)
     {
         int idx = std::min(mot_t_ + s, mot_T_ - 1);
-        for (int j = 0; j < NQ; ++j)
-            obs.push_back(mot_joint_pos_[idx][j]);
+        mot_.jp_il(idx, row.data());
+        obs.insert(obs.end(), row.begin(), row.end());
     }
     for (int s = 0; s < FUTURE_STEPS; ++s)
     {
         int idx = std::min(mot_t_ + s, mot_T_ - 1);
-        for (int j = 0; j < NQ; ++j)
-            obs.push_back(mot_joint_vel_[idx][j]);
+        mot_.jv_il(idx, row.data());
+        obs.insert(obs.end(), row.begin(), row.end());
     }
 
     // ─ 9. motion_anchor_pos_b (15) — future anchor pos, body-frame
@@ -92,7 +93,7 @@ std::vector<float> G1VibeResidualV2Node::build_hlc_observation()
         {
             int idx = std::min(mot_t_ + s, mot_T_ - 1);
             auto [ref_pos_r, ref_quat_r] =
-                transform_ref_to_robot(mot_anchor_pos_[idx], mot_anchor_ori_[idx]);
+                transform_ref_to_robot(mot_.root_pos(idx), mot_.root_quat(idx));
             auto [rel_pos, _] = math::subtract_frames(
                 robot_pos, robot_quat, ref_pos_r, ref_quat_r);
             for (int i = 0; i < 3; ++i)
@@ -108,7 +109,7 @@ std::vector<float> G1VibeResidualV2Node::build_hlc_observation()
         {
             int idx = std::min(mot_t_ + s, mot_T_ - 1);
             auto [ref_pos_r, ref_quat_r] =
-                transform_ref_to_robot(mot_anchor_pos_[idx], mot_anchor_ori_[idx]);
+                transform_ref_to_robot(mot_.root_pos(idx), mot_.root_quat(idx));
             auto [_, rel_quat] = math::subtract_frames(
                 robot_init_pos_, robot_quat, ref_pos_r, ref_quat_r);
             auto r6d = math::quat_to_rotation_6d(rel_quat);

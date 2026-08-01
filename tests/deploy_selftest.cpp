@@ -16,8 +16,9 @@
 
 #include "cnpy/cnpy.h"
 #include "common/deploy_manifest.hpp"
+#include "common/g1/joint_orders.hpp"
+#include "common/g1/motion.hpp"
 #include "common/math_utils.hpp"
-#include "common/motion_clip.hpp"
 #include "common/obs_terms.hpp"
 #include "common/onnx_session.hpp"
 
@@ -112,13 +113,14 @@ static void test_manifest()
     std::puts("ok  manifest");
 }
 
-// ── MotionClip + playback: clamp, heading alignment ─────────────
+// ── g1::Motion + clock: clamp, heading alignment, twist, views ──
 
 static void test_motion()
 {
     const std::string path = tmp_path("g1_sonic_selftest_motion.npz");
     const int T = 6, J = 3, B = 2;
     std::vector<float> jp(T * J), jv(T * J), bq(T * B * 4, 0.f);
+    std::vector<float> bp(T * B * 3, 0.f), blv(T * B * 3, 0.f), bav(T * B * 3, 0.f);
     for (int t = 0; t < T; ++t)
         for (int j = 0; j < J; ++j)
         {
@@ -132,35 +134,44 @@ static void test_motion()
         bq[(t * B + 0) * 4 + 0] = c;
         bq[(t * B + 0) * 4 + 3] = s;
         bq[(t * B + 1) * 4 + 0] = 1.f;
+        blv[(t * B + 0) * 3 + 0] = 1.f;  // anchor world vel = +x
     }
     std::vector<double> fps = {50.0};
     cnpy::npz_save(path, "joint_pos", jp.data(), {(size_t)T, (size_t)J}, "w");
     cnpy::npz_save(path, "joint_vel", jv.data(), {(size_t)T, (size_t)J}, "a");
+    cnpy::npz_save(path, "body_pos_w", bp.data(), {(size_t)T, (size_t)B, 3}, "a");
     cnpy::npz_save(path, "body_quat_w", bq.data(), {(size_t)T, (size_t)B, 4}, "a");
+    cnpy::npz_save(path, "body_lin_vel_w", blv.data(), {(size_t)T, (size_t)B, 3}, "a");
+    cnpy::npz_save(path, "body_ang_vel_w", bav.data(), {(size_t)T, (size_t)B, 3}, "a");
     cnpy::npz_save(path, "fps", fps.data(), {1}, "a");
 
-    auto clip = MotionClip::load(path);
-    CHECK(clip.num_frames == T && clip.num_joints == J && clip.num_bodies == B);
-    CHECK(clip.fps == 50.f);
-    CHECK(clip.jp(2)[1] == 21.f && clip.jv(1)[0] == -10.f);
+    auto mot = g1::Motion::from_npz(path);
+    CHECK(mot.num_frames == T && mot.num_joints == J && mot.num_bodies == B);
+    CHECK(mot.fps == 50.f);
+    CHECK(mot.jp(2)[1] == 21.f && mot.jv(1)[0] == -10.f);
 
-    MotionPlayback pb(clip, 0);
+    // ref-anchor-frame twist: world +x through a +90° yaw anchor → body -y
+    CHECK(mot.has_twist);
+    auto v = mot.root_lin_vel_b(0);
+    CHECK(std::fabs(v[0]) < 1e-5 && std::fabs(v[1] + 1.f) < 1e-5);
+
+    g1::MotionClock clk(mot, 0);
     std::array<float, 4> robot_identity = {1.f, 0.f, 0.f, 0.f};
-    pb.start(robot_identity);
-    CHECK(pb.frame() == 0);
+    clk.engage(robot_identity);
+    CHECK(clk.frame() == 0);
     // future clamp: mirror FutureMotionCommand.future_frames
-    CHECK(pb.future_frame(3) == 3 && pb.future_frame(99) == T - 1);
+    CHECK(clk.future_frame(3) == 3 && clk.future_frame(99) == T - 1);
     for (int i = 0; i < 10; ++i)
-        pb.step(0.02);  // 50 fps * 0.02 = 1 frame/step
-    CHECK(pb.frame() == 5 && pb.finished());
+        clk.step(0.02);  // 50 fps * 0.02 = 1 frame/step
+    CHECK(clk.frame() == 5 && clk.finished());
 
     // heading alignment: ref yaw 90°, robot identity → aligned ref ≈ identity
-    auto q = pb.aligned_anchor_quat(0);
+    auto q = clk.aligned_root_quat(0);
     CHECK(std::fabs(q[0] - 1.f) < 1e-5 && std::fabs(q[3]) < 1e-5);
 
     // joint permutation: reversed columns
-    auto clip_perm = MotionClip::load(path, {2, 1, 0});
-    CHECK(clip_perm.jp(2)[0] == 22.f && clip_perm.jp(2)[2] == 20.f);
+    auto mot_perm = g1::Motion::from_npz(path, {2, 1, 0});
+    CHECK(mot_perm.jp(2)[0] == 22.f && mot_perm.jp(2)[2] == 20.f);
 
     // int64 fps (retargeted-dataset producer) must read as 50, not denormal garbage
     const std::string path_i = tmp_path("g1_sonic_selftest_motion_ifps.npz");
@@ -169,8 +180,54 @@ static void test_motion()
     cnpy::npz_save(path_i, "joint_vel", jv.data(), {(size_t)T, (size_t)J}, "a");
     cnpy::npz_save(path_i, "body_quat_w", bq.data(), {(size_t)T, (size_t)B, 4}, "a");
     cnpy::npz_save(path_i, "fps", fps_i.data(), {1}, "a");
-    CHECK(MotionClip::load(path_i).fps == 50.f);
+    auto mot_i = g1::Motion::from_npz(path_i);
+    CHECK(mot_i.fps == 50.f);
+    CHECK(!mot_i.has_twist);  // no vel arrays → zero-filled, flagged
+    auto vz = mot_i.root_lin_vel_b(0);
+    CHECK(vz[0] == 0.f && vz[1] == 0.f && vz[2] == 0.f);
     std::puts("ok  motion");
+}
+
+// ── g1 joint orders + IL/MJ views + wire/stand factories ────────
+
+static void test_joint_orders()
+{
+    const int J = g1::NUM_JOINTS;
+    // the two tables must be mutual inverses derived from the name lists
+    for (int i = 0; i < J; ++i)
+    {
+        CHECK(g1::IL2MJ[g1::MJ2IL[i]] == i);
+        CHECK(g1::MJ_JOINTS[i] == g1::IL_JOINTS[g1::MJ2IL[i]]);
+    }
+
+    // from_wire: IL rows in → MJ storage; jp_il must return the original row
+    const int T = 2, cols = 2 * J + 3 + 4;
+    std::vector<float> rows(T * cols, 0.f);
+    for (int t = 0; t < T; ++t)
+    {
+        for (int j = 0; j < J; ++j)
+        {
+            rows[t * cols + j] = static_cast<float>(t * 100 + j);        // jp IL
+            rows[t * cols + J + j] = -static_cast<float>(t * 100 + j);   // jv IL
+        }
+        rows[t * cols + 2 * J + 2] = 0.7f;   // anchor z
+        rows[t * cols + 2 * J + 3] = 1.f;    // anchor quat w
+    }
+    auto wire = g1::Motion::from_wire(T, rows.data());
+    CHECK(wire.num_frames == T && wire.num_joints == J && wire.num_bodies == 1);
+    std::array<float, g1::NUM_JOINTS> il;
+    wire.jp_il(1, il.data());
+    for (int j = 0; j < J; ++j)
+        CHECK(il[j] == static_cast<float>(100 + j));
+    CHECK(wire.root_pos(1)[2] == 0.7f && wire.root_quat(1)[0] == 1.f);
+    CHECK(!wire.has_twist);
+
+    // stand factory: 1 frame, nominal pose, identity anchor, zero (true) twist
+    std::vector<float> defaults(J, 0.5f);
+    auto stand = g1::Motion::stand(defaults);
+    CHECK(stand.num_frames == 1 && stand.jp(0)[7] == 0.5f && stand.jv(0)[7] == 0.f);
+    CHECK(stand.root_quat(0)[0] == 1.f && stand.has_twist);
+    std::puts("ok  joint orders + wire/stand");
 }
 
 // ── Tokenizer row layout (the chop) ─────────────────────────────
@@ -235,6 +292,7 @@ int main(int argc, char** argv)
     test_history();
     test_manifest();
     test_motion();
+    test_joint_orders();
     test_tokenizer_layout();
 
     if (argc > 1)

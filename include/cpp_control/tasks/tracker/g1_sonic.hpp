@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "common/deploy_manifest.hpp"
-#include "common/motion_clip.hpp"
+#include "common/g1/motion.hpp"
 #include "common/obs_terms.hpp"
 #include "common/onnx_session.hpp"
 #include "cpp_control/robots/g1.hpp"
@@ -25,8 +25,8 @@ namespace cpp_control
  * Works unchanged for the base-SONIC export (ports: tokenizer, policy) and
  * the SONIC+adapter export (+ augmentation ports) — the manifest decides.
  *
- * Motion clips: MJ-native (mjlab demo) or IL-ordered retargeted-dataset npz
- * (`il_ordered:=true` applies the baked IL2MJ permutation).
+ * Motion: g1::Motion (MJ-native mjlab npz, or IL-ordered retargeted-dataset
+ * npz via `il_ordered:=true`).
  *
  * Stand mode (RB / R1): SONIC tracks a synthetic 1-frame reference — nominal
  * pose, identity anchor at the robot's heading. A (re)starts the loaded clip.
@@ -43,7 +43,6 @@ protected:
     void on_gamepad() override;
 #endif
 
-private:
     /// One manifest term bound to its slice of a session input buffer.
     struct Binding
     {
@@ -54,23 +53,25 @@ private:
 
     void apply_manifest_action_meta();
     void bind_ports();
-    Binding make_binding(float* dst, const deploy::TermSpec& spec);
-    void make_stand_clip();
+    /// Subclasses extend with new ports/terms; fall back to this for the base set.
+    virtual Binding make_binding(float* dst, const deploy::PortSpec& port,
+                                 const deploy::TermSpec& spec);
+    void make_stand_motion();
     void enter_stand();
-    void engage_reset();
+    virtual void engage_reset();
     void fill_tokenizer(float* dst);
 
     // deploy artifacts
     deploy::DeployManifest manifest_;
     std::unique_ptr<deploy::OnnxSession> session_;
-    std::unique_ptr<MotionClip> clip_;
-    std::unique_ptr<MotionPlayback> playback_;
+    std::unique_ptr<g1::Motion> motion_;
+    std::unique_ptr<g1::MotionClock> clock_;
 
     // stand mode: synthetic 1-frame reference (nominal pose, identity anchor)
-    std::unique_ptr<MotionClip> stand_clip_;
-    std::unique_ptr<MotionPlayback> stand_playback_;
-    MotionClip* active_clip_ = nullptr;      ///< clip the obs writers read
-    MotionPlayback* active_pb_ = nullptr;
+    std::unique_ptr<g1::Motion> stand_motion_;
+    std::unique_ptr<g1::MotionClock> stand_clock_;
+    g1::Motion* active_motion_ = nullptr;    ///< reference the obs writers read
+    g1::MotionClock* active_clock_ = nullptr;
     bool stand_mode_ = false;
     bool pending_engage_ = false;  ///< explicit re-engage (stand <-> track switches)
     bool prev_rb_joy_ = false;
@@ -91,7 +92,15 @@ private:
     std::string output_name_;
 
     rclcpp::Time last_policy_tick_;
-    bool clip_end_logged_ = false;
+    bool motion_end_logged_ = false;
+
+    /// Deferred-bind hook: a subclass constructor passes bind_now=false, adds
+    /// its own state, then calls bind_ports() itself (virtual make_binding
+    /// resolves correctly only after the base subobject is constructed).
+    G1SonicNode(const std::string& node_name, bool bind_now);
+
+private:
+    void construct(bool bind_now);
 };
 
 }  // namespace cpp_control
