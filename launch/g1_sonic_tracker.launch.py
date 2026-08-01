@@ -30,10 +30,11 @@ def generate_launch_description():
     with open(default_config, 'r') as f:
         config = yaml.safe_load(f)
     default_onnx = os.path.join(pkg, 'models', config['onnx_path'])
-    # motion defaults to the yaml's drop-in path only if it's actually there;
-    # otherwise empty = boot into stand and wait for streamed clips.
-    default_motion = os.path.join(pkg, 'models', config['motion_path'])
-    if not os.path.exists(default_motion):
+    # motion resolves against models/ only when the yaml names one AND it's
+    # installed; otherwise empty = boot into stand, wait for streamed clips.
+    rel_motion = config.get('motion_path', '')
+    default_motion = os.path.join(pkg, 'models', rel_motion) if rel_motion else ''
+    if default_motion and not os.path.isfile(default_motion):
         default_motion = ''
 
     return LaunchDescription([

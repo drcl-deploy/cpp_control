@@ -11,7 +11,7 @@ workflow: "unitree"
 lowcmd_topic: "/lowcmd"
 lowstate_topic: "/lowstate"
 
-onnx_path: "tracker/g1_textop/exported/policy.onnx"
+onnx_path: "tracker/textop/exported/policy.onnx"
 
 # Control gains (MuJoCo joint order) — from textop_ctrl deploy config
 kps: [40.18, 99.10, 40.18, 99.10, 28.50, 28.50,

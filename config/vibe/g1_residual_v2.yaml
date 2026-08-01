@@ -21,7 +21,7 @@ lowstate_topic: "/lowstate"
 hlc_onnx_path: "vibe/g1_residual_v2/exported/policy.onnx"
 
 # WBC (whole-body controller, same weights as textop)
-wbc_onnx_path: "tracker/g1_textop/exported/policy.onnx"
+wbc_onnx_path: "tracker/textop/exported/policy.onnx"
 
 # ── Visual backbone ─────────────────────────────────────────────
 embedding_dim: 1152

@@ -29,7 +29,7 @@ G1TextopTrackerNode::G1TextopTrackerNode(const std::string& node_name)
     RCLCPP_INFO(this->get_logger(), "Subscribing to motion topic: %s", motion_topic.c_str());
 
     // Load WBC policy (from explicit param only; subclasses may override)
-    std::string wbc_onnx = this->declare_parameter("onnx_model_path", "");
+    std::string wbc_onnx = this->declare_parameter("onnx_path", "");
     if (!wbc_onnx.empty())
     {
         wbc_policy_ = std::make_unique<ONNXPolicy>(wbc_onnx);

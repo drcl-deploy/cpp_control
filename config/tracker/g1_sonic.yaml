@@ -14,8 +14,8 @@ lowcmd_topic: "/lowcmd"
 lowstate_topic: "/lowstate"
 
 # deploy artifacts (relative -> resolved against models/ by the launch file)
-onnx_path: "tracker/g1_sonic.onnx"        # .manifest.json is picked up alongside
-motion_path: "tracker/g1_sonic_motion.npz"
+onnx_path: "tracker/sonic/g1_sonic_base.onnx"        # .manifest.json is picked up alongside
+motion_path: ""   # empty = boot into stand, stream clips with `publish-motion`
 
 # mjlab MJ joint order == unitree_hg motor order for G1 29-dof.
 # Asserted against the manifest's joint_names at startup.

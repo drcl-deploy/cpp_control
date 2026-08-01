@@ -61,3 +61,11 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/onnx_policies.md](docs/onnx_policies.md) | the two ONNX serving stacks (legacy vs manifest) and when to use which |
 | [docs/motion.md](docs/motion.md) | `g1::Motion` — the one reference-motion class |
 | [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
+
+## acknowledgements
+
+this package deploys policies trained with, and stands on the ideas of:
+
+- [beyondmimic](https://github.com/HybridRobotics/motion_tracking_controller) — motion tracking controller
+- [textop-tracker](https://github.com/TeleHuman/Textop) — text-conditioned whole-body tracking
+- [SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) — whole-body control
