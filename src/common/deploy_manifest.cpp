@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <filesystem>
 #include <stdexcept>
 
 namespace cpp_control
@@ -37,6 +38,12 @@ int PortSpec::dim() const
 
 DeployManifest DeployManifest::load(const std::string& path)
 {
+    if (!std::filesystem::exists(path))
+        throw std::runtime_error(
+            "deploy manifest not found: " + path +
+            "\n  the exporter writes <model>.manifest.json next to <model>.onnx —"
+            "\n  check onnx_path (NOT onnx_model_path, that's the legacy stack),"
+            " or pass manifest_path:= explicitly");
     YAML::Node root = YAML::LoadFile(path);
 
     DeployManifest m;
