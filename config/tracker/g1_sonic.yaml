@@ -55,4 +55,3 @@ action_scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
                0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 
 num_actions: 29
-num_obs: 0   # unused — port dims come from the manifest

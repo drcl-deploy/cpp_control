@@ -1,4 +1,4 @@
-// Self-test for the deploy infra (manifest / history / motion clip / tokenizer
+// Self-test for the deploy infra (manifest / history / g1 motion / tokenizer
 // layout), plus an optional smoke run of a real export:
 //
 //   deploy_selftest                                  # unit checks only
