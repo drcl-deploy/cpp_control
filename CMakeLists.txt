@@ -21,6 +21,7 @@ find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
 find_package(unitree_hg QUIET)
 find_package(unitree_go QUIET)
 find_package(messages QUIET)
+find_package(vision_encoders QUIET)  # ImageTokens (adapt-sonic)
 
 if(unitree_hg_FOUND)
   message(STATUS "Found unitree_hg -- Unitree HG backend enabled")
@@ -175,6 +176,17 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(cpp_control_g1_sonic
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
 
+  # Task: vibe (g1 adapt-sonic — extractor export + /enc/tokens)
+  if(vision_encoders_FOUND)
+    add_executable(g1_adapt_sonic_node src/tasks/vibe/g1_adapt_sonic.cpp)
+    target_link_libraries(g1_adapt_sonic_node cpp_control_g1_sonic)
+    ament_target_dependencies(g1_adapt_sonic_node
+      rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp vision_encoders ${G1_DEPS})
+    list(APPEND INSTALL_TARGETS g1_adapt_sonic_node)
+  else()
+    message(STATUS "vision_encoders NOT found -- g1_adapt_sonic_node disabled")
+  endif()
+
   list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_vibe_residual_node g1_vibe_residual_v2_node g1_sonic_node)
 endif()
 
@@ -213,6 +225,7 @@ install(DIRECTORY launch config models include
 install(PROGRAMS
   scripts/npz_motion_publisher.py
   scripts/viser_ghost_g1_residual.py
+  scripts/attn_viewer.py
   DESTINATION lib/${PROJECT_NAME}/
 )
 
