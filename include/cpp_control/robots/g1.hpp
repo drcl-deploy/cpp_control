@@ -1,12 +1,14 @@
 #pragma once
 
 #include "cpp_control/base.hpp"
+#include "common/g1/sonic_stand.hpp"
 
 #ifdef HAS_UNITREE_HG
 #include "common/gamepad.hpp"
 #include "common/motor_crc_hg.h"
 #include <unitree_hg/msg/low_cmd.hpp>
 #include <unitree_hg/msg/low_state.hpp>
+#include <unitree_go/msg/sport_mode_state.hpp>
 #endif
 
 #ifdef HAS_MESSAGES
@@ -50,6 +52,12 @@ namespace cpp_control
         void publish_command(const RobotCommand &cmd) override;
         int num_motors() const override { return G1_NUM_MOTOR; }
 
+        // --- Robot-level SONIC stand (config: stand_onnx_path) ---
+        bool has_stand() const override { return sonic_stand_ != nullptr; }
+        void engage_stand() override;
+        RobotCommand stand_control() override;
+        std::unique_ptr<g1::SonicStand> sonic_stand_;
+
 #ifdef HAS_UNITREE_HG
         // --- Hook for Level 2: read velocities from gamepad_ after mode switching ---
         virtual void on_gamepad() {}
@@ -80,6 +88,10 @@ namespace cpp_control
 
         rclcpp::Publisher<unitree_hg::msg::LowCmd>::SharedPtr lowcmd_pub_hg_;
         rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr lowstate_sub_hg_;
+
+        // --- SportModeState (odometry: position + velocity) ---
+        void subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedPtr msg);
+        rclcpp::Subscription<unitree_go::msg::SportModeState>::SharedPtr sportmode_sub_;
 #endif
 
 #ifdef HAS_MESSAGES

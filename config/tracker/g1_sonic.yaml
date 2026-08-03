@@ -1,0 +1,57 @@
+# G1 SONIC tracker — node/plumbing config only.
+# Gains, default pose, action scale and joint order come from the exported
+# policy's .manifest.json (the checkpoint is the authority, not this file).
+# The kps/kds/default_angles below are pre-manifest fallbacks for the
+# zeroing/nominal modes and are overwritten at startup.
+
+control_dt: 0.02   # must equal the manifest's control.step_dt (asserted at startup)
+
+msg_type: "hg"
+imu_type: "pelvis"
+workflow: "unitree"   # "unitree" or "drcl_deploy"
+
+lowcmd_topic: "/lowcmd"
+lowstate_topic: "/lowstate"
+
+# deploy artifacts (relative -> resolved against models/ by the launch file)
+onnx_path: "tracker/sonic/g1_sonic_base.onnx"        # .manifest.json is picked up alongside
+motion_path: ""   # empty = boot into stand, stream clips with `publish-motion`
+
+# mjlab MJ joint order == unitree_hg motor order for G1 29-dof.
+# Asserted against the manifest's joint_names at startup.
+joint_names: [
+  left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_joint,
+  left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_joint,
+  right_ankle_pitch_joint, right_ankle_roll_joint,
+  waist_yaw_joint, waist_roll_joint, waist_pitch_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+kps: [100.0, 100.0, 100.0, 150.0, 40.0, 40.0,
+      100.0, 100.0, 100.0, 150.0, 40.0, 40.0,
+      100.0, 40.0, 40.0,
+      40.0, 40.0, 40.0, 40.0, 20.0, 20.0, 20.0,
+      40.0, 40.0, 40.0, 40.0, 20.0, 20.0, 20.0]
+
+kds: [2.0, 2.0, 2.0, 4.0, 2.0, 2.0,
+      2.0, 2.0, 2.0, 4.0, 2.0, 2.0,
+      2.0, 2.0, 2.0,
+      1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5,
+      1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+
+default_angles: [-0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 -0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,
+                 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+action_scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+num_actions: 29

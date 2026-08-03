@@ -54,7 +54,7 @@ public:
     virtual ~BaseNode() = default;
 
 protected:
-    // --- Call from derived constructor after vtable is ready ---
+    // --- Call from any derived constructor; runs only once ---
     void init();
     // --- Level 1 must implement ---
     virtual void init_robot() = 0;
@@ -64,6 +64,13 @@ protected:
     // --- Level 2 can override ---
     virtual RobotCommand policy_control();
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
+
+    // --- Robot-level stand mode (ControlMode::STAND) ---
+    // Level 1 provides an engine (e.g. g1::SonicStand); base wires RB to it.
+    // Tasks with their own stand semantics simply leave it unconfigured.
+    virtual bool has_stand() const { return false; }
+    virtual void engage_stand() {}
+    virtual RobotCommand stand_control() { return nominal_pose_control(); }
 
     // --- Built-in control modes ---
     RobotCommand zeroing_control();
@@ -99,6 +106,7 @@ private:
 
     std::vector<int> prev_buttons_;
 
+    bool init_done_ = false;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 };

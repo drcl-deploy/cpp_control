@@ -1,0 +1,2 @@
+[console_scripts]
+publish-motion = npz_motion_publisher:main

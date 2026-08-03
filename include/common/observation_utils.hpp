@@ -132,5 +132,40 @@ inline void append_rotation_6d(std::vector<float>& obs, const std::array<float, 
         obs.push_back(r6d[i]);
 }
 
+// ── Visual Features ──────────────────────────────────────────
+
+/// Append pre-computed feature vector (e.g. from an external visual backbone)
+inline void append_features(std::vector<float>& obs,
+                             const std::vector<float>& features)
+{
+    obs.insert(obs.end(), features.begin(), features.end());
+}
+
+// ── Relative Pose ────────────────────────────────────────────
+
+/// Append 9D pose of target relative to anchor body frame (pos[3] + rot_6d[6]).
+/// Both quaternions use wxyz convention.
+inline void append_pose9d_body_relative(
+    std::vector<float>& obs,
+    const std::array<float, 3>& anchor_pos,
+    const std::array<float, 4>& anchor_quat,
+    const std::array<float, 3>& target_pos,
+    const std::array<float, 4>& target_quat)
+{
+    // Relative position rotated into anchor frame
+    std::array<float, 3> dp = {target_pos[0] - anchor_pos[0],
+                                target_pos[1] - anchor_pos[1],
+                                target_pos[2] - anchor_pos[2]};
+    auto pos_rel = math::quat_rotate_inverse(anchor_quat, dp);
+    for (int i = 0; i < 3; ++i)
+        obs.push_back(pos_rel[i]);
+
+    // Relative orientation as 6D rotation matrix
+    auto quat_rel = math::qmul(math::qinv(anchor_quat), target_quat);
+    auto r6d = math::quat_to_rotation_6d(quat_rel);
+    for (int i = 0; i < 6; ++i)
+        obs.push_back(r6d[i]);
+}
+
 }  // namespace obs
 }  // namespace cpp_control

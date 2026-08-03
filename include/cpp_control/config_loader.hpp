@@ -19,8 +19,10 @@ struct Config
 
     // Model paths
     std::string policy_path;
-    std::string onnx_path;
+    std::string onnx_path;       // WBC (or single-policy tasks)
+    std::string hlc_onnx_path;   // HLC (vibe residual)
     std::string motion_path;
+    std::string stand_onnx_path; // robot-level SONIC stand (ControlMode::STAND)
 
     // Control gains for 29DOF
     std::vector<double> kps;  // [29]
@@ -41,6 +43,11 @@ struct Config
 
     // Motor-to-action index mapping
     std::vector<int> motor2action_id;
+
+    // Motion padding for smooth stand ↔ motion transitions
+    double motion_pad_length = 0.5;  // seconds
+    bool pre_motion_pad  = true;
+    bool post_motion_pad = true;
 
     // Stiffness and damping parameters
     std::vector<double> stiffness_params;

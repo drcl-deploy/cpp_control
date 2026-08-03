@@ -1,55 +1,21 @@
 # cpp_control
 
-a modular, multi-robot, multi-workflow C++ controller deployment package for ROS2.
-
-developed and tested in ROS2 [humble](https://docs.ros.org/en/humble/index.html)
-
-```mermaid
-graph LR
-    CPP["cpp_control"]
-
-    subgraph drcl [" drcl_deploy "]
-        MJ["mj_sim"]
-        IF["interface"]
-    end
-
-    subgraph unitree [" unitree_ros2 "]
-        UM["unitree_mujoco"]
-        HW["hardware"]
-    end
-
-    SDK["direct hardware SDK"]
-
-    CPP <=="messages"==> drcl
-    CPP <=="unitree_hg"==> unitree
-    CPP <=="custom communication<br/>& data structures"==> SDK
-
-    style CPP fill:#4a6fa5,color:#fff,stroke:none
-    style drcl fill:none,stroke:#6b8f71,stroke-width:2px,color:#6b8f71
-    style unitree fill:none,stroke:#c4a35a,stroke-width:2px,color:#c4a35a
-    style MJ fill:#6b8f71,color:#fff,stroke:none
-    style IF fill:#6b8f71,color:#fff,stroke:none
-    style UM fill:#c4a35a,color:#fff,stroke:none
-    style HW fill:#c4a35a,color:#fff,stroke:none
-    style SDK fill:#8b5e3c,color:#fff,stroke:none
-
-    linkStyle 0 stroke:#6b8f71,stroke-width:4px
-    linkStyle 1 stroke:#c4a35a,stroke-width:4px
-    linkStyle 2 stroke:#8b5e3c,stroke-width:4px
-```
+modular, multi-robot, multi-workflow C++ controller deployment for ROS2
+(humble). design, figures and rationale: [docs/ethos.md](docs/ethos.md).
 
 ## install
 
-refer to corresponding deployment workflow:
-*  [unitree.md](workflows/unitree.md) 
-*  [drcl_deploy.md](workflows/drcl_deploy.md)
-
-**onnx** (optionally, for nn controllers)
-* download pre-built [ONNX Runtime v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0)
-* put a symbolic link under [thirdparty](./thirdparty/)
-```
-ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
-```
+1. workflow setup, incl. the python venv:
+   [workflows/unitree.md](workflows/unitree.md) /
+   [workflows/drcl_deploy.md](workflows/drcl_deploy.md)
+2. onnxruntime — [pre-built v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0),
+   symlinked under [thirdparty](./thirdparty/):
+   ```bash
+   ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
+   ```
+3. `colcon build --symlink-install --packages-select cpp_control`
+4. CLI shims (`publish-motion`), one-time:
+   `uv pip install -e cyclonedds_ws/src/cpp_control --python venv/bin/python`
 
 ## usage
 
@@ -57,100 +23,49 @@ ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
 # G1 locomotion
 ros2 launch cpp_control g1_locomotion.launch.py
 
-# Custom ONNX model
-ros2 launch cpp_control g1_locomotion.launch.py onnx_model_path:=/path/to/model.onnx
+# G1 SONIC tracker (exported vibe policy, manifest-driven)
+ros2 launch cpp_control g1_sonic_tracker.launch.py \
+    onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
 
-# MiniPi locomotion
+# hardware workflow (sonic + vibe-sonic): controller never dies —
+# boot with no clip (stand), stream motions, A starts each one
+ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
+publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
+
+# G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
+ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
+ros2 launch cpp_control g1_vibe_sonic.launch.py \
+    onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
+ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
+
+# deploy infra self-test (+ optional smoke of a real export)
+./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
+
+# MiniPi
 ros2 launch cpp_control mini_pi_locomotion.launch.py
-
-# MiniPi dive / flip
 ros2 launch cpp_control mini_pi_dive.launch.py
 ```
 
+buttons (joy / unitree gamepad): `X` nominal pose · `A` policy · `B` zeroing ·
+`Y` damping · `RB/R1` stand.
 
+**stand mode**: set `stand_onnx_path` in any g1 config yaml to a base-SONIC
+export and `RB/R1` runs an actively-balancing SONIC stand
+(`ControlMode::STAND`) instead of a task-owned one — no task code involved.
 
-## dev guide
+## docs
 
-The package follows a **three-level inheritance** pattern that cleanly separates concerns:
+| doc | what |
+|---|---|
+| [docs/ethos.md](docs/ethos.md) | design: backends, three levels, control modes, structure, how to extend |
+| [docs/onnx_policies.md](docs/onnx_policies.md) | the two ONNX serving stacks (legacy vs manifest) and when to use which |
+| [docs/motion.md](docs/motion.md) | `g1::Motion` — the one reference-motion class |
+| [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
 
-```mermaid
-graph TD
-    A["<b>level 0 — BaseNode</b><br/><i>robot &amp; task agnostic</i><br/>control FSM · joystick · timer loop .etc"]
+## acknowledgements
 
-    B["<b>level 1 — RobotNode</b><br/><i>robot-specific</i><br/>(motor count , joint config, pub/sub backend handlers, etc)"]
+this package deploys policies trained with, and stands on the ideas of:
 
-    C["<b>level 2 — RobotTaskNode</b><br/><i>robot and task-specific</i><br/>(observation building, policy inference , action mapping , etc )"]
-
-    A --> B
-    B --> C
-
-    style A fill:#4a6fa5,color:#fff,stroke:none
-    style B fill:#6b8f71,color:#fff,stroke:none
-    style C fill:#c4a35a,color:#fff,stroke:none
-```
-
-### codebase structure
-
-```
-cpp_control/
-├── 📁 config/<task>/
-│   └── ⚙️ <robot>.yaml
-├── 📁 include/
-│   ├── 📁 common/                  # shared types, math, obs utils
-│   └── 📁 cpp_control/
-│       ├── 📄 base.hpp             # level 0
-│       ├── 📁 robots/
-│       │   └── 📄 <robot>.hpp      # level 1
-│       └── 📁 tasks/<task>/
-│           └── 📄 <robot>.hpp      # level 2
-├── 📁 src/                         # mirrors include/
-├── 📁 launch/
-│   └── 🐍 <robot>_<task>.launch.py
-├── 📁 models/<task>/
-│   └── 🧠 <robot>.onnx
-└── 📄 CMakeLists.txt
-```
-
-### adding a new robot
-
-1. **create robot node** — inherit from `BaseNode`:
-
-   ```
-   include/cpp_control/robots/<robot>.hpp
-   src/robots/<robot>.cpp
-   ```
-
-2. **register in CMakeLists.txt** — add a static library following the `cpp_control_g1` pattern.
-
->[!TIP]
-> refer to
-> * [robots/g1.hpp](include/cpp_control/robots/g1.hpp) 
-> * [robots/g1.cpp](src/robots/g1.cpp)
-
----
-
-### adding a new task
-
-1. **create task node** — inherit from the robot's Level 1 node:
-
-   ```
-   include/cpp_control/tasks/<task>/<robot>.hpp
-   src/tasks/<task>/<robot>.cpp
-   ```
-
-2. **add config** — `config/<task>/<robot>.yaml`
-
-3. **add ONNX model** — `models/<task>/<robot>.onnx`
-
-4. **add launch file** — `launch/<robot>_<task>.launch.py`
-
-5. **register in CMakeLists.txt** — add executable following existing patterns.
-
->[!TIP]
-> refer to
-> * [tasks/locomotion/g1.hpp](include/cpp_control/tasks/locomotion/g1.hpp) 
-> * [tasks/locomotion/g1.cpp](src/tasks/locomotion/g1.cpp)
-
----
-
-
+- [beyondmimic](https://github.com/HybridRobotics/motion_tracking_controller) — motion tracking controller
+- [textop-tracker](https://github.com/TeleHuman/Textop) — text-conditioned whole-body tracking
+- [SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) — whole-body control

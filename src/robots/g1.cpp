@@ -59,6 +59,15 @@ void G1Node::init_robot()
         action_scale_.assign(G1_NUM_MOTOR, 0.5f);
     }
 
+    // ── Robot-level SONIC stand (opt-in: yaml stand_onnx_path) ──
+    if (config_ && !config_->stand_onnx_path.empty())
+    {
+        sonic_stand_ = std::make_unique<g1::SonicStand>(config_->stand_onnx_path);
+        RCLCPP_INFO(this->get_logger(), "SONIC stand engine loaded: %s (%s)",
+                    config_->stand_onnx_path.c_str(),
+                    sonic_stand_->manifest().model_class.c_str());
+    }
+
     // ── Workflow-based backend init ──
     switch (workflow_)
     {
@@ -83,6 +92,20 @@ void G1Node::init_robot()
                 config_ ? config_->workflow.c_str() : "unitree");
 }
 
+// ── Robot-level SONIC stand ───────────────────────────────────
+
+void G1Node::engage_stand()
+{
+    sonic_stand_->engage(robot_state_);
+    control_mode_ = ControlMode::STAND;
+}
+
+RobotCommand G1Node::stand_control()
+{
+    const double dt = config_ ? config_->control_dt : 0.02;
+    return sonic_stand_->tick(robot_state_, dt);
+}
+
 // ══════════════════════════════════════════════════════════════
 //  Unitree HG backend
 // ══════════════════════════════════════════════════════════════
@@ -100,6 +123,14 @@ void G1Node::init_unitree()
     lowstate_sub_hg_ = this->create_subscription<unitree_hg::msg::LowState>(
         lowstate_topic, 10,
         [this](unitree_hg::msg::LowState::SharedPtr msg) { this->subscribe_low_state(msg); });
+
+    // SportModeState: odometry velocity (world frame)
+    // Mirrors OG textop deployment: position zeroed, velocity from odom.
+    std::string sportmode_topic = this->declare_parameter("sportmode_topic", "/sportmodestate");
+    sportmode_sub_ = this->create_subscription<unitree_go::msg::SportModeState>(
+        sportmode_topic, 10,
+        [this](unitree_go::msg::SportModeState::SharedPtr msg) { this->subscribe_sport_mode_state(msg); });
+    RCLCPP_INFO(this->get_logger(), "Subscribing to SportModeState: %s", sportmode_topic.c_str());
 }
 
 void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
@@ -128,6 +159,14 @@ void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
     handle_gamepad(*msg);
 }
 
+void G1Node::subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedPtr msg)
+{
+    // Mirror OG textop deployment: position zeroed, velocity from odom.
+    // robot_state_.base_lin_vel_w stores world-frame velocity.
+    robot_state_.base_pos_w = {msg->position[0], msg->position[1], msg->position[2]};
+    robot_state_.base_lin_vel_w = {msg->velocity[0], msg->velocity[1], msg->velocity[2]};
+}
+
 void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
 {
     memcpy(gamepad_rx_.buff, msg.wireless_remote.data(), 40);
@@ -153,6 +192,11 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
         std::fill(actions_.begin(), actions_.end(), 0.0f);
         std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
         RCLCPP_INFO(this->get_logger(), "[GP] -> nominal_pose");
+    }
+    if (gamepad_.R1.on_press && has_stand())
+    {
+        engage_stand();
+        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (robot-level SONIC)");
     }
     if (gamepad_.up.on_press || gamepad_.A.on_press)
     {

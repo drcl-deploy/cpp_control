@@ -46,9 +46,17 @@ Config::Config(const std::string& config_path)
         {
             onnx_path = config["onnx_path"].as<std::string>();
         }
+        if (config["hlc_onnx_path"])
+        {
+            hlc_onnx_path = config["hlc_onnx_path"].as<std::string>();
+        }
         if (config["motion_path"])
         {
             motion_path = config["motion_path"].as<std::string>();
+        }
+        if (config["stand_onnx_path"])
+        {
+            stand_onnx_path = config["stand_onnx_path"].as<std::string>();
         }
 
         // Control gains for 29DOF
@@ -115,6 +123,14 @@ Config::Config(const std::string& config_path)
         {
             motor2action_id = config["motor2action_id"].as<std::vector<int>>();
         }
+
+        // Motion padding
+        if (config["motion_pad_length"])
+            motion_pad_length = config["motion_pad_length"].as<double>();
+        if (config["pre_motion_pad"])
+            pre_motion_pad = config["pre_motion_pad"].as<bool>();
+        if (config["post_motion_pad"])
+            post_motion_pad = config["post_motion_pad"].as<bool>();
 
         // Joint names
         if (config["joint_names"])
