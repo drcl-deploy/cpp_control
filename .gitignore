@@ -1,1 +1,4 @@
 thirdparty/onnxruntime-linux-x64-*
+__pycache__/
+*.pyc
+*.egg-info/

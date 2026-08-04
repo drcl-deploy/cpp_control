@@ -1,7 +1,0 @@
-pyproject.toml
-scripts/npz_motion_publisher.py
-scripts/cpp_control_cli.egg-info/PKG-INFO
-scripts/cpp_control_cli.egg-info/SOURCES.txt
-scripts/cpp_control_cli.egg-info/dependency_links.txt
-scripts/cpp_control_cli.egg-info/entry_points.txt
-scripts/cpp_control_cli.egg-info/top_level.txt

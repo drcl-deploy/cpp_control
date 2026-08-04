@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: cpp-control-cli
-Version: 0.1.0
-Summary: cpp_control CLI shims (publish-motion)
-Requires-Python: >=3.8
