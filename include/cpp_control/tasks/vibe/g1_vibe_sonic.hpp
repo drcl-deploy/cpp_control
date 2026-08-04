@@ -18,13 +18,17 @@ namespace cpp_control
  * Inherits the whole SONIC tracker (tokenizer/policy ports, stand/track,
  * engage) and adds writers for the extractor-era ports:
  *
- *   q_proprio       projected_gravity | base_lin_vel | base_ang_vel
+ *   q_proprio       projected_gravity | base_ang_vel
  *                   | joint_pos_rel | joint_vel            (live state)
  *   q_task_cmd      object_goal_color one-hot(6)           (param + topic)
  *   q_cls           img_cls                                (/enc/tokens cls)
  *   kv_tokens__*    img_tokens (P, D)                      (/enc/tokens patches)
- *   augmentation    bodywise_contact_cmd (param, zeros)
+ *   augmentation    bodywise_contact_cmd                   (motion contact)
  *                   | robot_root_{lin,ang}_vel_cmd         (motion twist)
+ *
+ * The whole augmentation port is the clip's sys1 command stream (orcs
+ * robot_motion_cmd_terms) — hardwired to the reference, no overrides. A clip
+ * without a contact schedule commands zeros; engage_reset() says so out loud.
  *
  * Tokens are validated against the manifest port shape on first message
  * (grid/dim/CLS-presence) — a wrong encoder fails loud, not silent.
@@ -41,6 +45,7 @@ protected:
     Binding make_binding(float* dst, const deploy::PortSpec& port,
                          const deploy::TermSpec& spec) override;
     RobotCommand policy_control() override;
+    void engage_reset() override;
 
 private:
     void on_tokens(vision_encoders::msg::ImageTokens::SharedPtr msg);
@@ -56,7 +61,6 @@ private:
 
     // task command
     int goal_color_ = 0;
-    std::vector<float> contact_cmd_;  ///< bodywise_contact_cmd override (zeros)
 
     // attn smoke output
     std::string attn_name_;                  ///< graph output ("attn"), empty = absent

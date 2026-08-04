@@ -15,6 +15,10 @@ Usage:
 
 The .manifest.json is expected next to the .onnx (exporter default);
 override with manifest_path:= if it lives elsewhere.
+
+The clip drives the whole `augmentation` port (root twist + per-body object
+contact), so keep contact_matrix.npz next to motion.npz — streamed clips carry
+it on the 83-col wire, and either way engage logs what is being commanded.
 """
 
 import os

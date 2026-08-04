@@ -2,8 +2,14 @@
 """
 Publish motion data from an NPZ file to /tracker/motion as a Float32MultiArray.
 
-The data is packed as a [T, 65] array where each row contains:
-    joint_pos (29, IsaacLab order) | joint_vel (29) | anchor_pos (3) | anchor_ori (4, wxyz)
+Two row widths (g1::WIRE_COLS_{MIN,FULL} in common/g1/motion.hpp):
+    [T, 65]  joint_pos (29, IsaacLab order) | joint_vel (29) | anchor_pos (3)
+             | anchor_ori (4, wxyz)
+    [T, 83]  ... | anchor_lin_vel (3) | anchor_ang_vel (3) | contact (12)
+
+83 is emitted whenever the clip carries body twist AND a sibling
+contact_matrix.npz — i.e. the sys1 command stream an adapter policy reads
+(orcs robot_motion_cmd_terms). 65 clips stream those commands as zeros.
 
 If an object_motion.npz file exists alongside the motion NPZ, the object goal
 (last-frame pos[3] + quat_wxyz[4]) is published to /object_goal.
@@ -20,6 +26,16 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+
+# THE contact-graph column order — orcs tasks/uolm/sensors.py
+# ::CONTACT_GRAPH_BODY_NAMES, mirrored by g1::CONTACT_GRAPH_BODIES on the C++ side.
+CONTACT_GRAPH_BODIES = (
+    'pelvis', 'torso_link',
+    'left_shoulder_roll_link', 'left_elbow_link', 'left_wrist_yaw_link',
+    'right_shoulder_roll_link', 'right_elbow_link', 'right_wrist_yaw_link',
+    'left_knee_link', 'left_ankle_roll_link',
+    'right_knee_link', 'right_ankle_roll_link',
+)
 
 
 class NPZMotionPublisher(Node):
@@ -70,17 +86,34 @@ class NPZMotionPublisher(Node):
             anchor_ori = np.zeros((T, 4), dtype=np.float32)
             anchor_ori[:, 0] = 1.0
 
+        # anchor twist: [T, N, 3] → first body. Absent → no sys1 twist command.
+        twist = [data[k][:, 0, :].astype(np.float32)
+                 for k in ('body_lin_vel_w', 'body_ang_vel_w') if k in data]
+        if len(twist) != 2:
+            self.get_logger().warn('body_{lin,ang}_vel_w not found — no root twist cmd')
+            twist = []
+
         data.close()
 
-        # Pack into [T, 65] row-major
-        packed = np.hstack([joint_pos, joint_vel, anchor_pos, anchor_ori])  # [T, 65]
-        assert packed.shape == (T, 65), f'Unexpected shape {packed.shape}'
+        contact = self._load_contact(T)
+        cols = [joint_pos, joint_vel, anchor_pos, anchor_ori]
+        if twist and contact is not None:
+            cols += twist + [contact]
+        elif twist or contact is not None:
+            self.get_logger().warn(
+                'clip has only half the sys1 command stream (twist=%s, contact=%s) — '
+                'streaming the 65-col wire, adapter commands will be ZERO'
+                % (bool(twist), contact is not None))
+
+        packed = np.hstack(cols)
+        T, ncols = packed.shape
+        assert ncols in (65, 83), f'Unexpected wire width {ncols}'
 
         # Build Float32MultiArray
         msg = Float32MultiArray()
         msg.layout.dim = [
-            MultiArrayDimension(label='T', size=T, stride=T * 65),
-            MultiArrayDimension(label='cols', size=65, stride=65),
+            MultiArrayDimension(label='T', size=T, stride=T * ncols),
+            MultiArrayDimension(label='cols', size=ncols, stride=ncols),
         ]
         msg.layout.data_offset = 0
         msg.data = packed.flatten().tolist()
@@ -94,7 +127,31 @@ class NPZMotionPublisher(Node):
         self.timer = self.create_timer(0.5, self._publish_once)
 
         self.get_logger().info(
-            f'Loaded {self.npz_path}: T={T}, Nq={Nq}. Publishing to /tracker/motion ...')
+            f'Loaded {self.npz_path}: T={T}, Nq={Nq}, cols={ncols}. '
+            f'Publishing to /tracker/motion ...')
+
+    def _load_contact(self, T):
+        """[T, 12] reference robot<->object contact from the sibling
+        contact_matrix.npz — orcs ContactSchedule.body_object_contacts: the
+        object is the legend's LAST column, robot bodies are found by name."""
+        path = os.path.join(os.path.dirname(self.npz_path), 'contact_matrix.npz')
+        if not os.path.exists(path):
+            self.get_logger().warn(f'No contact_matrix.npz at {path} — no contact cmd')
+            return None
+
+        d = np.load(path, allow_pickle=True)
+        matrix, names = d['matrix'], [str(x) for x in d['body_names'].tolist()]
+        d.close()
+        assert matrix.shape[0] == T, f'contact T={matrix.shape[0]} != motion T={T}'
+        cols = [names.index(b) for b in CONTACT_GRAPH_BODIES]  # raises on drift
+        contact = (matrix[:, -1, :][:, cols] != 0).astype(np.float32)
+
+        active = int((contact.any(axis=1)).sum())
+        self.get_logger().info(
+            f'Contact schedule: {active}/{T} frames | '
+            + ' '.join(f'{b}({int(n)})'
+                       for b, n in zip(CONTACT_GRAPH_BODIES, contact.sum(0)) if n))
+        return contact
 
     def _load_object_goal(self):
         """Look for object_motion.npz next to the motion NPZ. If found,

@@ -99,9 +99,12 @@ void cnpy::parse_npy_header(unsigned char* buffer,size_t& word_size, std::vector
     std::string str_ws = header.substr(loc1+2);
     loc2 = str_ws.find("'");
     word_size = atoi(str_ws.substr(0,loc2).c_str());
+    //cpp_control: '<U25' counts CODEPOINTS, stored UCS-4 (4 B each). 'U' is never
+    //a numeric type char, so every numeric dtype is byte-identical to upstream.
+    if(header[loc1+1] == 'U') word_size *= 4;
 }
 
-void cnpy::parse_npy_header(FILE* fp, size_t& word_size, std::vector<size_t>& shape, bool& fortran_order) {  
+void cnpy::parse_npy_header(FILE* fp, size_t& word_size, std::vector<size_t>& shape, bool& fortran_order) {
     char buffer[256];
     size_t res = fread(buffer,sizeof(char),11,fp);       
     if(res != 11)
@@ -150,6 +153,7 @@ void cnpy::parse_npy_header(FILE* fp, size_t& word_size, std::vector<size_t>& sh
     std::string str_ws = header.substr(loc1+2);
     loc2 = str_ws.find("'");
     word_size = atoi(str_ws.substr(0,loc2).c_str());
+    if(header[loc1+1] == 'U') word_size *= 4;  //cpp_control: see the buffer overload
 }
 
 void cnpy::parse_zip_footer(FILE* fp, uint16_t& nrecs, size_t& global_header_size, size_t& global_header_offset)

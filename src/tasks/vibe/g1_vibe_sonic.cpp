@@ -40,11 +40,15 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
         if (out == "attn")
             attn_name_ = out;
 
+    // the contact command is a clip channel — its width is the graph, not a param
     const auto* aug = manifest_.find_input("augmentation");
     if (aug)
         for (const auto& t : aug->terms)
-            if (t.name == "bodywise_contact_cmd")
-                contact_cmd_.assign(t.dim, 0.0f);  // no object in the loop yet
+            if (t.name == "bodywise_contact_cmd" && t.dim != g1::NUM_CONTACT_BODIES)
+                throw std::runtime_error(
+                    "g1_vibe_sonic: bodywise_contact_cmd is " + std::to_string(t.dim) +
+                    " wide, the contact graph has " + std::to_string(g1::NUM_CONTACT_BODIES) +
+                    " nodes — motion.hpp CONTACT_GRAPH_BODIES is stale vs orcs");
 
     bind_ports();  // virtual make_binding resolves here, after full construction
 
@@ -83,13 +87,7 @@ G1SonicNode::Binding G1VibeSonicNode::make_binding(float* dst, const deploy::Por
                         auto g = math::get_projected_gravity(robot_state_.imu_quaternion);
                         v[0] = g[0]; v[1] = g[1]; v[2] = g[2];
                     }};
-        if (spec.name == "base_lin_vel")
-            // odometry world vel -> base frame (textop hw-proven path)
-            return {dst, &spec, [this](float* v) {
-                        auto b = math::quat_rotate_inverse(robot_state_.imu_quaternion,
-                                                           robot_state_.base_lin_vel_w);
-                        v[0] = b[0]; v[1] = b[1]; v[2] = b[2];
-                    }};
+        // no base_lin_vel: orcs proprio_terms dropped it (no state estimator on hw)
         if (spec.name == "base_ang_vel")
             return {dst, &spec, [this](float* v) {
                         const auto& g = robot_state_.imu_gyroscope;
@@ -120,7 +118,8 @@ G1SonicNode::Binding G1VibeSonicNode::make_binding(float* dst, const deploy::Por
     {
         if (spec.name == "bodywise_contact_cmd")
             return {dst, &spec, [this](float* v) {
-                        std::memcpy(v, contact_cmd_.data(), contact_cmd_.size() * sizeof(float));
+                        std::memcpy(v, active_motion_->contact(active_clock_->frame()),
+                                    g1::NUM_CONTACT_BODIES * sizeof(float));
                     }};
         if (spec.name == "robot_root_lin_vel_cmd")
             return {dst, &spec, [this](float* v) {
@@ -145,6 +144,45 @@ G1SonicNode::Binding G1VibeSonicNode::make_binding(float* dst, const deploy::Por
                 }};
 
     return G1SonicNode::make_binding(dst, port, spec);
+}
+
+// ── Engage ───────────────────────────────────────────────────────
+
+void G1VibeSonicNode::engage_reset()
+{
+    G1SonicNode::engage_reset();
+
+    // The contact command rides the clip, so a clip without one silently feeds
+    // the adapter zeros. Say what is actually about to be commanded.
+    const auto& c = active_motion_->bodywise_contact;
+    const int T = active_motion_->num_frames;
+    int active_frames = 0;
+    std::vector<int> per_body(g1::NUM_CONTACT_BODIES, 0);
+    for (int f = 0; f < T; ++f)
+    {
+        int hits = 0;
+        for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+        {
+            if (c[static_cast<size_t>(f) * g1::NUM_CONTACT_BODIES + k] == 0.0f)
+                continue;
+            ++hits;
+            ++per_body[k];
+        }
+        active_frames += hits > 0;
+    }
+    std::ostringstream bodies;
+    for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+        if (per_body[k])
+            bodies << g1::CONTACT_GRAPH_BODIES[k] << '(' << per_body[k] << ") ";
+
+    if (!active_motion_->has_contact)
+        RCLCPP_WARN(this->get_logger(),
+                    "contact cmd: clip carries NO contact schedule — zeros to the adapter "
+                    "(npz needs a sibling contact_matrix.npz; wire needs %d cols)",
+                    g1::WIRE_COLS_FULL);
+    else
+        RCLCPP_INFO(this->get_logger(), "contact cmd: %d/%d frames | %s", active_frames, T,
+                    active_frames ? bodies.str().c_str() : "(never in contact)");
 }
 
 // ── Tokens ───────────────────────────────────────────────────────

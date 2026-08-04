@@ -37,9 +37,12 @@ ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
 ros2 launch cpp_control g1_vibe_sonic.launch.py \
     onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
 ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
+# the clip carries the sys1 command stream (root twist + per-body object
+# contact) — keep contact_matrix.npz next to motion.npz, streamed or not
 
-# deploy infra self-test (+ optional smoke of a real export)
+# deploy infra self-test (+ optional export smoke / clip contact report)
 ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
+./build/cpp_control/deploy_selftest --motion /path/to/motion.npz
 
 # MiniPi
 ros2 launch cpp_control mini_pi_locomotion.launch.py

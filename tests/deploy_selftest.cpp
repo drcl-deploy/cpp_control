@@ -3,6 +3,7 @@
 //
 //   deploy_selftest                                  # unit checks only
 //   deploy_selftest policy.onnx [policy.manifest.json]  # + load, zero-obs run
+//   deploy_selftest --motion clip.npz                # + contact schedule report
 //
 // Plain asserts, no gtest — run it, exit 0 means pass.
 
@@ -183,6 +184,12 @@ static void test_motion()
     auto mot_i = g1::Motion::from_npz(path_i);
     CHECK(mot_i.fps == 50.f);
     CHECK(!mot_i.has_twist);  // no vel arrays → zero-filled, flagged
+
+    // no sibling contact_matrix.npz → zeros of graph width, flagged
+    CHECK(!mot.has_contact);
+    CHECK(static_cast<int>(mot.bodywise_contact.size()) == T * g1::NUM_CONTACT_BODIES);
+    for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+        CHECK(mot.contact(T - 1)[k] == 0.f);
     auto vz = mot_i.root_lin_vel_b(0);
     CHECK(vz[0] == 0.f && vz[1] == 0.f && vz[2] == 0.f);
     std::puts("ok  motion");
@@ -200,33 +207,62 @@ static void test_joint_orders()
         CHECK(g1::MJ_JOINTS[i] == g1::IL_JOINTS[g1::MJ2IL[i]]);
     }
 
-    // from_wire: IL rows in → MJ storage; jp_il must return the original row
-    const int T = 2, cols = 2 * J + 3 + 4;
-    std::vector<float> rows(T * cols, 0.f);
-    for (int t = 0; t < T; ++t)
+    // from_wire: IL rows in → MJ storage; jp_il must return the original row.
+    // Same fixture at both widths — the FULL tail must not disturb the head.
+    const int T = 2;
+    for (int cols : {g1::WIRE_COLS_MIN, g1::WIRE_COLS_FULL})
     {
-        for (int j = 0; j < J; ++j)
+        const bool full = cols == g1::WIRE_COLS_FULL;
+        std::vector<float> rows(T * cols, 0.f);
+        for (int t = 0; t < T; ++t)
         {
-            rows[t * cols + j] = static_cast<float>(t * 100 + j);        // jp IL
-            rows[t * cols + J + j] = -static_cast<float>(t * 100 + j);   // jv IL
+            for (int j = 0; j < J; ++j)
+            {
+                rows[t * cols + j] = static_cast<float>(t * 100 + j);        // jp IL
+                rows[t * cols + J + j] = -static_cast<float>(t * 100 + j);   // jv IL
+            }
+            rows[t * cols + 2 * J + 2] = 0.7f;   // anchor z
+            rows[t * cols + 2 * J + 3] = 1.f;    // anchor quat w
+            if (!full)
+                continue;
+            rows[t * cols + g1::WIRE_COLS_MIN + 0] = 1.f;      // anchor lin vel +x
+            rows[t * cols + g1::WIRE_COLS_MIN + 5] = 2.f;      // anchor ang vel +z
+            rows[t * cols + g1::WIRE_COLS_MIN + 6 + 4] = 1.f;  // left_wrist_yaw_link
         }
-        rows[t * cols + 2 * J + 2] = 0.7f;   // anchor z
-        rows[t * cols + 2 * J + 3] = 1.f;    // anchor quat w
+        auto wire = g1::Motion::from_wire(T, rows.data(), cols);
+        CHECK(wire.num_frames == T && wire.num_joints == J && wire.num_bodies == 1);
+        std::array<float, g1::NUM_JOINTS> il;
+        wire.jp_il(1, il.data());
+        for (int j = 0; j < J; ++j)
+            CHECK(il[j] == static_cast<float>(100 + j));
+        CHECK(wire.root_pos(1)[2] == 0.7f && wire.root_quat(1)[0] == 1.f);
+        CHECK(wire.has_twist == full && wire.has_contact == full);
+        // identity anchor → ref-frame twist == the wire's world twist
+        CHECK(wire.root_lin_vel_b(1)[0] == (full ? 1.f : 0.f));
+        CHECK(wire.root_ang_vel_b(1)[2] == (full ? 2.f : 0.f));
+        CHECK(wire.contact(1)[4] == (full ? 1.f : 0.f) && wire.contact(1)[3] == 0.f);
     }
-    auto wire = g1::Motion::from_wire(T, rows.data());
-    CHECK(wire.num_frames == T && wire.num_joints == J && wire.num_bodies == 1);
-    std::array<float, g1::NUM_JOINTS> il;
-    wire.jp_il(1, il.data());
-    for (int j = 0; j < J; ++j)
-        CHECK(il[j] == static_cast<float>(100 + j));
-    CHECK(wire.root_pos(1)[2] == 0.7f && wire.root_quat(1)[0] == 1.f);
-    CHECK(!wire.has_twist);
+    // a width the C++ side does not know is a hard error, never a silent zero
+    bool threw = false;
+    try
+    {
+        std::vector<float> bad(T * 70, 0.f);
+        g1::Motion::from_wire(T, bad.data(), 70);
+    }
+    catch (const std::exception&)
+    {
+        threw = true;
+    }
+    CHECK(threw);
 
     // stand factory: 1 frame, nominal pose, identity anchor, zero (true) twist
     std::vector<float> defaults(J, 0.5f);
     auto stand = g1::Motion::stand(defaults);
     CHECK(stand.num_frames == 1 && stand.jp(0)[7] == 0.5f && stand.jv(0)[7] == 0.f);
     CHECK(stand.root_quat(0)[0] == 1.f && stand.has_twist);
+    // no object in the loop: zeros are the TRUE contact command, not a fallback
+    CHECK(stand.has_contact && stand.contact(0)[0] == 0.f);
+    CHECK(static_cast<int>(stand.bodywise_contact.size()) == g1::NUM_CONTACT_BODIES);
     std::puts("ok  joint orders + wire/stand");
 }
 
@@ -252,6 +288,72 @@ static void test_tokenizer_layout()
     CHECK(flat[0 * 2 * J + 0] == 0.f && flat[0 * 2 * J + 5] == 5.f);
     CHECK(flat[2 * 2 * J + 0] == 100.f && flat[2 * 2 * J + 5] == 105.f);
     std::puts("ok  tokenizer layout");
+}
+
+// ── Optional: real clip contact schedule ────────────────────────
+//
+// Parity reference (same clip, orcs truth):
+//   ContactSchedule([mf], [T]).body_object_contacts(0, CONTACT_GRAPH_BODY_NAMES)
+
+static void clip_report(const std::string& motion_path)
+{
+    auto m = g1::Motion::from_npz(motion_path, g1::MJ2IL);
+    CHECK(m.has_contact);
+    std::printf("clip: %s\n  %d frames @ %.0f fps, %d bodies, twist=%d\n",
+                motion_path.c_str(), m.num_frames, static_cast<double>(m.fps), m.num_bodies,
+                static_cast<int>(m.has_twist));
+    CHECK(static_cast<int>(m.bodywise_contact.size()) ==
+          m.num_frames * g1::NUM_CONTACT_BODIES);
+    for (float v : m.bodywise_contact)
+        CHECK(v == 0.f || v == 1.f);
+
+    for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+    {
+        int n = 0;
+        for (int f = 0; f < m.num_frames; ++f)
+            n += m.contact(f)[k] != 0.f;
+        std::printf("  %-26s %4d/%d frames\n", g1::CONTACT_GRAPH_BODIES[k].c_str(), n,
+                    m.num_frames);
+    }
+    for (int f : {0, m.num_frames / 2, m.num_frames - 1})
+    {
+        std::printf("  contact[%4d] =", f);
+        for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+            std::printf(" %.0f", m.contact(f)[k]);
+        std::puts("");
+    }
+
+    // Wire round-trip: pack this clip the way npz_motion_publisher does, parse it
+    // back. The streamed path must command exactly what the npz path commands.
+    const int J = g1::NUM_JOINTS, C = g1::WIRE_COLS_FULL;
+    std::vector<float> rows(static_cast<size_t>(m.num_frames) * C, 0.f);
+    for (int f = 0; f < m.num_frames; ++f)
+    {
+        float* row = &rows[static_cast<size_t>(f) * C];
+        m.jp_il(f, row);
+        m.jv_il(f, row + J);
+        std::memcpy(row + 2 * J, m.root_pos(f).data(), 3 * sizeof(float));
+        std::memcpy(row + 2 * J + 3, m.root_quat(f).data(), 4 * sizeof(float));
+        std::memcpy(row + g1::WIRE_COLS_MIN, &m.body_lin_vel_w[static_cast<size_t>(f) *
+                                                               m.num_bodies * 3],
+                    3 * sizeof(float));
+        std::memcpy(row + g1::WIRE_COLS_MIN + 3,
+                    &m.body_ang_vel_w[static_cast<size_t>(f) * m.num_bodies * 3],
+                    3 * sizeof(float));
+        std::memcpy(row + g1::WIRE_COLS_MIN + 6, m.contact(f),
+                    g1::NUM_CONTACT_BODIES * sizeof(float));
+    }
+    auto w = g1::Motion::from_wire(m.num_frames, rows.data(), C);
+    for (int f = 0; f < m.num_frames; ++f)
+    {
+        for (int j = 0; j < J; ++j)
+            CHECK(w.jp(f)[j] == m.jp(f)[j] && w.jv(f)[j] == m.jv(f)[j]);
+        for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+            CHECK(w.contact(f)[k] == m.contact(f)[k]);
+        CHECK(w.root_lin_vel_b(f) == m.root_lin_vel_b(f));
+        CHECK(w.root_ang_vel_b(f) == m.root_ang_vel_b(f));
+    }
+    std::puts("ok  clip contact schedule + wire round-trip");
 }
 
 // ── Optional: real export smoke run ─────────────────────────────
@@ -295,12 +397,23 @@ int main(int argc, char** argv)
     test_joint_orders();
     test_tokenizer_layout();
 
-    if (argc > 1)
+    std::vector<std::string> pos;
+    std::string motion;
+    for (int i = 1; i < argc; ++i)
     {
-        std::string onnx = argv[1];
-        std::string manifest =
-            argc > 2 ? argv[2] : onnx.substr(0, onnx.rfind(".onnx")) + ".manifest.json";
-        smoke_run(onnx, manifest);
+        if (std::string(argv[i]) == "--motion" && i + 1 < argc)
+            motion = argv[++i];
+        else
+            pos.push_back(argv[i]);
+    }
+    if (!motion.empty())
+        clip_report(motion);
+    if (!pos.empty())
+    {
+        std::string manifest = pos.size() > 1
+                                   ? pos[1]
+                                   : pos[0].substr(0, pos[0].rfind(".onnx")) + ".manifest.json";
+        smoke_run(pos[0], manifest);
     }
 
     std::puts("all checks passed");

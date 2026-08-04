@@ -87,6 +87,12 @@ never resembles the clip. if it looks drunk, check the ordering first.
 exotic sources: pass an explicit `motion_joint_perm` (29 ints, output slot →
 source column) instead of `il_ordered` — they are mutually exclusive.
 
+contact bodies: an **adapter** export (`augmentation` port) also commands
+`bodywise_contact_cmd` — 12 per-body robot↔object flags read from the clip's
+sibling `contact_matrix.npz`, resolved by NAME against its legend (see
+[docs/motion.md](../motion.md)). No sibling file → zeros, and the node says so
+at engage. This is a joint-order-free channel; nothing to flag.
+
 bodies: the anchor is `anchor_body_index` **in the npz body axis**. pelvis is
 index 0 in both IL and MJ body lists, so the default survives both formats;
 any other anchor must be looked up per-format (`G1_TRACKED_BODIES` in
@@ -140,6 +146,8 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 
 # pre-flight any export without the robot/sim:
 ./build/cpp_control/deploy_selftest /path/to/policy.onnx
+# pre-flight a CLIP: contact schedule + wire round-trip (adapter policies)
+./build/cpp_control/deploy_selftest --motion .../cube_frontflip/sample4/motion.npz
 ```
 
 IL-ordered clips (see [joint orderings](#joint-orderings--read-this-before-loading-any-clip))

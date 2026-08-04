@@ -93,20 +93,23 @@ void G1SonicNode::construct(bool bind_now)
 
 void G1SonicNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg)
 {
-    constexpr int COLS = 2 * G1_NUM_MOTOR + 3 + 4;
-    if (msg->layout.dim.size() < 2 ||
-        static_cast<int>(msg->layout.dim[1].size) != COLS ||
+    const int cols = msg->layout.dim.size() < 2 ? 0 : static_cast<int>(msg->layout.dim[1].size);
+    if ((cols != g1::WIRE_COLS_MIN && cols != g1::WIRE_COLS_FULL) ||
         static_cast<int>(msg->data.size()) !=
-            static_cast<int>(msg->layout.dim[0].size) * COLS)
+            static_cast<int>(msg->layout.dim[0].size) * cols)
     {
-        RCLCPP_WARN(this->get_logger(), "bad motion wire (need [T, %d])", COLS);
+        RCLCPP_WARN(this->get_logger(), "bad motion wire (need [T, %d] or [T, %d], got cols=%d)",
+                    g1::WIRE_COLS_MIN, g1::WIRE_COLS_FULL, cols);
         return;
     }
     const int T = static_cast<int>(msg->layout.dim[0].size);
-    pend_motion_ = std::make_unique<g1::Motion>(g1::Motion::from_wire(T, msg->data.data()));
+    pend_motion_ =
+        std::make_unique<g1::Motion>(g1::Motion::from_wire(T, msg->data.data(), cols));
     pend_ready_ = true;
-    RCLCPP_INFO(this->get_logger(), "motion staged (T=%d @ %.0f fps) — A to start", T,
-                static_cast<double>(pend_motion_->fps));
+    RCLCPP_INFO(this->get_logger(),
+                "motion staged (T=%d @ %.0f fps, %d cols%s) — A to start", T,
+                static_cast<double>(pend_motion_->fps), cols,
+                pend_motion_->has_contact ? "" : " — NO twist/contact cmds");
 }
 
 void G1SonicNode::commit_pending_motion()
