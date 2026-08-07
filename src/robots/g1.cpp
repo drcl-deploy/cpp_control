@@ -198,7 +198,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
         engage_stand();
         RCLCPP_INFO(this->get_logger(), "[GP] -> stand (robot-level SONIC)");
     }
-    if (gamepad_.up.on_press || gamepad_.A.on_press)
+    if ((gamepad_.up.on_press || gamepad_.A.on_press) && allow_policy_entry())
     {
         control_mode_ = ControlMode::POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);

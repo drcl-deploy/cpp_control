@@ -46,6 +46,12 @@ def generate_launch_description():
         DeclareLaunchArgument('tokens_topic', default_value='/enc/tokens'),
         DeclareLaunchArgument('goal_color', default_value='0',
                               description='goal up-face color index (one-hot 6)'),
+        DeclareLaunchArgument('prep_joints', default_value='arms',
+                              description='joints the L1 lead-in moves: arms | arms_waist | all'),
+        DeclareLaunchArgument('prep_rate', default_value='1.5',
+                              description='L1 lead-in speed, rad/s (max|dq| sets duration)'),
+        DeclareLaunchArgument('prep_min_s', default_value='0.5'),
+        DeclareLaunchArgument('prep_max_s', default_value='2.0'),
 
         Node(
             package='cpp_control',
@@ -61,6 +67,10 @@ def generate_launch_description():
                 'il_ordered': LaunchConfiguration('il_ordered'),
                 'tokens_topic': LaunchConfiguration('tokens_topic'),
                 'goal_color': LaunchConfiguration('goal_color'),
+                'prep_joints': LaunchConfiguration('prep_joints'),
+                'prep_rate': LaunchConfiguration('prep_rate'),
+                'prep_min_s': LaunchConfiguration('prep_min_s'),
+                'prep_max_s': LaunchConfiguration('prep_max_s'),
             }],
         ),
     ])

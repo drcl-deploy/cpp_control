@@ -1,9 +1,12 @@
 #include "cpp_control/tasks/vibe/g1_vibe_sonic.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 #include "common/math_utils.hpp"
 
@@ -20,6 +23,26 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
         this->declare_parameter("attention_topic", "/vibe/sonic/attention_mask");
     goal_color_ = static_cast<int>(this->declare_parameter("goal_color", 0));
     stale_ticks_ = static_cast<int>(this->declare_parameter("token_stale_ticks", 5));
+    prep_rate_ = this->declare_parameter("prep_rate", 1.5);
+    prep_min_s_ = this->declare_parameter("prep_min_s", 0.5);
+    prep_max_s_ = this->declare_parameter("prep_max_s", 2.0);
+    prep_joints_name_ = this->declare_parameter("prep_joints", "arms");
+    if (prep_joints_name_ == "arms")
+        prep_joints_ = g1::ARM_JOINT_INDICES;
+    else if (prep_joints_name_ == "arms_waist")
+    {
+        prep_joints_ = g1::WAIST_JOINT_INDICES;
+        prep_joints_.insert(prep_joints_.end(), g1::ARM_JOINT_INDICES.begin(),
+                            g1::ARM_JOINT_INDICES.end());
+    }
+    else if (prep_joints_name_ == "all")
+    {
+        prep_joints_.resize(G1_NUM_MOTOR);
+        std::iota(prep_joints_.begin(), prep_joints_.end(), 0);
+    }
+    else
+        throw std::runtime_error("g1_vibe_sonic: prep_joints must be arms | arms_waist | all, "
+                                 "got '" + prep_joints_name_ + "'");
 
     // kv port shape (P, D) is the manifest's truth about the trained encoder
     const auto* kv = manifest_.find_input("kv_tokens__img_tokens");
@@ -72,6 +95,11 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
                 manifest_.model_class.c_str(), token_rows_, token_dim_, tokens_topic.c_str(),
                 queries.str().c_str(), goal_color_,
                 attn_name_.empty() ? "(absent)" : attn_topic.c_str());
+    RCLCPP_INFO(this->get_logger(),
+                "prep gate ON: RB stand -> L1 ramp onto the clip's first frame "
+                "(%s, %zu joints, %.1f rad/s, %.1f-%.1f s) -> A. A without a prep is refused.",
+                prep_joints_name_.c_str(), prep_joints_.size(), prep_rate_, prep_min_s_,
+                prep_max_s_);
 }
 
 // ── Extractor-era port writers ───────────────────────────────────
@@ -144,6 +172,104 @@ G1SonicNode::Binding G1VibeSonicNode::make_binding(float* dst, const deploy::Por
                 }};
 
     return G1SonicNode::make_binding(dst, port, spec);
+}
+
+// ── Prep: stand, driving a lead-in clip onto the clip's first frame ──
+//
+// SONIC balances throughout — only the reference it tracks moves. Open-loop PD
+// to an arbitrary pose would not stabilise on hardware; this walks the same
+// policy there. Only prep_joints_ ramp, so under the `arms` default the arm
+// reference is continuous at A while legs/waist step by the clip's frame-0
+// delta — deliberate: see docs/trackers/custom_sonic.md#which-joints-ramp.
+
+void G1VibeSonicNode::enter_prep()
+{
+    if (control_mode_ != ControlMode::POLICY || !stand_mode_)
+    {
+        RCLCPP_WARN(this->get_logger(), "L1 refused — prep runs inside stand: press RB first");
+        return;
+    }
+    if (pend_ready_)
+        commit_pending_motion();
+    if (!motion_)
+    {
+        RCLCPP_WARN(this->get_logger(), "L1: no motion loaded (publish-motion <npz>)");
+        return;
+    }
+
+    // Start from the reference SONIC is holding, not the measured pose: it is
+    // the only pose the policy is currently being asked for, so a re-press of
+    // L1 mid-ramp continues from where the ramp got to instead of snapping back.
+    const int cur = std::clamp(stand_clock_->frame(), 0, stand_motion_->num_frames - 1);
+    const std::vector<float> from(stand_motion_->jp(cur), stand_motion_->jp(cur) + G1_NUM_MOTOR);
+    const int f = std::clamp(start_frame_, 0, motion_->num_frames - 1);
+    const float* f0 = motion_->jp(f);
+
+    // Only prep_joints_ chase the clip; the rest hold nominal, so the pose SONIC
+    // must balance on until A is a stance it can hold, not a dynamic keyframe.
+    std::vector<float> to = default_angles_;
+    for (int i : prep_joints_)
+        to[i] = f0[i];
+
+    const auto worst_of = [&](const float* a, const float* b) {
+        int idx = 0;
+        float max_d = 0.0f;
+        for (int i = 0; i < G1_NUM_MOTOR; ++i)
+            if (const float d = std::fabs(a[i] - b[i]); d > max_d)
+            {
+                max_d = d;
+                idx = i;
+            }
+        return std::pair<int, float>{idx, max_d};
+    };
+    const auto name = [&](int i) {
+        return i < static_cast<int>(joint_names_.size()) ? joint_names_[i].c_str() : "?";
+    };
+    const auto [worst, max_d] = worst_of(to.data(), from.data());   // what the ramp covers
+    const auto [held, step] = worst_of(f0, to.data());              // what A still steps by
+    const double secs = std::clamp(max_d / prep_rate_, prep_min_s_, prep_max_s_);
+    const float fps = motion_->fps;
+    const int T = static_cast<int>(std::lround(secs * fps));
+
+    stand_motion_ = std::make_unique<g1::Motion>(g1::Motion::lead_in(from, to, T, fps));
+    stand_clock_ = std::make_unique<g1::MotionClock>(*stand_motion_, 0);
+    prep_active_ = true;
+    prepped_ = false;
+    enter_stand();  // stand_mode_, pending_engage_ (active_* still point at the old clip)
+    RCLCPP_INFO(this->get_logger(),
+                "prep -> frame %d [%s]: ramp max |dq| %.2f rad (%s), %.2f s / %d frames · "
+                "handover step %.2f rad (%s)",
+                f, prep_joints_name_.c_str(), max_d, name(worst), secs, stand_motion_->num_frames,
+                step, step > 0.0f ? name(held) : "none — reference is continuous");
+}
+
+void G1VibeSonicNode::restore_stand_reference()
+{
+    if (!prep_active_)
+        return;
+    make_stand_motion();
+    pending_engage_ = true;  // active_* must never outlive the lead-in they point at
+    prep_active_ = false;
+    prepped_ = false;
+}
+
+void G1VibeSonicNode::on_button_a()
+{
+    if (pend_ready_)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "A refused — a clip was staged after the prep, press L1 again");
+        return;
+    }
+    if (!prepped_)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "A refused — RB to stand, then L1 to ramp onto frame %d",
+                             start_frame_);
+        return;
+    }
+    restore_stand_reference();   // a later RB must mean nominal again
+    G1SonicNode::on_button_a();  // leave stand, engage the clip at t=0
 }
 
 // ── Engage ───────────────────────────────────────────────────────
@@ -226,6 +352,17 @@ RobotCommand G1VibeSonicNode::policy_control()
 
     auto cmd = G1SonicNode::policy_control();
     publish_attn();
+
+    if (prep_active_ && !prepped_ && stand_clock_->finished())
+    {
+        prepped_ = true;
+        const float* target = stand_motion_->jp(stand_motion_->num_frames - 1);
+        float err = 0.0f;
+        for (int i = 0; i < G1_NUM_MOTOR; ++i)
+            err = std::max(err, std::fabs(robot_state_.joint_positions[i] - target[i]));
+        RCLCPP_INFO(this->get_logger(), "prepped on frame %d (posture err %.3f rad) — A to run",
+                    start_frame_, err);
+    }
     return cmd;
 }
 
@@ -251,6 +388,40 @@ void G1VibeSonicNode::publish_attn()
     msg.data.assign(attn, attn + n);
     attn_pub_->publish(msg);
 }
+
+// ── Joystick / Gamepad: L1 preps, RB restores the nominal stand ──
+
+void G1VibeSonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
+{
+    const auto down = [&](size_t i) { return msg->buttons.size() > i && msg->buttons[i] == 1; };
+    const bool rb = down(joy::XMODE_R1), l1 = down(joy::XMODE_L1);
+    if (rb && !prev_rb_)
+        restore_stand_reference();  // before the base engages stand on the lead-in
+    if (l1 && !prev_l1_)
+        enter_prep();
+    prev_rb_ = rb;
+    prev_l1_ = l1;
+
+    G1SonicNode::on_joy(msg);  // RB -> stand, A -> on_button_a (gated above)
+
+    if (control_mode_ != ControlMode::POLICY)
+        restore_stand_reference();  // X / B / Y left policy — the prep is void
+}
+
+#ifdef HAS_UNITREE_HG
+void G1VibeSonicNode::on_gamepad()
+{
+    if (gamepad_.R1.on_press)
+        restore_stand_reference();
+    if (gamepad_.L1.on_press)
+        enter_prep();
+
+    G1SonicNode::on_gamepad();
+
+    if (control_mode_ != ControlMode::POLICY)
+        restore_stand_reference();
+}
+#endif
 
 }  // namespace cpp_control
 

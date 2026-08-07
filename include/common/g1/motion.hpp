@@ -42,6 +42,8 @@ constexpr int WIRE_COLS_FULL = WIRE_COLS_MIN + 3 + 3 + NUM_CONTACT_BODIES;
 ///                contact_matrix.npz — mocke MjMotionLoader twin
 ///   from_wire()  motion topic rows, IL-ordered (see WIRE_COLS_*)
 ///   stand()      1-frame nominal reference (sonic/textop stand modes)
+///   lead_in()    T-frame joint ramp between two poses, otherwise a stand
+///                reference — walks the tracker onto a clip's first frame
 ///
 /// root_*_vel_b are the sys1 command twists (orcs robot_root_{lin,ang}_vel_cmd):
 /// reference-anchor-frame, pure clip functions — heading-rebase invariant, so
@@ -74,6 +76,11 @@ struct Motion
                             int cols = WIRE_COLS_MIN);
     static Motion stand(const std::vector<float>& default_angles_mj,
                         float fps = 50.0f);
+    /// Smoothstep joint ramp `from`→`to`; root, twist and contact are stand's
+    /// (a standing reference that only moves its joints). T clamped to >= 2.
+    static Motion lead_in(const std::vector<float>& from_mj,
+                          const std::vector<float>& to_mj, int num_frames,
+                          float fps = 50.0f);
 
     // ── joint views ──
     const float* jp(int f) const { return &joint_pos[static_cast<size_t>(f) * num_joints]; }

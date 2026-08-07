@@ -68,7 +68,7 @@ protected:
     void fill_tokenizer(float* dst);
     void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
     void commit_pending_motion();
-    void on_button_a();  ///< commit staged motion (if any) + track
+    virtual void on_button_a();  ///< commit staged motion (if any) + track
 
     // deploy artifacts
     deploy::DeployManifest manifest_;

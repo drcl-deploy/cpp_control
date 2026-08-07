@@ -25,7 +25,7 @@ constexpr size_t XMODE_LEFT_JOY_LEFT_RIGHT = 0;
 constexpr size_t XMODE_LEFT_JOY_UP_DOWN = 1;
 constexpr size_t XMODE_RIGHT_JOY_LEFT_RIGHT = 3;
 constexpr size_t XMODE_RIGHT_JOY_UP_DOWN = 4;
-constexpr size_t XMODE_L1 = 2;
+constexpr size_t XMODE_L1 = 4;  // xpad buttons: A0 B1 X2 Y3 LB4 RB5
 constexpr size_t XMODE_R1 = 5;
 }  // namespace joy
 
@@ -64,6 +64,10 @@ protected:
     // --- Level 2 can override ---
     virtual RobotCommand policy_control();
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
+    /// Task veto on the A button, checked BEFORE the mode flip: a refusal
+    /// leaves the mode untouched, so it can never strand DAMPING/ZEROING
+    /// inside POLICY the way an after-the-fact undo would.
+    virtual bool allow_policy_entry() { return true; }
 
     // --- Robot-level stand mode (ControlMode::STAND) ---
     // Level 1 provides an engine (e.g. g1::SonicStand); base wires RB to it.

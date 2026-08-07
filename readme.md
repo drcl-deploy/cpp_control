@@ -52,6 +52,17 @@ ros2 launch cpp_control mini_pi_dive.launch.py
 buttons (joy / unitree gamepad): `X` nominal pose · `A` policy · `B` zeroing ·
 `Y` damping · `RB/R1` stand.
 
+**prep gate** (`g1_vibe_sonic` only): `RB` stand → `LB/L1` → `A`. `LB` swaps
+stand's nominal reference for a ramp onto the clip's first frame — SONIC keeps
+balancing, only the reference moves — and `A` is refused until it lands, since
+the clip engages at t=0 and a robot off frame 0 gets a step input. `prep_joints`
+picks what ramps: `arms` (default), `arms_waist`, `all`; anything else holds
+nominal, so SONIC never has to balance on a dynamic keyframe while you wait.
+Duration is `clamp(max|dq| / prep_rate, prep_min_s, prep_max_s)`. Each prep logs
+the ramp *and* the residual handover step — see
+[docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md#which-joints-ramp-prep_joints).
+`RB` aborts, `X`/`B`/`Y` void it, a finished clip voids it — re-press `LB` per run.
+
 **stand mode**: set `stand_onnx_path` in any g1 config yaml to a base-SONIC
 export and `RB/R1` runs an actively-balancing SONIC stand
 (`ControlMode::STAND`) instead of a task-owned one — no task code involved.

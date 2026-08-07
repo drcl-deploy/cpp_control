@@ -263,7 +263,44 @@ static void test_joint_orders()
     // no object in the loop: zeros are the TRUE contact command, not a fallback
     CHECK(stand.has_contact && stand.contact(0)[0] == 0.f);
     CHECK(static_cast<int>(stand.bodywise_contact.size()) == g1::NUM_CONTACT_BODIES);
-    std::puts("ok  joint orders + wire/stand");
+
+    // chain groups must PARTITION the MJ table — a joint in none of them would
+    // silently never be prepped; a joint in two would be double-counted.
+    std::vector<int> chains = g1::LEG_JOINT_INDICES;
+    chains.insert(chains.end(), g1::WAIST_JOINT_INDICES.begin(), g1::WAIST_JOINT_INDICES.end());
+    chains.insert(chains.end(), g1::ARM_JOINT_INDICES.begin(), g1::ARM_JOINT_INDICES.end());
+    std::sort(chains.begin(), chains.end());
+    CHECK(static_cast<int>(chains.size()) == g1::NUM_JOINTS);
+    for (int i = 0; i < g1::NUM_JOINTS; ++i)
+        CHECK(chains[i] == i);
+    CHECK(g1::LEG_JOINT_INDICES.size() == 12 && g1::WAIST_JOINT_INDICES.size() == 3 &&
+          g1::ARM_JOINT_INDICES.size() == 14);
+
+    // lead_in: the prep reference. Endpoints must be EXACT — the last frame is
+    // handed to the policy as the clip's frame 0, and any error there is the
+    // jerk this whole path exists to remove.
+    std::vector<float> to(J, 0.5f);
+    to[17] = 2.0f;  // one arm joint carries the delta, as the cube clips do
+    auto ramp = g1::Motion::lead_in(defaults, to, 60, 50.0f);
+    CHECK(ramp.num_frames == 60 && ramp.num_joints == J && ramp.num_bodies == 1);
+    for (int j = 0; j < J; ++j)
+    {
+        CHECK(ramp.jp(0)[j] == defaults[j]);
+        CHECK(ramp.jp(59)[j] == to[j]);
+    }
+    // smoothstep: monotone, and zero velocity at both ends (continuous with the
+    // stand it leaves and the held pose it lands on)
+    for (int f = 0; f + 1 < 60; ++f)
+        CHECK(ramp.jp(f + 1)[17] >= ramp.jp(f)[17]);
+    // (forward difference, so jv(0) is O(1/T^2) of peak rather than exactly 0)
+    CHECK(ramp.jv(0)[17] < 0.05f * ramp.jv(30)[17] && ramp.jv(59)[17] == 0.f);
+    CHECK(ramp.jv(30)[17] > 0.f);
+    // stand's other channels, per frame: identity root, zero twist, zero contact
+    CHECK(ramp.root_quat(59)[0] == 1.f && ramp.root_lin_vel_b(30)[0] == 0.f);
+    CHECK(ramp.has_contact && ramp.contact(59)[0] == 0.f);
+    CHECK(static_cast<int>(ramp.bodywise_contact.size()) == 60 * g1::NUM_CONTACT_BODIES);
+    CHECK(g1::Motion::lead_in(defaults, to, 1, 50.0f).num_frames == 2);  // T clamped
+    std::puts("ok  joint orders + wire/stand/lead_in");
 }
 
 // ── Tokenizer row layout (the chop) ─────────────────────────────

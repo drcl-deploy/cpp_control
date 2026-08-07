@@ -61,11 +61,32 @@ inline std::vector<int> index_of(const std::vector<std::string>& what,
             std::find(in.begin(), in.end(), what[i]) - in.begin());
     return out;
 }
+
+inline std::vector<int> matching(const std::vector<std::string>& names,
+                                 const std::vector<std::string>& keys)
+{
+    std::vector<int> out;
+    for (size_t i = 0; i < names.size(); ++i)
+        if (std::any_of(keys.begin(), keys.end(),
+                        [&](const std::string& k) { return names[i].find(k) != std::string::npos; }))
+            out.push_back(static_cast<int>(i));
+    return out;
+}
 }  // namespace detail
 
 /// Built from the name tables at static init — cannot drift from them.
 inline const std::vector<int> MJ2IL = detail::index_of(MJ_JOINTS, IL_JOINTS);
 inline const std::vector<int> IL2MJ = detail::index_of(IL_JOINTS, MJ_JOINTS);
+
+/// Kinematic-chain index groups in **MJ order**, likewise name-derived: a
+/// reordered or resized G1 table can never silently invalidate them. Use these
+/// wherever a controller acts on part of the body (e.g. an arms-only ramp)
+/// instead of writing the contiguous ranges out by hand.
+inline const std::vector<int> LEG_JOINT_INDICES =
+    detail::matching(MJ_JOINTS, {"hip", "knee", "ankle"});
+inline const std::vector<int> WAIST_JOINT_INDICES = detail::matching(MJ_JOINTS, {"waist"});
+inline const std::vector<int> ARM_JOINT_INDICES =
+    detail::matching(MJ_JOINTS, {"shoulder", "elbow", "wrist"});
 
 }  // namespace g1
 }  // namespace cpp_control

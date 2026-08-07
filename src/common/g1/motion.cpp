@@ -256,6 +256,37 @@ Motion Motion::stand(const std::vector<float>& default_angles_mj, float fps)
     return m;
 }
 
+Motion Motion::lead_in(const std::vector<float>& from_mj, const std::vector<float>& to_mj,
+                       int num_frames, float fps)
+{
+    Motion m = stand(from_mj, fps);  // root / twist / contact channels of a stand
+    const int T = std::max(2, num_frames), J = m.num_joints;
+    m.num_frames = T;
+    m.joint_pos.resize(static_cast<size_t>(T) * J);
+    m.joint_vel.assign(static_cast<size_t>(T) * J, 0.0f);
+    m.bodywise_contact.assign(static_cast<size_t>(T) * NUM_CONTACT_BODIES, 0.0f);
+    m.body_pos_w.assign(static_cast<size_t>(T) * 3, 0.0f);
+    m.body_quat_w.assign(static_cast<size_t>(T) * 4, 0.0f);
+    m.body_lin_vel_w.assign(static_cast<size_t>(T) * 3, 0.0f);
+    m.body_ang_vel_w.assign(static_cast<size_t>(T) * 3, 0.0f);
+
+    for (int f = 0; f < T; ++f)
+    {
+        m.body_quat_w[static_cast<size_t>(f) * 4] = 1.0f;  // identity, wxyz
+        const float a = static_cast<float>(f) / static_cast<float>(T - 1);
+        const float s = a * a * (3.0f - 2.0f * a);  // smoothstep: jv eases in and out
+        for (int j = 0; j < J; ++j)
+            m.joint_pos[static_cast<size_t>(f) * J + j] = (1.0f - s) * from_mj[j] + s * to_mj[j];
+    }
+    for (int f = 0; f + 1 < T; ++f)  // jv from jp, so the two can never disagree
+        for (int j = 0; j < J; ++j)
+            m.joint_vel[static_cast<size_t>(f) * J + j] =
+                (m.joint_pos[static_cast<size_t>(f + 1) * J + j] -
+                 m.joint_pos[static_cast<size_t>(f) * J + j]) *
+                fps;
+    return m;
+}
+
 void Motion::jp_il(int f, float* out) const
 {
     const float* src = jp(f);

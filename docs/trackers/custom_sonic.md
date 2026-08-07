@@ -168,3 +168,73 @@ launch args: `manifest_path` (default: sibling of the onnx), `motion_start_frame
 note vs mjlab play: deployment cannot teleport the robot to the clip's start
 pose — the clip is heading-aligned to wherever the robot stands, so engage from
 a posture near the clip's frame 0.
+
+## prep gate (`g1_vibe_sonic`)
+
+`g1_vibe_sonic` enforces that last sentence instead of trusting it. `L1` is not
+a new control mode — it is **stand with a different stand clip**:
+
+| | stand (`RB`) | prep (`L1`) |
+|---|---|---|
+| reference | `Motion::stand` — 1 frame, nominal | `Motion::lead_in` — T frames, nominal → `jp(motion_start_frame)` |
+| root / twist / contact | identity, zero, zero | identity, zero, zero (same) |
+| who balances | SONIC | SONIC |
+
+so the ramp is **closed-loop**: the policy carries the robot onto frame 0. An
+open-loop PD walk to an arbitrary pose is a fall on hardware — the robot has no
+balance authority while the setpoint drifts. The lead-in is smoothstepped, with
+`jv` computed from `jp` so the two cannot disagree.
+
+T frames, not a poked 1-frame buffer: the tokenizer reads 10 future frames @
+skip 5 ≈ 1 s of lookahead, so a real clip lets the policy *anticipate* the ramp
+instead of chasing a setpoint it is told is static.
+
+### which joints ramp (`prep_joints`, default `arms`)
+
+Only `prep_joints` chase the clip; every other joint holds nominal. Groups come
+from `g1::{LEG,WAIST,ARM}_JOINT_INDICES` (joint_orders.hpp), name-derived from
+the MJ table like `MJ2IL` — never written out as ranges.
+
+| `prep_joints` | ramps | pose held until `A` | handover at `A` |
+|---|---|---|---|
+| `arms` (default) | MJ 15-28 | nominal stance | arms continuous, **legs+waist step** |
+| `arms_waist` | MJ 12-28 | nominal stance | legs step |
+| `all` | MJ 0-28 | the clip's frame 0 | fully continuous |
+
+the default is `arms` because a flip clip's frame 0 is a **dynamic** pose —
+passed through with momentum, never held. `all` asks SONIC to balance on it
+quasi-statically (CoM near the support edge, weight on toe edges) for as long as
+you take to press `A`; that is both OOD and physically marginal, and it is how
+you get a slouch-and-fall *before* the run even starts. Under `arms`, the leg
+step instead lands at `A`, into a moving in-distribution trajectory whose next
+second the tokenizer is already showing — the policy drives the legs there under
+momentum, which is what it was trained to do.
+
+`arms` is not universally better: a clip whose frame 0 is stable-but-far (a deep
+wide squat) is held fine by SONIC and deserves `all` for the clean handover.
+Every prep logs **both** numbers so that call has a number behind it:
+
+```
+prep -> frame 0 [arms]: ramp max |dq| 1.42 rad (left_shoulder_roll_joint),
+        0.95 s / 47 frames · handover step 0.31 rad (left_ankle_pitch_joint)
+```
+
+so under `all` the guarantee is "the lead-in's last frame *is* clip frame 0";
+under `arms` it weakens to "the arm reference is continuous, and the leg step is
+this big."
+
+flow and refusals:
+
+```
+X ──▶ NOMINAL (joint PD)        L1 outside stand  ──▶ "press RB first"
+RB ─▶ stand   [nominal]         A without a prep  ──▶ refused, mode unchanged
+L1 ─▶ prep    [nominal … f0]    A after re-staging──▶ "press L1 again"
+A ──▶ track   clip from t=0
+```
+
+the refusal is `BaseNode::allow_policy_entry()`, checked **before** the mode
+flip — vetoing afterwards would mean undoing a mode change blind, which can
+strand `DAMPING`/`ZEROING` inside `POLICY`. Every swap of `stand_motion_` also
+arms `pending_engage_`, so `active_motion_` can never outlive its clip.
+
+the base `g1_sonic_node` is unchanged — `A` engages directly, as before.

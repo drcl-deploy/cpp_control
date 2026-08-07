@@ -164,7 +164,7 @@ void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
         std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
         RCLCPP_INFO(this->get_logger(), "-> nominal_pose");
     }
-    else if (pressed(joy::XMODE_A))
+    else if (pressed(joy::XMODE_A) && allow_policy_entry())
     {
         control_mode_ = ControlMode::POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);
