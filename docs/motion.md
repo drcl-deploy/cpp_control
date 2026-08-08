@@ -15,7 +15,8 @@ npz / wire / stand  ──>  g1::Motion  ──views──>  jp/jv (MJ), jp_il/j
 | factory | input | twist | contact | used by |
 |---|---|---|---|---|
 | `from_npz(path, perm)` | retargeted-dataset / mjlab npz (`joint_pos`, `joint_vel`, `body_{pos,quat,lin_vel,ang_vel}_w`, `fps`) + sibling `contact_matrix.npz` — mocke `MjMotionLoader` twin; `perm = g1::MJ2IL` for IL-ordered clips | from file | from file | sonic, vibe-sonic |
-| `from_wire(T, rows, cols)` | motion topic rows, IL-ordered, 65 or 83 wide | 83 only | 83 only | textop (65), sonic, vibe-sonic |
+| `from_wire(T, rows, cols)` | legacy motion topic rows, IL-ordered, 65 or 83 wide | 83 only | 83 only | textop (65), sonic, vibe-sonic |
+| `from_wire(T, rows, 83, flags, fps)` | versioned `MotionReference`; full storage with independent twist/contact validity | explicit flag | explicit flag | sonic, vibe-sonic |
 | `stand(defaults)` | nominal pose, identity anchor | zeros (truth) | zeros (truth) | every stand mode |
 
 **The wire**, two widths (`g1::WIRE_COLS_{MIN,FULL}`, written by

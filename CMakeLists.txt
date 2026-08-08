@@ -10,12 +10,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Dependencies ───────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/MotionReference.msg"
+)
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
@@ -99,10 +104,28 @@ target_include_directories(cpp_control_deploy PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 target_link_libraries(cpp_control_deploy ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB::ZLIB)
 
+# Vibe task contracts are ROS-free: validate artifact semantics in tests and
+# share exactly the same profile selection with the runtime.
+add_library(cpp_control_vibe_contract STATIC src/tasks/vibe/task_profile.cpp)
+target_link_libraries(cpp_control_vibe_contract cpp_control_deploy)
+
 # Deploy self-test (unit checks; optionally smoke-runs a real export):
 #   ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
 add_executable(deploy_selftest tests/deploy_selftest.cpp)
-target_link_libraries(deploy_selftest cpp_control_deploy)
+target_link_libraries(deploy_selftest cpp_control_deploy cpp_control_vibe_contract)
+if(BUILD_TESTING)
+  add_test(NAME deploy_selftest COMMAND deploy_selftest)
+  foreach(_vibe_model
+      "uolm/g1_uolm"
+      "perloco/g1_perloco_grail"
+      "perloco/g1_perloco_omre"
+      "dodge/g1_dodge")
+    string(REPLACE "/" "_" _vibe_test_name "${_vibe_model}")
+    add_test(NAME "vibe_contract_${_vibe_test_name}"
+      COMMAND deploy_selftest --manifest
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/vibe/${_vibe_model}.manifest.json")
+  endforeach()
+endif()
 
 # ── Level 0: base ────────────────────────────────────────
 add_library(cpp_control_base STATIC src/base.cpp)
@@ -168,6 +191,7 @@ if(unitree_hg_FOUND OR messages_FOUND)
   target_link_libraries(g1_sonic_node cpp_control_g1 cpp_control_deploy)
   ament_target_dependencies(g1_sonic_node
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+  rosidl_target_interfaces(g1_sonic_node ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
   # Sonic tracker library (for the vibe-sonic node to inherit from)
   add_library(cpp_control_g1_sonic STATIC src/tasks/tracker/g1_sonic.cpp)
@@ -175,13 +199,16 @@ if(unitree_hg_FOUND OR messages_FOUND)
   target_link_libraries(cpp_control_g1_sonic cpp_control_g1 cpp_control_deploy)
   ament_target_dependencies(cpp_control_g1_sonic
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+  rosidl_target_interfaces(cpp_control_g1_sonic ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
   # Task: vibe (g1 vibe-sonic — extractor export + /enc/tokens)
   if(vision_encoders_FOUND)
     add_executable(g1_vibe_sonic_node src/tasks/vibe/g1_vibe_sonic.cpp)
-    target_link_libraries(g1_vibe_sonic_node cpp_control_g1_sonic)
+    target_link_libraries(g1_vibe_sonic_node
+      cpp_control_g1_sonic cpp_control_vibe_contract)
     ament_target_dependencies(g1_vibe_sonic_node
       rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp vision_encoders ${G1_DEPS})
+    rosidl_target_interfaces(g1_vibe_sonic_node ${PROJECT_NAME} "rosidl_typesupport_cpp")
     list(APPEND INSTALL_TARGETS g1_vibe_sonic_node)
   else()
     message(STATUS "vision_encoders NOT found -- g1_vibe_sonic_node disabled")

@@ -3,6 +3,7 @@
 //
 //   deploy_selftest                                  # unit checks only
 //   deploy_selftest policy.onnx [policy.manifest.json]  # + load, zero-obs run
+//   deploy_selftest --manifest policy.manifest.json  # + Vibe contract only
 //   deploy_selftest --motion clip.npz                # + contact schedule report
 //
 // Plain asserts, no gtest — run it, exit 0 means pass.
@@ -22,6 +23,7 @@
 #include "common/math_utils.hpp"
 #include "common/obs_terms.hpp"
 #include "common/onnx_session.hpp"
+#include "cpp_control/tasks/vibe/task_profile.hpp"
 
 using namespace cpp_control;
 
@@ -241,6 +243,18 @@ static void test_joint_orders()
         CHECK(wire.root_lin_vel_b(1)[0] == (full ? 1.f : 0.f));
         CHECK(wire.root_ang_vel_b(1)[2] == (full ? 2.f : 0.f));
         CHECK(wire.contact(1)[4] == (full ? 1.f : 0.f) && wire.contact(1)[3] == 0.f);
+
+        if (full)
+        {
+            // PerLoco: the same full storage independently carries twist while
+            // contact is deliberately absent, rather than inferred from width.
+            auto twist_only =
+                g1::Motion::from_wire(T, rows.data(), cols, true, false, 60.f);
+            CHECK(twist_only.has_twist && !twist_only.has_contact);
+            CHECK(twist_only.fps == 60.f);
+            CHECK(twist_only.root_lin_vel_b(1)[0] == 1.f);
+            CHECK(twist_only.contact(1)[4] == 0.f);
+        }
     }
     // a width the C++ side does not know is a hard error, never a silent zero
     bool threw = false;
@@ -395,9 +409,21 @@ static void clip_report(const std::string& motion_path)
 
 // ── Optional: real export smoke run ─────────────────────────────
 
-static void smoke_run(const std::string& onnx, const std::string& manifest_path)
+static deploy::DeployManifest check_vibe_contract(const std::string& manifest_path)
 {
     auto manifest = deploy::DeployManifest::load(manifest_path);
+    if (manifest.task_id.rfind("Vibe-", 0) == 0)
+    {
+        const auto profile = vibe::profile_from_task_id(manifest.task_id);
+        vibe::validate_contract(manifest, profile);
+        std::printf("task:  %s [%s]\n", manifest.task_id.c_str(), profile.family.c_str());
+    }
+    return manifest;
+}
+
+static void smoke_run(const std::string& onnx, const std::string& manifest_path)
+{
+    auto manifest = check_vibe_contract(manifest_path);
     deploy::OnnxSession session(onnx);
 
     std::printf("model: %s\n", manifest.model_class.c_str());
@@ -436,15 +462,23 @@ int main(int argc, char** argv)
 
     std::vector<std::string> pos;
     std::string motion;
+    std::string contract_manifest;
     for (int i = 1; i < argc; ++i)
     {
         if (std::string(argv[i]) == "--motion" && i + 1 < argc)
             motion = argv[++i];
+        else if (std::string(argv[i]) == "--manifest" && i + 1 < argc)
+            contract_manifest = argv[++i];
         else
             pos.push_back(argv[i]);
     }
     if (!motion.empty())
         clip_report(motion);
+    if (!contract_manifest.empty())
+    {
+        check_vibe_contract(contract_manifest);
+        std::puts("ok  Vibe manifest contract");
+    }
     if (!pos.empty())
     {
         std::string manifest = pos.size() > 1

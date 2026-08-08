@@ -2,3 +2,6 @@ thirdparty/onnxruntime-linux-x64-*
 __pycache__/
 *.pyc
 *.egg-info/
+
+# Vibe task checkpoints are experimental/local; keep only contract manifests.
+models/vibe/**/*.onnx
