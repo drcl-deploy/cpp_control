@@ -226,6 +226,8 @@ install(PROGRAMS
   scripts/npz_motion_publisher.py
   # scripts/viser_ghost_g1_residual.py   # LEGACY (vibe v1) — reference only
   scripts/attn_viewer.py
+  scripts/attention_overlay_viewer.py
+  scripts/attention_overlay_offboard.sh
   DESTINATION lib/${PROJECT_NAME}/
 )
 

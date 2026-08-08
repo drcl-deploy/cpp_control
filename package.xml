@@ -15,6 +15,10 @@
   <depend>geometry_msgs</depend>
   <depend>vision_encoders</depend>  <!-- ImageTokens (adapt-sonic); build-orders after the msg pkg -->
 
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+
   <!-- Optional: at least one required. CMake handles conditional builds. -->
   <!-- <depend>unitree_hg</depend> -->
   <!-- <depend>messages</depend> -->
