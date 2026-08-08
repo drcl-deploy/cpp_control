@@ -34,10 +34,10 @@ publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repe
 
 # G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
 ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
-ros2 launch cpp_control g1_vibe_uolm.launch.py onnx_path:=/path/to/model.onnx
-ros2 launch cpp_control g1_vibe_perloco_grail.launch.py onnx_path:=/path/to/model.onnx
-ros2 launch cpp_control g1_vibe_perloco_omre.launch.py onnx_path:=/path/to/model.onnx
-ros2 launch cpp_control g1_vibe_dodge.launch.py onnx_path:=/path/to/model.onnx
+ros2 launch cpp_control g1_vibe_uolm.launch.py artifact_dir:=/path/to/checkpoint
+ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=/path/to/checkpoint
+ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/path/to/checkpoint
+ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/path/to/checkpoint
 publish-motion /path/to/motion.npz       # UOLM / PerLoco only
 ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 

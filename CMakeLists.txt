@@ -115,16 +115,6 @@ add_executable(deploy_selftest tests/deploy_selftest.cpp)
 target_link_libraries(deploy_selftest cpp_control_deploy cpp_control_vibe_contract)
 if(BUILD_TESTING)
   add_test(NAME deploy_selftest COMMAND deploy_selftest)
-  foreach(_vibe_model
-      "uolm/g1_uolm"
-      "perloco/g1_perloco_grail"
-      "perloco/g1_perloco_omre"
-      "dodge/g1_dodge")
-    string(REPLACE "/" "_" _vibe_test_name "${_vibe_model}")
-    add_test(NAME "vibe_contract_${_vibe_test_name}"
-      COMMAND deploy_selftest --manifest
-        "${CMAKE_CURRENT_SOURCE_DIR}/models/vibe/${_vibe_model}.manifest.json")
-  endforeach()
 endif()
 
 # ── Level 0: base ────────────────────────────────────────

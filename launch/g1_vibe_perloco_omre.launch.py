@@ -6,19 +6,21 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
     common = os.path.join(pkg, 'launch', 'g1_vibe_sonic.launch.py')
     return LaunchDescription([
-        DeclareLaunchArgument('onnx_path',
-                              description='Local PerLoco OmRe ONNX export'),
+        DeclareLaunchArgument(
+            'artifact_dir',
+            description='Absolute PerLoco OmRe checkpoint directory'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(common),
             launch_arguments={
-                'onnx_path': LaunchConfiguration('onnx_path'),
+                'onnx_path': PathJoinSubstitution([
+                    LaunchConfiguration('artifact_dir'), 'model_14999.onnx']),
                 'expected_task_family': 'perloco',
             }.items(),
         ),

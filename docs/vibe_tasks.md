@@ -32,15 +32,20 @@ therefore not heading-rebased at deployment.
 
 ## Operation
 
-Checkpoints stay local and are not tracked by this experimental package. Start
-the encoder, pass the export explicitly, then stage a clip where required:
+Checkpoints and manifests stay together in their external export directory and
+are not tracked by this experimental package. Start the encoder, pass that
+directory explicitly, then stage a clip where required:
 
 ```bash
 ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
 ros2 launch cpp_control g1_vibe_uolm.launch.py \
-    onnx_path:=/path/to/model_24999.onnx
+    artifact_dir:=/absolute/path/to/wandb_checkpoints/xhej6sbd
 publish-motion /path/to/motion.npz
 ```
+
+The task launches resolve `model_24999.onnx` for UOLM, `model_14999.onnx`
+for both PerLoco variants, and `model_6000.onnx` for Dodge. The generic launch
+still accepts a full `onnx_path` for other exports.
 
 UOLM and PerLoco use `RB` stand → `L1` prep → `A` run. Dodge uses `A` or
 `RB` to engage the nominal SONIC reference and ignores staged clips.

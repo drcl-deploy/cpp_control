@@ -3,5 +3,5 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# Vibe task checkpoints are experimental/local; keep only contract manifests.
-models/vibe/**/*.onnx
+# Vibe task artifacts are experimental/local; pass their external directory.
+models/vibe/
