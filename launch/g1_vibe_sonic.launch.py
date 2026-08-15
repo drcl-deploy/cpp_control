@@ -1,5 +1,5 @@
 r"""
-Launch the vision encoder and manifest-selected G1 Vibe runtime.
+Launch the telemetry bridge, vision encoder, and manifest-selected G1 Vibe runtime.
 
 The encoder process starts first, followed by the controller as a separate
 process. The controller validates the encoder backbone against the policy's kv
@@ -27,6 +27,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, Shutdown
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -45,6 +46,7 @@ def generate_launch_description():
         output='screen',
         parameters=[encoder_config, {
             'model': LaunchConfiguration('encoder_tag'),
+            'camera_ip': LaunchConfiguration('camera_ip'),
         }],
         on_exit=Shutdown(reason='Vibe encoder exited'),
     )
@@ -74,6 +76,19 @@ def generate_launch_description():
         on_exit=Shutdown(reason='Vibe controller exited'),
     )
 
+    bridge = Node(
+        package='cdr_tcp_bridge',
+        executable='cdr_tcp_bridge',
+        name='cdr_tcp_bridge',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_bridge')),
+        parameters=[{
+            'role': 'server',
+            'bind_address': LaunchConfiguration('bridge_address'),
+        }],
+        on_exit=Shutdown(reason='Vibe telemetry bridge exited'),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),
         DeclareLaunchArgument('onnx_path'),
@@ -86,6 +101,17 @@ def generate_launch_description():
         DeclareLaunchArgument('tokens_topic', default_value='/enc/tokens'),
         DeclareLaunchArgument('reference_topic', default_value='/tracker/reference'),
         DeclareLaunchArgument('encoder_tag', default_value='theia-tiny'),
+        DeclareLaunchArgument(
+            'camera_ip',
+            default_value=os.environ.get('VIBE_CAMERA_ADDRESS', '127.0.0.1'),
+            description='TCP camera source selected by setup.sh/setup_local.sh'),
+        DeclareLaunchArgument(
+            'bridge_address',
+            default_value=os.environ.get('VIBE_BRIDGE_ADDRESS', 'gilfoyle-rth'),
+            description='CDR/TCP bind address selected by setup.sh/setup_local.sh'),
+        DeclareLaunchArgument(
+            'enable_bridge', default_value='true',
+            description='start telemetry server (disable only for no-telemetry benchmarks)'),
         DeclareLaunchArgument('expected_task_family', default_value=''),
         DeclareLaunchArgument('goal_color', default_value='0',
                               description='goal up-face color index (one-hot 6)'),
@@ -102,5 +128,6 @@ def generate_launch_description():
                 on_start=[controller],
             ),
         ),
+        bridge,
         encoder,
     ])

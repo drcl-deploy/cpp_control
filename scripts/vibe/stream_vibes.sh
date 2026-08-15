@@ -3,31 +3,19 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: stream_vibes.sh [record] [--deployed_in real|sim]
+Usage: stream_vibes.sh [record]
 
 Starts the offboard CDR/TCP client and the encoder-frame/attention viewer.
-Add `record` to write a timestamped bag. The deployment defaults to real.
+Add `record` to write a timestamped bag. Source setup.sh for a real experiment
+or setup_local.sh for simulation before running this script.
 EOF
 }
 
 record=false
-deployed_in=real
 while (($#)); do
   case "$1" in
     record)
       record=true
-      shift
-      ;;
-    --deployed_in|--deployed-in)
-      if (($# < 2)); then
-        echo "stream_vibes: $1 requires real or sim" >&2
-        exit 2
-      fi
-      deployed_in="$2"
-      shift 2
-      ;;
-    --deployed_in=*|--deployed-in=*)
-      deployed_in="${1#*=}"
       shift
       ;;
     -h|--help)
@@ -41,15 +29,6 @@ while (($#)); do
       ;;
   esac
 done
-
-case "${deployed_in}" in
-  real) server_address=gilfoyle-rth ;;
-  sim) server_address=127.0.0.1 ;;
-  *)
-    echo "stream_vibes: --deployed_in must be real or sim" >&2
-    exit 2
-    ;;
-esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cpp_control_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -71,9 +50,13 @@ source /opt/ros/humble/setup.bash
 source "${workspace_setup}"
 
 export ROS_DOMAIN_ID="${BRIDGE_ROS_DOMAIN_ID:-71}"
+# The setup files select the experiment DDS interface. This client republishes
+# on a separate, local-only domain, so let ROS_LOCALHOST_ONLY select loopback.
+unset CYCLONEDDS_URI
 export ROS_LOCALHOST_ONLY=1
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 export VIBE_BAG_DIR="${VIBE_BAG_DIR:-${repository_root}/bags}"
+export VIBE_BRIDGE_ADDRESS="${VIBE_BRIDGE_ADDRESS:-gilfoyle-rth}"
 
 children=()
 cleanup() {
@@ -88,9 +71,8 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-echo "stream_vibes: deployment=${deployed_in} server=${server_address}:5556"
-ros2 run cdr_tcp_bridge bridge_client.sh \
-  -p server_address:="${server_address}" &
+echo "stream_vibes: server=${VIBE_BRIDGE_ADDRESS}:5556 client_domain=${ROS_DOMAIN_ID}"
+ros2 run cdr_tcp_bridge bridge_client.sh &
 children+=("$!")
 
 echo "stream_vibes: starting encoder frame + attention overlay"
