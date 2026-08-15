@@ -245,6 +245,8 @@ install(PROGRAMS
   scripts/attn_viewer.py
   scripts/attention_overlay_viewer.py
   scripts/attention_overlay_offboard.sh
+  scripts/vibe/record_topics.sh
+  scripts/vibe/stream_vibes.sh
   DESTINATION lib/${PROJECT_NAME}/
 )
 

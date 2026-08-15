@@ -1,7 +1,9 @@
-r"""Launch the manifest-selected G1 Vibe adapt-SONIC runtime.
+r"""
+Launch the vision encoder and manifest-selected G1 Vibe runtime.
 
-Prereqs: an encoder publishing /enc/tokens (vision_encoders encoder.launch.py)
-whose backbone matches the policy's kv port — validated at first token.
+The encoder process starts first, followed by the controller as a separate
+process. The controller validates the encoder backbone against the policy's kv
+port on the first token.
 
 Usage:
     ros2 launch cpp_control g1_vibe_sonic.launch.py \\
@@ -24,14 +26,53 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, Shutdown
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
+    encoder_pkg = get_package_share_directory('vision_encoders')
     default_config = os.path.join(pkg, 'config', 'vibe', 'g1_vibe_sonic.yaml')
+    encoder_config = os.path.join(encoder_pkg, 'config', 'encoder.yaml')
+
+    encoder = Node(
+        package='vision_encoders',
+        executable='encoder_node',
+        name='encoder_node',
+        output='screen',
+        parameters=[encoder_config, {
+            'model': LaunchConfiguration('encoder_tag'),
+        }],
+        on_exit=Shutdown(reason='Vibe encoder exited'),
+    )
+
+    controller = Node(
+        package='cpp_control',
+        executable='g1_vibe_sonic_node',
+        name='g1_vibe_sonic_node',
+        output='screen',
+        parameters=[{
+            'config_path': LaunchConfiguration('config_path'),
+            'onnx_path': LaunchConfiguration('onnx_path'),
+            'manifest_path': LaunchConfiguration('manifest_path'),
+            'motion_path': LaunchConfiguration('motion_path'),
+            'motion_start_frame': LaunchConfiguration('motion_start_frame'),
+            'il_ordered': LaunchConfiguration('il_ordered'),
+            'tokens_topic': LaunchConfiguration('tokens_topic'),
+            'reference_topic': LaunchConfiguration('reference_topic'),
+            'encoder_tag': LaunchConfiguration('encoder_tag'),
+            'expected_task_family': LaunchConfiguration('expected_task_family'),
+            'goal_color': LaunchConfiguration('goal_color'),
+            'prep_joints': LaunchConfiguration('prep_joints'),
+            'prep_rate': LaunchConfiguration('prep_rate'),
+            'prep_min_s': LaunchConfiguration('prep_min_s'),
+            'prep_max_s': LaunchConfiguration('prep_max_s'),
+        }],
+        on_exit=Shutdown(reason='Vibe controller exited'),
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),
@@ -55,27 +96,11 @@ def generate_launch_description():
         DeclareLaunchArgument('prep_min_s', default_value='0.5'),
         DeclareLaunchArgument('prep_max_s', default_value='2.0'),
 
-        Node(
-            package='cpp_control',
-            executable='g1_vibe_sonic_node',
-            name='g1_vibe_sonic_node',
-            output='screen',
-            parameters=[{
-                'config_path': LaunchConfiguration('config_path'),
-                'onnx_path': LaunchConfiguration('onnx_path'),
-                'manifest_path': LaunchConfiguration('manifest_path'),
-                'motion_path': LaunchConfiguration('motion_path'),
-                'motion_start_frame': LaunchConfiguration('motion_start_frame'),
-                'il_ordered': LaunchConfiguration('il_ordered'),
-                'tokens_topic': LaunchConfiguration('tokens_topic'),
-                'reference_topic': LaunchConfiguration('reference_topic'),
-                'encoder_tag': LaunchConfiguration('encoder_tag'),
-                'expected_task_family': LaunchConfiguration('expected_task_family'),
-                'goal_color': LaunchConfiguration('goal_color'),
-                'prep_joints': LaunchConfiguration('prep_joints'),
-                'prep_rate': LaunchConfiguration('prep_rate'),
-                'prep_min_s': LaunchConfiguration('prep_min_s'),
-                'prep_max_s': LaunchConfiguration('prep_max_s'),
-            }],
+        RegisterEventHandler(
+            OnProcessStart(
+                target_action=encoder,
+                on_start=[controller],
+            ),
         ),
+        encoder,
     ])

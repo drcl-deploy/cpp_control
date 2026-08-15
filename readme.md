@@ -32,8 +32,7 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
 publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
 
-# G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
-ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
+# G1 vibe-SONIC (vision): each task launch owns its encoder + controller
 ros2 launch cpp_control g1_vibe_uolm.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/path/to/checkpoint
@@ -41,8 +40,9 @@ ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/path/to/checkpoin
 publish-motion /path/to/motion.npz       # UOLM / PerLoco only
 ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 
-# offboard: /enc/frame beside the latest policy-attention overlay
-ros2 run cpp_control attention_overlay_offboard.sh
+# offboard from a fresh terminal at the unitree_ros2 repository root
+bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh
+bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh record
 # the typed reference independently carries root twist, per-body contact, and
 # UOLM's sibling object_motion.npz goal; missing channels stay explicit
 

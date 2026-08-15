@@ -33,11 +33,11 @@ therefore not heading-rebased at deployment.
 ## Operation
 
 Checkpoints and manifests stay together in their external export directory and
-are not tracked by this experimental package. Start the encoder, pass that
-directory explicitly, then stage a clip where required:
+are not tracked by this experimental package. Each Vibe task launch starts the
+Theia Tiny encoder first and then the controller. Pass the artifact directory
+explicitly, then stage a clip where required:
 
 ```bash
-ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
 ros2 launch cpp_control g1_vibe_uolm.launch.py \
     artifact_dir:=/absolute/path/to/wandb_checkpoints/xhej6sbd
 publish-motion /path/to/motion.npz

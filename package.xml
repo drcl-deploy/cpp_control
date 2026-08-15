@@ -20,6 +20,7 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
+  <exec_depend>cdr_tcp_bridge</exec_depend>
 
   <!-- Optional: at least one required. CMake handles conditional builds. -->
   <!-- <depend>unitree_hg</depend> -->
