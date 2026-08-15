@@ -12,10 +12,21 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
+from rclpy.logging import LoggingSeverity, set_logger_level
 from rclpy.serialization import deserialize_message
 import rosbag2_py
 from rosidl_runtime_py.utilities import get_message
 import yaml
+
+# The pip OpenCV wheel rewrites Qt's platform-plugin path at import time. That
+# points a PyQt application at OpenCV's private xcb plugin and aborts before a
+# window is created. Use the plugins belonging to the PyQt runtime instead;
+# OpenCV is only used here for array operations, never for its own GUI.
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = QtCore.QLibraryInfo.location(
+    QtCore.QLibraryInfo.PluginsPath,
+)
+if '/cv2/qt/' in os.environ.get('QT_QPA_FONTDIR', ''):
+    os.environ.pop('QT_QPA_FONTDIR')
 
 
 FRAME_TOPIC = '/enc/frame'
@@ -653,6 +664,7 @@ def _parse_args():
 
 def main():
     args = _parse_args()
+    set_logger_level('rosbag2_storage', LoggingSeverity.WARN)
     try:
         bag_path = _normalize_bag_path(args.bag) if args.bag else _latest_bag(args.bag_root)
         bag = BagAccess(bag_path)

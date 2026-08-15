@@ -49,4 +49,6 @@ source "${workspace_setup}"
 set -u
 
 export VIBE_BAG_DIR="${VIBE_BAG_DIR:-${repository_root}/bags}"
+export QT_IM_MODULE="${VIBE_QT_IM_MODULE:-compose}"
+export PYTHONWARNINGS="${PYTHONWARNINGS:+${PYTHONWARNINGS},}ignore:Unable to import Axes3D:UserWarning:matplotlib.projections"
 exec python3 "${script_dir}/replay_vibes.py" "$@"
