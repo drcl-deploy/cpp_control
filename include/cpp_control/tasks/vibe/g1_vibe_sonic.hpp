@@ -52,7 +52,7 @@ class G1VibeSonicNode : public G1SonicNode {
   Binding make_binding(float* dst, const deploy::PortSpec& port,
                        const deploy::TermSpec& spec) override;
   RobotCommand policy_control() override;
-  void engage_reset() override;
+  void engage_reset(bool reset_history = true) override;
   void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
 #ifdef HAS_UNITREE_HG
   void on_gamepad() override;

@@ -134,6 +134,7 @@ def _launch_runtime(context, encoder_pkg):
             'prep_rate': LaunchConfiguration('prep_rate'),
             'prep_min_s': LaunchConfiguration('prep_min_s'),
             'prep_max_s': LaunchConfiguration('prep_max_s'),
+            'sys1': LaunchConfiguration('sys1'),
         }],
         on_exit=Shutdown(reason='Vibe controller exited'),
     )
@@ -204,6 +205,9 @@ def generate_launch_description():
                               description='L1 lead-in speed, rad/s (max|dq| sets duration)'),
         DeclareLaunchArgument('prep_min_s', default_value='0.5'),
         DeclareLaunchArgument('prep_max_s', default_value='2.0'),
+        DeclareLaunchArgument('sys1', default_value='false',
+                              description='planner drives the reference: auto-commit, '
+                                          'soft re-engage, prep gate off, status published'),
 
         OpaqueFunction(function=_launch_runtime, args=[encoder_pkg]),
     ])

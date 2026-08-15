@@ -86,6 +86,7 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/vibe/tasks.md](docs/vibe/tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
 | [docs/vibe/background.md](docs/vibe/background.md) | deployment constraints, reference lessons, and design decisions |
 | [docs/vibe/roadmap.md](docs/vibe/roadmap.md) | measured hardening priorities and explicitly deferred work |
+| [docs/sys1.md](docs/sys1.md) | the retrieval planner above SONIC — closed-loop Repose, `sys1:=true` |
 
 ## acknowledgements
 

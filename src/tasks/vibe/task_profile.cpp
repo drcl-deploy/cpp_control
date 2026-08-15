@@ -46,6 +46,12 @@ void validate_tiling(const deploy::PortSpec& port) {
 
 }  // namespace
 
+const char* cube_color_name(int index) {
+  static const char* kNames[NUM_CUBE_COLORS] = {"red",    "orange", "green",
+                                                "yellow", "blue",   "pink"};
+  return (index >= 0 && index < NUM_CUBE_COLORS) ? kNames[index] : "?";
+}
+
 TaskProfile profile_from_task_id(const std::string& task_id) {
   if (starts_with(task_id, "Vibe-Repose-"))
     return {"repose", GoalKind::COLOR, true, true, true, false};

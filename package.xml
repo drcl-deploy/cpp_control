@@ -14,7 +14,8 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>vision_encoders</depend>  <!-- ImageTokens (adapt-sonic); build-orders after the msg pkg -->
+  <depend>vision_encoders</depend>  <!-- ImageTokens (adapt-sonic) + frame_wire.hpp; build-orders after the msg pkg -->
+  <depend>OpenCV</depend>           <!-- sys1 perception only; its targets are skipped without it -->
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

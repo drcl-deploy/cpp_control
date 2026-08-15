@@ -137,7 +137,11 @@ class MotionClock {
  public:
   MotionClock(const Motion& motion, int anchor_body);
 
-  void engage(const std::array<float, 4>& robot_quat, int start_frame = 0);
+  /// `extra_yaw` rotates the whole reference on top of the alignment, so a
+  /// planner that CHOSE a heading residual keeps it (the alignment would
+  /// otherwise force it to zero). 0 = the plain heading rebase.
+  void engage(const std::array<float, 4>& robot_quat, int start_frame = 0,
+              float extra_yaw = 0.0f);
   void step(double dt);  ///< advance by fps*dt motion frames
 
   int frame() const;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cpp_control/msg/motion_reference.hpp>
+#include <cpp_control/msg/sys0_status.hpp>
 #include <functional>
 #include <memory>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -35,6 +36,13 @@ namespace cpp_control {
  * Stand mode (RB / R1): SONIC tracks a synthetic 1-frame reference — nominal
  * pose, identity anchor at the robot's heading. A (re)starts the loaded clip
  * (committing any staged one first).
+ *
+ * `sys1:=true` hands the reference stream to a planner instead of a human:
+ * references auto-commit on arrival, the swap keeps the observation histories
+ * (a planner commits every couple of seconds, and resetting them that often
+ * would starve every history term), and Sys0Status is published so the planner
+ * times its modes on what is ACTUALLY playing. Default false — open-loop
+ * rollouts are bit-for-bit unchanged.
  */
 class G1SonicNode : public G1Node {
  public:
@@ -62,11 +70,14 @@ class G1SonicNode : public G1Node {
                                const deploy::TermSpec& spec);
   void make_stand_motion();
   void enter_stand();
-  virtual void engage_reset();
+  /// `reset_history` false = soft re-engage: re-point and re-align the clock
+  /// but keep observation histories and the last action (sys1 reference swaps).
+  virtual void engage_reset(bool reset_history = true);
   void fill_tokenizer(float* dst);
   void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void on_reference(cpp_control::msg::MotionReference::SharedPtr msg);
   void commit_pending_motion();
+  void publish_sys0_status();
   virtual void on_button_a();  ///< commit staged motion (if any) + track
 
   // deploy artifacts
@@ -85,6 +96,14 @@ class G1SonicNode : public G1Node {
       reference_sub_;
   bool typed_reference_seen_ = false;
   bool legacy_ignore_logged_ = false;
+
+  // sys1: planner-driven references (all inert when sys1_ is false)
+  bool sys1_ = false;
+  float pend_entry_yaw_ = 0.0f;  ///< staged reference's chosen heading residual
+  float entry_yaw_ = 0.0f;       ///< ...and the committed one's
+  std::string pend_reference_id_, reference_id_;
+  rclcpp::Publisher<cpp_control::msg::Sys0Status>::SharedPtr status_pub_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
 
   // stand mode: synthetic 1-frame reference (nominal pose, identity anchor)
   std::unique_ptr<g1::Motion> stand_motion_;

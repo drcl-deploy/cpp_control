@@ -381,7 +381,7 @@ MotionClock::MotionClock(const Motion& motion, int anchor_body)
 }
 
 void MotionClock::engage(const std::array<float, 4>& robot_quat,
-                         int start_frame) {
+                         int start_frame, float extra_yaw) {
   phase_ =
       static_cast<double>(std::clamp(start_frame, 0, motion_.num_frames - 1));
   const int f0 = static_cast<int>(phase_);
@@ -389,6 +389,11 @@ void MotionClock::engage(const std::array<float, 4>& robot_quat,
   heading_offset_ = math::qmul(
       math::heading_quat(robot_quat),
       math::qinv(math::heading_quat(motion_.root_quat(f0, anchor_body_))));
+  if (extra_yaw != 0.0f) {
+    const float h = 0.5f * extra_yaw;
+    heading_offset_ = math::qmul(
+        {std::cos(h), 0.0f, 0.0f, std::sin(h)}, heading_offset_);
+  }
 }
 
 void MotionClock::step(double dt) {

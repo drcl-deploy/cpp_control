@@ -1,0 +1,37 @@
+# sys1 — the retrieval planner above the repose SONIC policy.
+#
+# Knobs are documented where they were measured: vibe planner/clips.py::ClipCfg.
+# `version` picks the preset; anything under `knobs` overrides it, so an A/B is
+# a one-line edit and cannot silently drift from the numbers it baselines.
+
+version: v6        # v5 | v6 — RRF + horizon + graded sighting is v6
+target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink
+
+rate_hz: 20.0      # planner tick. Soft real-time; ~2 ms of work per tick.
+stale_s: 1.0       # lowstate / camera silence that parks the planner
+
+# The 78-row alphabet (bench-produced, offline — the bake stays Python).
+clips: /home/loki/drcl_projects/vibe/data/sys1_clips.npz
+
+frames:
+  # retargeted: slice the spans out of the dataset at boot (~6.6 MB resident)
+  # baked:      one bundle written by `sys1_selftest --bake`, for the Orin
+  source: retargeted
+  path: /home/loki/drcl_projects/vibe/data/retargeted_motions
+  # Which npz each clip came from — `library` is only read for `retargeted`,
+  # and only for its `motion_files` list.
+  library: /home/loki/drcl_projects/vibe/data/sys1_library.npz
+
+# D435i colour stream, head-mounted. Intrinsics ride per-plane on the wire, so
+# there is nothing to calibrate here — only where to connect.
+camera:
+  host: 127.0.0.1
+  port: 5555
+
+# Camera in torso_link, verbatim from unitree_robots/g1/g1_29dof.xml. The waist
+# chain (yaw/roll/pitch) is the only kinematics between it and the pelvis.
+mount:
+  xyz: [0.05, 0.0, 0.4318]
+  quat: [0.6533, 0.2706, -0.2706, -0.6533]   # wxyz, 45 deg down-forward
+
+knobs: {}

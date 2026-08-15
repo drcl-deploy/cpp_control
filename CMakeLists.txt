@@ -20,13 +20,16 @@ find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionReference.msg"
+  "msg/Sys0Status.msg"
+  "msg/Sys1Status.msg"
 )
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
 find_package(unitree_go QUIET)
 find_package(messages QUIET)
-find_package(vision_encoders QUIET)  # ImageTokens (vibe-sonic)
+find_package(vision_encoders QUIET)  # ImageTokens (vibe-sonic) + frame_wire.hpp
+find_package(OpenCV QUIET)           # sys1 perception only
 
 if(unitree_hg_FOUND)
   message(STATUS "Found unitree_hg -- Unitree HG backend enabled")
@@ -207,6 +210,47 @@ if(unitree_hg_FOUND OR messages_FOUND)
   list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_sonic_node)
 endif()
 
+# ── sys1: the planner above sys0 (own process, soft real-time) ──
+# ROS-free algorithm + one thin node. OpenCV is the only new dependency and
+# covers resize, minAreaRect and the 3x3 symmetric eigen-solve alike.
+if(OpenCV_FOUND)
+  add_library(cpp_control_sys1 STATIC
+    src/sys1/cfg.cpp
+    src/sys1/sight.cpp
+    src/sys1/clips.cpp
+    src/sys1/table.cpp
+    src/sys1/writer.cpp)
+  target_include_directories(cpp_control_sys1 PUBLIC ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(cpp_control_sys1 cpp_control_deploy ${OpenCV_LIBS})
+
+  # Replay rig + bake: no robot, no ROS, no risk (docs/sys1.md §7 P0).
+  add_executable(sys1_selftest tests/sys1_selftest.cpp)
+  target_link_libraries(sys1_selftest cpp_control_sys1 cpp_control_vibe_contract)
+  if(BUILD_TESTING)
+    add_test(NAME sys1_selftest COMMAND sys1_selftest)
+  endif()
+  list(APPEND INSTALL_TARGETS sys1_selftest)
+
+  if(unitree_hg_FOUND AND vision_encoders_FOUND)
+    add_executable(g1_sys1_repose_node src/sys1/node.cpp)
+    # frame_wire.hpp is a plain header, not a rosidl artifact, so it rides the
+    # package's exported include dirs rather than its typesupport target.
+    target_include_directories(g1_sys1_repose_node
+      PRIVATE ${vision_encoders_INCLUDE_DIRS})
+    target_link_libraries(g1_sys1_repose_node
+      cpp_control_sys1 cpp_control_vibe_contract yaml-cpp)
+    ament_target_dependencies(g1_sys1_repose_node
+      rclcpp std_msgs unitree_hg vision_encoders)
+    rosidl_target_interfaces(g1_sys1_repose_node
+      ${PROJECT_NAME} "rosidl_typesupport_cpp")
+    list(APPEND INSTALL_TARGETS g1_sys1_repose_node)
+  else()
+    message(STATUS "sys1 node disabled -- needs unitree_hg + vision_encoders")
+  endif()
+else()
+  message(STATUS "OpenCV NOT found -- sys1 disabled")
+endif()
+
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────
 if(messages_FOUND)
   add_library(cpp_control_mini_pi STATIC src/robots/mini_pi.cpp)
@@ -247,6 +291,7 @@ install(PROGRAMS
   scripts/vibe/replay_vibes.py
   scripts/vibe/replay_vibes.sh
   scripts/vibe/stream_vibes.sh
+  scripts/sys1_console.py
   DESTINATION lib/${PROJECT_NAME}/
 )
 

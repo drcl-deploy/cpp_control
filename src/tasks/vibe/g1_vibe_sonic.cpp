@@ -52,8 +52,16 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
   encoder_tag_ = this->declare_parameter("encoder_tag", "theia-tiny");
   goal_color_ = static_cast<int>(this->declare_parameter("goal_color", 0));
   if (task_profile_.goal == vibe::GoalKind::COLOR &&
-      (goal_color_ < 0 || goal_color_ >= 6))
+      (goal_color_ < 0 || goal_color_ >= vibe::NUM_CUBE_COLORS))
     throw std::runtime_error("g1_vibe: goal_color must be in [0, 5]");
+  // Under a planner the reference stream never steps: sys1 rate-limits its own
+  // lead-in onto every clip, which is the same mechanism the L1 prep provides
+  // for a human. Gating on a button here would just deadlock the loop.
+  if (sys1_ && task_profile_.requires_prep) {
+    task_profile_.requires_prep = false;
+    RCLCPP_INFO(this->get_logger(),
+                "sys1 mode: prep gate OFF — the planner ramps onto each clip");
+  }
   stale_ticks_ =
       static_cast<int>(this->declare_parameter("token_stale_ticks", 5));
   prep_rate_ = this->declare_parameter("prep_rate", 1.5);
@@ -116,13 +124,14 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
     goal_color_sub_ = this->create_subscription<std_msgs::msg::Int32>(
         "/vibe/sonic/goal_color", 10,
         [this](std_msgs::msg::Int32::SharedPtr msg) {
-          if (msg->data < 0 || msg->data >= 6) {
+          if (msg->data < 0 || msg->data >= vibe::NUM_CUBE_COLORS) {
             RCLCPP_WARN(this->get_logger(), "ignoring invalid goal_color %d",
                         msg->data);
             return;
           }
           goal_color_ = msg->data;
-          RCLCPP_INFO(this->get_logger(), "goal_color -> %d", goal_color_);
+          RCLCPP_INFO(this->get_logger(), "goal_color -> %d (%s)", goal_color_,
+                      vibe::cube_color_name(goal_color_));
         });
   if (!attn_name_.empty()) {
     const size_t expected =
@@ -415,10 +424,12 @@ void G1VibeSonicNode::on_button_a() {
 
 // ── Engage ───────────────────────────────────────────────────────
 
-void G1VibeSonicNode::engage_reset() {
-  G1SonicNode::engage_reset();
+void G1VibeSonicNode::engage_reset(bool reset_history) {
+  G1SonicNode::engage_reset(reset_history);
 
-  if (!has_contact_command_) return;
+  // The contact report is a commit-time announcement for a human. A planner
+  // commits every couple of seconds, so say it only on a cold engage.
+  if (!has_contact_command_ || !reset_history) return;
 
   // The contact command rides the clip, so a clip without one silently feeds
   // the adapter zeros. Say what is actually about to be commanded.

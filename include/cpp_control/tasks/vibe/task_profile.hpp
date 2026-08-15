@@ -14,6 +14,12 @@ enum class GoalKind {
   NONE,
 };
 
+/// THE cube-colour index order: the one-hot layout of `object_goal_color`, the
+/// row order of sys1's palette, and what /vibe/sonic/goal_color carries. One
+/// list, so the planner and the policy cannot mean different things by "4".
+constexpr int NUM_CUBE_COLORS = 6;
+const char* cube_color_name(int index);
+
 /// Task semantics not expressible as tensor shapes alone.
 ///
 /// The manifest remains authoritative for buffers and terms. This profile only
