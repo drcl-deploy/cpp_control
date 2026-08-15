@@ -416,17 +416,23 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         self.figure = Figure(figsize=(5, 3), tight_layout=True)
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.axes = self.figure.add_subplot(111)
+        self.value_label = QtWidgets.QLabel('')
+        self.value_label.setAlignment(QtCore.Qt.AlignCenter)
         self.cursor = None
         self.marker = None
+        self.plot_background = None
         self.current_seconds = 0.0
         self.selector.currentIndexChanged.connect(self._plot_field)
+        self.canvas.mpl_connect('draw_event', self._on_canvas_draw)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.selector)
+        layout.addWidget(self.value_label)
         layout.addWidget(self.canvas, 1)
         self._plot_field()
 
     def _plot_field(self):
+        self.plot_background = None
         self.axes.clear()
         fields = self.telemetry.values.get(self.topic, {})
         times = self.telemetry.times.get(self.topic, np.empty(0))
@@ -439,6 +445,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             )
             self.cursor = None
             self.marker = None
+            self.value_label.setText('topic unavailable')
         else:
             self.axes.plot(times, values, linewidth=0.8, color='#2864b4')
             self.axes.set_xlabel('bag time (s)')
@@ -446,13 +453,17 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             self.axes.grid(True, alpha=0.25)
             self.cursor = self.axes.axvline(
                 self.current_seconds, color='#d62728', linewidth=1.0,
+                animated=True,
             )
             index = self._nearest_index(times, self.current_seconds)
             self.marker, = self.axes.plot(
                 [times[index]], [values[index]], 'o', color='#d62728', markersize=4,
+                animated=True,
             )
-            self._set_title(field, values[index])
-        self.canvas.draw_idle()
+            self._set_value(field, values[index])
+        # Field changes and resizes redraw the static trace once. Cursor moves
+        # use the cached background below instead of repainting both plots.
+        self.canvas.draw()
 
     @staticmethod
     def _nearest_index(times, seconds):
@@ -465,8 +476,20 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             return index - 1
         return index
 
-    def _set_title(self, field, value):
-        self.axes.set_title(f'{field} = {float(value):.5g}', fontsize=10)
+    def _set_value(self, field, value):
+        self.value_label.setText(f'{field} = {float(value):.5g}')
+
+    def _on_canvas_draw(self, _event):
+        self.plot_background = self.canvas.copy_from_bbox(self.axes.bbox)
+        self._blit_cursor()
+
+    def _blit_cursor(self):
+        if self.plot_background is None or self.cursor is None or self.marker is None:
+            return
+        self.canvas.restore_region(self.plot_background)
+        self.axes.draw_artist(self.cursor)
+        self.axes.draw_artist(self.marker)
+        self.canvas.blit(self.axes.bbox)
 
     def set_time(self, seconds):
         self.current_seconds = seconds
@@ -477,8 +500,8 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         index = self._nearest_index(times, seconds)
         self.cursor.set_xdata([seconds, seconds])
         self.marker.set_data([times[index]], [values[index]])
-        self._set_title(self.selector.currentText(), values[index])
-        self.canvas.draw_idle()
+        self._set_value(self.selector.currentText(), values[index])
+        self._blit_cursor()
 
 
 class ReplayWindow(QtWidgets.QMainWindow):
@@ -536,8 +559,9 @@ class ReplayWindow(QtWidgets.QMainWindow):
         outer.addLayout(content, 1)
 
         self.refresh_timer = QtCore.QTimer(self)
-        self.refresh_timer.setSingleShot(True)
-        self.refresh_timer.setInterval(35)
+        # The recorded visual streams are capped at 50 Hz, so faster refreshes
+        # cannot reveal another frame and would only add duplicate bag seeks.
+        self.refresh_timer.setInterval(20)
         self.refresh_timer.timeout.connect(self._refresh_visuals)
         self.slider.valueChanged.connect(self._on_time_changed)
         self.attention_panel.selector.currentIndexChanged.connect(
@@ -558,7 +582,12 @@ class ReplayWindow(QtWidgets.QMainWindow):
         )
         self.lowstate_panel.set_time(seconds)
         self.lowcmd_panel.set_time(seconds)
-        self.refresh_timer.start()
+        # Throttle expensive bag seeks instead of debouncing them. Restarting
+        # this timer for every mouse event made images wait until dragging
+        # stopped; leaving an active timer alone renders the newest cursor
+        # position continuously at a bounded rate.
+        if not self.refresh_timer.isActive():
+            self.refresh_timer.start()
 
     def _refresh_visuals(self):
         target_ns = self.bag.start_ns + self.slider.value() * 1_000_000
@@ -575,6 +604,8 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.latest_query_names = self._query_names(attention, self.latest_attention)
         self.attention_panel.set_queries(self.latest_query_names)
         self._render_attention()
+        if not self.slider.isSliderDown():
+            self.refresh_timer.stop()
 
     @staticmethod
     def _attention_array(message):
