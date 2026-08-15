@@ -33,7 +33,7 @@ namespace cpp_control {
  * (grid/dim/CLS-presence) — a wrong encoder fails loud, not silent.
  *
  * Smoke output: the graph's `attn` (queries x patches) is republished on
- * `attention_topic` every policy tick — see scripts/attn_viewer.py.
+ * `attention_topic` every policy tick and carried into the Vibe viewers.
  *
  * Prep (L1) — not a new mode, just stand running a different stand clip: the
  * 1-frame nominal reference is swapped for a `Motion::lead_in` ramp onto the

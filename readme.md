@@ -39,11 +39,11 @@ ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=/path/to/c
 ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/path/to/checkpoint
 publish-motion /path/to/motion.npz       # Repose / UOLM / PerLoco only
-ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 
 # offboard from a fresh terminal at the unitree_ros2 repository root
 bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh
 bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh record
+bash cyclonedds_ws/src/cpp_control/scripts/vibe/replay_vibes.sh [BAG_DIRECTORY]
 # the typed reference independently carries root twist, per-body contact, and
 # UOLM's sibling object_motion.npz goal; missing channels stay explicit
 

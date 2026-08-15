@@ -103,6 +103,25 @@ Bags are written under `~/unitree_ros2/bags/` with names such as
 `15Aug2026_16_34`. They contain `/enc/frame`, `/enc/tokens`, the attention
 mask, `/lowstate`, and `/lowcmd`.
 
+Replay the newest completed bag from another fresh terminal:
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/vibe/replay_vibes.sh
+```
+
+Or select one explicitly:
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/vibe/replay_vibes.sh \
+  ~/unitree_ros2/bags/15Aug2026_16_34
+```
+
+The replay viewer is read-only and does not join a DDS domain. Its one time
+slider synchronizes the raw encoder frame, query-selectable attention overlay,
+and selectable scalar traces from `/lowstate` and `/lowcmd`. The image and
+attention panels show their offset from the selected bag timestamp so dropped
+or delayed samples remain visible.
+
 ## Controls and shutdown
 
 - Repose, UOLM, and PerLoco: `RB` stand, `L1` prep, `A` run.

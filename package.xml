@@ -19,6 +19,11 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>cdr_tcp_bridge</exec_depend>
 

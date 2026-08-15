@@ -11,8 +11,8 @@ Usage:
     # hardware: no motion_path — boot to stand, stream clips instead:
     ros2 launch cpp_control g1_vibe_sonic.launch.py artifact_dir:=/path/to/export
     publish-motion /path/to/motion.npz     # stage; A starts it
-    # smoke the attention rows:
-    ros2 run cpp_control attn_viewer.py
+    # offboard live camera + attention overlay:
+    bash scripts/vibe/stream_vibes.sh
 
 The artifact directory must contain a matching .onnx/.manifest.json pair. If
 it contains multiple pairs, select one with checkpoint:=<training step>.
