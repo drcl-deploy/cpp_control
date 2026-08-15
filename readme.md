@@ -82,7 +82,8 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/onnx_policies.md](docs/onnx_policies.md) | the two ONNX serving stacks (legacy vs manifest) and when to use which |
 | [docs/motion.md](docs/motion.md) | `g1::Motion` — the one reference-motion class |
 | [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
-| [docs/vibe_tasks.md](docs/vibe_tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
+| [docs/vibe/experiments.md](docs/vibe/experiments.md) | real/simulation experiment commands, viewing, and recording |
+| [docs/vibe/tasks.md](docs/vibe/tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
 
 ## acknowledgements
 

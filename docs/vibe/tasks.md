@@ -14,7 +14,7 @@ family does not match the task contract.
 | `g1_vibe_perloco_omre.launch.py` | PerLoco OmRe | same interface as Grail, different weights | motion, prep, run |
 | `g1_vibe_dodge.launch.py` | Dodge | none | stand-reactive; no motion or prep |
 
-All four use Theia Tiny image tokens. Token tag, patch grid, feature width,
+All five use Theia Tiny image tokens. Token tag, patch grid, feature width,
 CLS width, finite values, and freshness are checked before policy entry.
 
 ## Reference transport
