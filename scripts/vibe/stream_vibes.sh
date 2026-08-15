@@ -46,8 +46,13 @@ fi
 
 # This is intentionally a source-tree entry point: it makes a completely fresh
 # terminal ready before invoking any `ros2` command.
+# ROS-generated setup files are not nounset-safe: Humble reads variables such
+# as AMENT_TRACE_SETUP_FILES before initializing them. Keep strict mode for
+# this script, but suspend nounset while importing the environment.
+set +u
 source /opt/ros/humble/setup.bash
 source "${workspace_setup}"
+set -u
 
 export ROS_DOMAIN_ID="${BRIDGE_ROS_DOMAIN_ID:-71}"
 # The setup files select the experiment DDS interface. This client republishes
