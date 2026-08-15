@@ -1,5 +1,4 @@
-"""
-Launch the G1 adapt-SONIC node (vision-adapted exported vibe policy).
+r"""Launch the manifest-selected G1 Vibe adapt-SONIC runtime.
 
 Prereqs: an encoder publishing /enc/tokens (vision_encoders encoder.launch.py)
 whose backbone matches the policy's kv port — validated at first token.
@@ -16,9 +15,9 @@ Usage:
 The .manifest.json is expected next to the .onnx (exporter default);
 override with manifest_path:= if it lives elsewhere.
 
-The clip drives the whole `augmentation` port (root twist + per-body object
-contact), so keep contact_matrix.npz next to motion.npz — streamed clips carry
-it on the 83-col wire, and either way engage logs what is being commanded.
+Prefer one of the task launch files, which selects a packaged artifact and
+pins expected_task_family. This generic entry point remains useful for export
+development and Repose compatibility.
 """
 
 import os
@@ -44,6 +43,9 @@ def generate_launch_description():
         DeclareLaunchArgument('il_ordered', default_value='true',
                               description='motion npz is IL-ordered (retargeted dataset)'),
         DeclareLaunchArgument('tokens_topic', default_value='/enc/tokens'),
+        DeclareLaunchArgument('reference_topic', default_value='/tracker/reference'),
+        DeclareLaunchArgument('encoder_tag', default_value='theia-tiny'),
+        DeclareLaunchArgument('expected_task_family', default_value=''),
         DeclareLaunchArgument('goal_color', default_value='0',
                               description='goal up-face color index (one-hot 6)'),
         DeclareLaunchArgument('prep_joints', default_value='arms',
@@ -66,6 +68,9 @@ def generate_launch_description():
                 'motion_start_frame': LaunchConfiguration('motion_start_frame'),
                 'il_ordered': LaunchConfiguration('il_ordered'),
                 'tokens_topic': LaunchConfiguration('tokens_topic'),
+                'reference_topic': LaunchConfiguration('reference_topic'),
+                'encoder_tag': LaunchConfiguration('encoder_tag'),
+                'expected_task_family': LaunchConfiguration('expected_task_family'),
                 'goal_color': LaunchConfiguration('goal_color'),
                 'prep_joints': LaunchConfiguration('prep_joints'),
                 'prep_rate': LaunchConfiguration('prep_rate'),

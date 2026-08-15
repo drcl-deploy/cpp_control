@@ -2,3 +2,6 @@ thirdparty/onnxruntime-linux-x64-*
 __pycache__/
 *.pyc
 *.egg-info/
+
+# Vibe task artifacts are experimental/local; pass their external directory.
+models/vibe/
