@@ -33,11 +33,12 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
 publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
 
 # G1 vibe-SONIC (vision): each task launch owns its encoder + controller
+ros2 launch cpp_control g1_vibe_repose.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_uolm.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/path/to/checkpoint
-publish-motion /path/to/motion.npz       # UOLM / PerLoco only
+publish-motion /path/to/motion.npz       # Repose / UOLM / PerLoco only
 ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 
 # offboard from a fresh terminal at the unitree_ros2 repository root

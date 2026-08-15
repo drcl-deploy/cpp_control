@@ -8,6 +8,7 @@ family does not match the task contract.
 
 | launch | artifact task | external command | lifecycle |
 |---|---|---|---|
+| `g1_vibe_repose.launch.py` | Repose | goal up-face color | motion, prep, run |
 | `g1_vibe_uolm.launch.py` | UOLM | root twist + contact; final object pose query | motion, prep, run |
 | `g1_vibe_perloco_grail.launch.py` | PerLoco Grail | root twist (also the aliased task query) | motion, prep, run |
 | `g1_vibe_perloco_omre.launch.py` | PerLoco OmRe | same interface as Grail, different weights | motion, prep, run |
@@ -43,12 +44,13 @@ ros2 launch cpp_control g1_vibe_uolm.launch.py \
 publish-motion /path/to/motion.npz
 ```
 
-The task launches resolve `model_24999.onnx` for UOLM, `model_14999.onnx`
-for both PerLoco variants, and `model_6000.onnx` for Dodge. The generic launch
-still accepts a full `onnx_path` for other exports.
+The task launches discover the matching `.onnx` and `.manifest.json` pair in
+the artifact directory. A directory with multiple exported pairs must also
+specify `checkpoint:=<training_step>`; the launch fails rather than silently
+choosing a policy. The generic launch uses the same artifact interface.
 
-UOLM and PerLoco use `RB` stand → `L1` prep → `A` run. Dodge uses `A` or
-`RB` to engage the nominal SONIC reference and ignores staged clips.
+Repose, UOLM, and PerLoco use `RB` stand → `L1` prep → `A` run. Dodge uses
+`A` or `RB` to engage the nominal SONIC reference and ignores staged clips.
 
 ## Simulator follow-up
 

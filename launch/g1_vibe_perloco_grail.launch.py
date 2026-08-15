@@ -6,7 +6,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
@@ -16,11 +16,13 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'artifact_dir',
             description='Absolute PerLoco Grail checkpoint directory'),
+        DeclareLaunchArgument('checkpoint', default_value='',
+                              description='Artifact step if the directory has multiple exports'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(common),
             launch_arguments={
-                'onnx_path': PathJoinSubstitution([
-                    LaunchConfiguration('artifact_dir'), 'model_14999.onnx']),
+                'artifact_dir': LaunchConfiguration('artifact_dir'),
+                'checkpoint': LaunchConfiguration('checkpoint'),
                 'expected_task_family': 'perloco',
             }.items(),
         ),
