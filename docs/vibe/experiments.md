@@ -74,6 +74,11 @@ files. Most export directories contain one pair and need no other argument. If
 a directory contains several pairs, launch fails instead of guessing; add
 `checkpoint:=<training_step>` to select one explicitly.
 
+Closed-loop Repose runs the same way through `g1_sys1_repose.launch.py`, which
+adds the planner process to this same runtime — see
+[docs/sys1/experiments.md](../sys1/experiments.md) for the two things that
+differ (depth on the camera wire, and the console terminal).
+
 For Repose, UOLM, or PerLoco, stage the motion after the task is running:
 
 ```bash
@@ -101,7 +106,8 @@ bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh r
 
 Bags are written under `~/unitree_ros2/bags/` with names such as
 `15Aug2026_16_34`. They contain `/enc/frame`, `/enc/tokens`, the attention
-mask, `/lowstate`, and `/lowcmd`.
+mask, `/lowstate`, and `/lowcmd` — plus sys1's three state topics, which are
+silent on an open-loop run and need no profile or flag to enable.
 
 Replay the newest completed bag from another fresh terminal:
 
@@ -120,7 +126,9 @@ The replay viewer is read-only and does not join a DDS domain. Its one time
 slider synchronizes the raw encoder frame, query-selectable attention overlay,
 and selectable scalar traces from `/lowstate` and `/lowcmd`. The image and
 attention panels show their offset from the selected bag timestamp so dropped
-or delayed samples remain visible.
+or delayed samples remain visible. A bag recorded under sys1 also gets a
+planner pane, held at the cursor rather than interpolated; an open-loop bag
+simply has none.
 
 ## Controls and shutdown
 

@@ -18,12 +18,18 @@ done
 
 bridge_share="$(ros2 pkg prefix cdr_tcp_bridge)/share/cdr_tcp_bridge"
 qos_path="${bridge_share}/config/record_qos.yaml"
+# The last three are sys1's; they stay silent on an open-loop run, and a bag is
+# self-describing, so the replay viewer shows the planner pane only when they
+# actually carried something.
 topics=(
   /enc/frame
   /enc/tokens
   /vibe/sonic/attention_mask
   /lowstate
   /lowcmd
+  /vibe/sys1/status
+  /vibe/sys0/status
+  /vibe/sonic/goal_color
 )
 
 storage_args=(-s sqlite3)

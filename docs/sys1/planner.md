@@ -84,7 +84,7 @@ ACTUALLY playing is the only thing that advances the plan — and a human pressi
                                                           v
 [20 Hz SOFT RT]  camera TCP -> g1_sys1_repose_node -> /tracker/reference
                      ^ /lowstate (FK + IMU), /vibe/sonic/goal_color
-                     +-> /vibe/sys1/status -> scripts/sys1_console.py
+                     +-> /vibe/sys1/status -> scripts/sys1/sys1_console.py
 ```
 
 Budget: `classify` is the only hot spot (12 squared distances per live pixel at
@@ -158,19 +158,35 @@ sys1_selftest --table sys1_clips.npz --library sys1_library.npz \
 
 ## 6. Running it
 
-```bash
-# open-loop, unchanged
-ros2 launch cpp_control g1_vibe_repose.launch.py artifact:=/path/model_58000.onnx
+Full runbook: [experiments.md](experiments.md). The shape, and why it is that
+shape — `g1_sys1_repose` is a **sibling** of `g1_vibe_repose`, not a layer on
+it, so both get the bridge, the encoder and the controller from the one common
+file and differ only by `sys1:=true` plus the planner process:
 
-# closed-loop
-ros2 launch cpp_control g1_sys1_repose.launch.py artifact:=/path/model_58000.onnx
-ros2 run cpp_control sys1_console.py     # 0-5 or r/o/g/y/b/p sets the target
 ```
+g1_vibe_sonic.launch.py            bridge + encoder + controller
+  ├── g1_vibe_repose.launch.py        open-loop, untouched by sys1
+  └── g1_sys1_repose.launch.py        + sys1:=true + g1_sys1_repose_node
+```
+
+```bash
+ros2 launch cpp_control g1_sys1_repose.launch.py artifact_dir:=/path/to/export
+bash scripts/sys1/run_sys1.sh      # 0-5 or r/o/g/y/b/p sets the target
+```
+
+The camera address comes from the launch, not from the yaml — one `camera_ip`
+reaches the encoder and the planner, so the two halves of a run cannot end up
+watching different cameras. `camera:` in the yaml is the standalone fallback.
 
 `/vibe/sonic/goal_color` is read by BOTH the planner and the policy's
 `object_goal_color` one-hot — one topic, so they cannot disagree about what "4"
 means. The index order is `vibe::cube_color_name`: 0 red, 1 orange, 2 green,
 3 yellow, 4 blue, 5 pink.
+
+All three state topics ride the telemetry bridge in `full.yaml` and
+`light.yaml`, silent unless a planner is up. So the standard viewers and bags
+carry sys1 with no profile switch, and `replay_vibes.py` grows a planner pane
+when a bag has one.
 
 ## 7. What `sys1:=true` changes in sys0
 

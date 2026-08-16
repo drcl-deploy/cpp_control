@@ -291,7 +291,8 @@ install(PROGRAMS
   scripts/vibe/replay_vibes.py
   scripts/vibe/replay_vibes.sh
   scripts/vibe/stream_vibes.sh
-  scripts/sys1_console.py
+  scripts/sys1/run_sys1.sh
+  scripts/sys1/sys1_console.py
   DESTINATION lib/${PROJECT_NAME}/
 )
 

@@ -40,6 +40,10 @@ ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/path/to/ch
 ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/path/to/checkpoint
 publish-motion /path/to/motion.npz       # Repose / UOLM / PerLoco only
 
+# closed-loop Repose: the same runtime, driven by the sys1 planner
+ros2 launch cpp_control g1_sys1_repose.launch.py artifact_dir:=/path/to/checkpoint
+bash cyclonedds_ws/src/cpp_control/scripts/sys1/run_sys1.sh   # target colour, live
+
 # offboard from a fresh terminal at the unitree_ros2 repository root
 bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh
 bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh record
@@ -86,7 +90,8 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/vibe/tasks.md](docs/vibe/tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
 | [docs/vibe/background.md](docs/vibe/background.md) | deployment constraints, reference lessons, and design decisions |
 | [docs/vibe/roadmap.md](docs/vibe/roadmap.md) | measured hardening priorities and explicitly deferred work |
-| [docs/sys1.md](docs/sys1.md) | the retrieval planner above SONIC — closed-loop Repose, `sys1:=true` |
+| [docs/sys1/planner.md](docs/sys1/planner.md) | the retrieval planner above SONIC — closed-loop Repose, `sys1:=true` |
+| [docs/sys1/experiments.md](docs/sys1/experiments.md) | the closed-loop run: depth, launch, console, what a bag carries |
 
 ## acknowledgements
 

@@ -68,6 +68,12 @@ class Sys1Node : public rclcpp::Node {
     if (config_path.empty())
       throw std::runtime_error("sys1: config_path is required");
     load_config(config_path);
+    // The experiment environment owns the camera address — setup.sh picks it,
+    // the launch passes the same `camera_ip` to the encoder and to here, so the
+    // two halves of one run cannot look at different cameras. Empty keeps the
+    // yaml's value, which is what a standalone `ros2 run` gets.
+    const auto camera_host = this->declare_parameter("camera_host", "");
+    if (!camera_host.empty()) camera_ip_ = camera_host;
 
     reference_pub_ = this->create_publisher<msg::MotionReference>(
         this->declare_parameter("reference_topic", "/tracker/reference"), 10);

@@ -34,6 +34,8 @@ TOKENS_TOPIC = '/enc/tokens'
 ATTENTION_TOPIC = '/vibe/sonic/attention_mask'
 LOWSTATE_TOPIC = '/lowstate'
 LOWCMD_TOPIC = '/lowcmd'
+SYS1_TOPIC = '/vibe/sys1/status'
+SYS0_TOPIC = '/vibe/sys0/status'
 VIEW_TOPICS = (
     FRAME_TOPIC,
     TOKENS_TOPIC,
@@ -42,6 +44,13 @@ VIEW_TOPICS = (
     LOWCMD_TOPIC,
 )
 NANOSECONDS_PER_SECOND = 1_000_000_000
+
+# sys1 vocabulary, mirrored from msg/Sys1Status.msg and scripts/sys1_console.py.
+SYS1_MODES = ('init', 'settle', 'scan', 'clip')
+SYS0_MODES = ('zeroing', 'damping', 'nominal', 'standing', 'stand', 'POLICY')
+CUBE_COLORS = ('red', 'orange', 'green', 'yellow', 'blue', 'pink')
+CUBE_RGB = ((230, 51, 51), (242, 115, 26), (51, 230, 51),
+            (230, 230, 51), (51, 51, 230), (204, 51, 166))
 
 # unitree_hg motor order for the actuated G1 joints. Keep this synchronized
 # with include/common/g1/joint_orders.hpp and config/vibe/g1_vibe_sonic.yaml.
@@ -300,6 +309,132 @@ class Telemetry:
         return tuple(self.values.get(topic, {}))
 
 
+class StateTrack:
+    """Every sample of one sparse topic, resolved as last-at-or-before a time.
+
+    The image seekers pick the *nearest* sample, which is right for a 50 Hz
+    stream. sys1 publishes once per decision, so nearest would show a plan up
+    to a second before it was made. State holds until it is replaced; these
+    topics are tens of bytes, so the whole track is loaded once and bisected.
+    """
+
+    def __init__(self, bag, topic):
+        self.topic = topic
+        self.times = np.empty(0, dtype=np.int64)
+        self.messages = []
+        if topic not in bag.present_topics:
+            return
+        try:
+            message_class = bag.message_class(topic)
+        except RuntimeError as error:
+            # A viewer without cpp_control built still replays the run; it just
+            # cannot show the planner. Say so once, do not abort the window.
+            print(f'replay_vibes: {error}', file=sys.stderr)
+            return
+        if message_class is None:
+            return
+        stamps = array('q')
+        reader = bag.open_reader([topic])
+        while reader.has_next():
+            name, serialized, timestamp_ns = reader.read_next()
+            if name != topic:
+                continue
+            stamps.append(timestamp_ns)
+            self.messages.append(deserialize_message(serialized, message_class))
+        self.times = np.frombuffer(stamps, dtype=np.int64)
+
+    @property
+    def available(self):
+        return bool(self.messages)
+
+    def at(self, target_ns):
+        """The sample in force at `target_ns`, or None before the first one."""
+        if not self.messages:
+            return None, None
+        index = int(np.searchsorted(self.times, target_ns, side='right')) - 1
+        if index < 0:
+            return None, None
+        return self.messages[index], int(self.times[index])
+
+
+def _chip(index):
+    """One colour swatch, or a dash when the index is not a cube colour."""
+    if not 0 <= index < len(CUBE_RGB):
+        return "<span style='color:#888'>&mdash;</span>"
+    red, green, blue = CUBE_RGB[index]
+    return (f"<span style='background:rgb({red},{green},{blue})'>"
+            f"&nbsp;&nbsp;&nbsp;&nbsp;</span>")
+
+
+class Sys1Panel(QtWidgets.QGroupBox):
+    """The sys1 console pane, held at the replay cursor.
+
+    Same fields and same order as scripts/sys1_console.py, so a recorded run
+    reads like the terminal it was flown from — which is the point when the
+    frames end up in a paper video.
+    """
+
+    def __init__(self, sys1_track, sys0_track):
+        super().__init__('sys1 — planner state')
+        self.sys1 = sys1_track
+        self.sys0 = sys0_track
+        self.body = QtWidgets.QLabel('')
+        self.body.setTextFormat(QtCore.Qt.RichText)
+        self.body.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self.body.setWordWrap(True)
+        font = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
+        self.body.setFont(font)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(self.body)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(scroll, 1)
+
+    def set_time(self, target_ns):
+        state, state_ns = self.sys1.at(target_ns)
+        sys0, _ = self.sys0.at(target_ns)
+        self.body.setText(self._render(state, state_ns, sys0, target_ns))
+
+    @staticmethod
+    def _render(state, state_ns, sys0, target_ns):
+        if state is None:
+            return ("<p style='color:#888'>no planner decision yet at this "
+                    "time</p>")
+        delta = chr(state.delta) if 32 <= state.delta < 127 else '?'
+        rows = [
+            f"<b>{SYS1_MODES[state.mode] if state.mode < len(SYS1_MODES) else '?'}"
+            f"</b>&nbsp; {state.label}"
+            f"&nbsp;&nbsp;<span style='color:#888'>{state.version}"
+            f" | {_time_delta(state_ns, target_ns)}</span>"
+            + ("&nbsp;&nbsp;<b>DONE</b>" if state.done else ''),
+            f"target {_chip(state.target_color)} "
+            f"{CUBE_COLORS[state.target_color]}"
+            if 0 <= state.target_color < len(CUBE_COLORS) else 'target —',
+            f"rung {state.rung}&nbsp; d={delta}&nbsp; tips {state.tips}"
+            f"&nbsp; stall {state.stall}&nbsp; burned {state.burned}",
+            (f"sees {_chip(state.color)} {state.reason}&nbsp; "
+             f"r {state.range_m:.2f} m&nbsp; "
+             f"bearing {np.degrees(state.bearing_rad):+.0f}&deg;&nbsp; "
+             f"spin {np.degrees(state.phi_rad):+.0f}&deg;&nbsp; {state.n_px} px")
+            if state.sees else
+            f"<span style='color:#888'>sees — {state.reason}</span>",
+            f"plan cost {state.cost:.2f} m&nbsp; yaw {state.entry_yaw:+.2f} rad"
+            f"&nbsp; frames {state.frames}"
+            + (f" (+{state.lead_in_frames} ramp)" if state.lead_in_frames else '')
+            + f"&nbsp; {state.observe_ms:.1f} ms",
+        ]
+        if sys0 is not None:
+            mode = (SYS0_MODES[sys0.control_mode]
+                    if sys0.control_mode < len(SYS0_MODES) else '?')
+            playing = 'stand' if sys0.stand else (sys0.reference_id or '—')
+            rows.append(
+                f"<span style='color:#888'>sys0</span> <b>{mode}</b>&nbsp; "
+                f"{playing}&nbsp; frame {sys0.frame}/{sys0.frames}&nbsp; "
+                + ('engaged' if sys0.accepting else 'idle'))
+        return '<br>'.join(rows)
+
+
 def _image_to_bgr(message):
     if message is None or message.encoding not in ('bgr8', 'rgb8'):
         return None
@@ -513,6 +648,8 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.frame_seeker = TopicSeeker(bag, FRAME_TOPIC)
         self.attention_seeker = TopicSeeker(bag, ATTENTION_TOPIC)
         self.token_seeker = TopicSeeker(bag, TOKENS_TOPIC)
+        self.sys1_track = StateTrack(bag, SYS1_TOPIC)
+        self.sys0_track = StateTrack(bag, SYS0_TOPIC)
         self.grid = self._read_grid()
         self.latest_frame = None
         self.latest_attention = None
@@ -556,6 +693,14 @@ class ReplayWindow(QtWidgets.QMainWindow):
         content.setRowStretch(1, 1)
         content.setColumnStretch(0, 1)
         content.setColumnStretch(1, 1)
+        # A bag is self-describing, so an open-loop run simply has no planner
+        # pane rather than an empty one asking why.
+        self.sys1_panel = None
+        if self.sys1_track.available:
+            self.sys1_panel = Sys1Panel(self.sys1_track, self.sys0_track)
+            self.sys1_panel.setMinimumHeight(150)
+            content.addWidget(self.sys1_panel, 2, 0, 1, 2)
+            content.setRowStretch(2, 0)
         outer.addLayout(content, 1)
 
         self.refresh_timer = QtCore.QTimer(self)
@@ -582,6 +727,8 @@ class ReplayWindow(QtWidgets.QMainWindow):
         )
         self.lowstate_panel.set_time(seconds)
         self.lowcmd_panel.set_time(seconds)
+        if self.sys1_panel is not None:
+            self.sys1_panel.set_time(self.bag.start_ns + milliseconds * 1_000_000)
         # Throttle expensive bag seeks instead of debouncing them. Restarting
         # this timer for every mouse event made images wait until dragging
         # stopped; leaving an active timer alone renders the newest cursor
