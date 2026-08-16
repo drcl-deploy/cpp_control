@@ -45,7 +45,7 @@ VIEW_TOPICS = (
 )
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
-# sys1 vocabulary, mirrored from msg/Sys1Status.msg and scripts/sys1_console.py.
+# sys1 vocabulary, mirrored from msg/Sys1Status.msg and scripts/sys1/sys1_console.py.
 SYS1_MODES = ('init', 'settle', 'scan', 'clip')
 SYS0_MODES = ('zeroing', 'damping', 'nominal', 'standing', 'stand', 'POLICY')
 CUBE_COLORS = ('red', 'orange', 'green', 'yellow', 'blue', 'pink')
@@ -369,7 +369,7 @@ def _chip(index):
 class Sys1Panel(QtWidgets.QGroupBox):
     """The sys1 console pane, held at the replay cursor.
 
-    Same fields and same order as scripts/sys1_console.py, so a recorded run
+    Same fields and same order as scripts/sys1/sys1_console.py, so a recorded run
     reads like the terminal it was flown from — which is the point when the
     frames end up in a paper video.
     """
@@ -401,6 +401,10 @@ class Sys1Panel(QtWidgets.QGroupBox):
         if state is None:
             return ("<p style='color:#888'>no planner decision yet at this "
                     "time</p>")
+        # The planner publishes on commit and goes quiet when it parks, so the
+        # held decision outlives the episode it belonged to. Without this a
+        # frame grabbed during a damping stop reads as a live clip.
+        idle = sys0 is not None and not sys0.accepting
         delta = chr(state.delta) if 32 <= state.delta < 127 else '?'
         rows = [
             f"<b>{SYS1_MODES[state.mode] if state.mode < len(SYS1_MODES) else '?'}"
@@ -432,7 +436,12 @@ class Sys1Panel(QtWidgets.QGroupBox):
                 f"<span style='color:#888'>sys0</span> <b>{mode}</b>&nbsp; "
                 f"{playing}&nbsp; frame {sys0.frame}/{sys0.frames}&nbsp; "
                 + ('engaged' if sys0.accepting else 'idle'))
-        return '<br>'.join(rows)
+        body = '<br>'.join(rows)
+        if idle:
+            body = (f"<span style='color:#888'>{body}</span><br>"
+                    "<b style='color:#b45f06'>planner parked — the decision "
+                    "above is the last one it made, not a live state</b>")
+        return body
 
 
 def _image_to_bgr(message):

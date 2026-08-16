@@ -5,7 +5,8 @@
 # a one-line edit and cannot silently drift from the numbers it baselines.
 
 version: v7        # v5 | v6 | v7 — v7 is v6 + the NOMINAL STAND (62.5% -> 95%)
-target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink
+target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
+                   # goal_color overrides it, so sys0 and sys1 boot agreeing
 
 rate_hz: 20.0      # planner tick. Soft real-time; ~2 ms of work per tick.
 stale_s: 1.0       # lowstate / camera silence that parks the planner
@@ -24,6 +25,11 @@ frames:
 
 # D435i colour stream, head-mounted. Intrinsics ride per-plane on the wire, so
 # there is nothing to calibrate here — only where to connect.
+#
+# `host` is the STANDALONE fallback: under g1_sys1_repose.launch.py the same
+# `camera_ip` reaches the encoder and the planner (from VIBE_CAMERA_ADDRESS),
+# so the two halves of a run cannot end up watching different cameras. Same for
+# `target_color` below, which the launch feeds from its `goal_color`.
 camera:
   host: 127.0.0.1
   port: 5555

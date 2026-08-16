@@ -37,7 +37,8 @@ def generate_launch_description():
                               description='Artifact step if the directory has multiple exports'),
         DeclareLaunchArgument('sys1_config', default_value=default_config),
         DeclareLaunchArgument('goal_color', default_value='4',
-                              description='0 red 1 orange 2 green 3 yellow 4 blue 5 pink'),
+                              description='0 red 1 orange 2 green 3 yellow 4 blue 5 pink; '
+                                          'drives the policy one-hot AND the planner ladder'),
         # One address for both halves of the run: the encoder pulls colour from
         # it, the planner pulls colour+depth from it. setup.sh selects it.
         DeclareLaunchArgument(
@@ -66,6 +67,9 @@ def generate_launch_description():
             parameters=[{
                 'config_path': LaunchConfiguration('sys1_config'),
                 'camera_host': LaunchConfiguration('camera_ip'),
+                # The same argument sys0 gets: one colour, both halves, from
+                # boot rather than from the first console keypress.
+                'target_color': LaunchConfiguration('goal_color'),
             }],
             # A planner without its controller is a robot holding its last
             # reference. Tear the run down together, like its siblings.

@@ -9,7 +9,7 @@
  *   ros2 launch cpp_control g1_sys1_repose.launch.py
  *   ros2 run cpp_control sys1_console.py        # set the target colour live
  *
- * Design + the four findings that shrank it: docs/sys1.md
+ * Design + the four findings that shrank it: docs/sys1/planner.md
  */
 
 #include <arpa/inet.h>
@@ -74,6 +74,17 @@ class Sys1Node : public rclcpp::Node {
     // yaml's value, which is what a standalone `ros2 run` gets.
     const auto camera_host = this->declare_parameter("camera_host", "");
     if (!camera_host.empty()) camera_ip_ = camera_host;
+
+    // The goal colour conditions the POLICY's one-hot and steers the PLANNER's
+    // ladder, and the two must not boot disagreeing: the topic keeps them in
+    // step afterwards, but nothing did until the first message. g1_sys1_repose
+    // hands its `goal_color` here as well as to sys0, so one launch argument
+    // sets both. Out of range (the default) keeps the yaml, which is what a
+    // standalone `ros2 run` gets.
+    const auto target = static_cast<int>(
+        this->declare_parameter("target_color", -1));
+    if (target >= 0 && target < vibe::NUM_CUBE_COLORS)
+      clips_->set_target_color(target);
 
     reference_pub_ = this->create_publisher<msg::MotionReference>(
         this->declare_parameter("reference_topic", "/tracker/reference"), 10);

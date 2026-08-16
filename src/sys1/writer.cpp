@@ -52,7 +52,7 @@ void ReferenceWriter::push_stand(int count) {
 /// Rate-limited ramp from the live pose onto `target`. The sim pays this as a
 /// 12-frame blend; on hardware a reference that STEPS is a step input to a
 /// balancing policy, so walk there instead — the same mechanism the human-driven
-/// L1 prep provides, just automatic (docs/sys1.md §1 F4).
+/// L1 prep provides, just automatic (docs/sys1/planner.md §1 F4).
 ///
 /// Under v7 this matters for STILL modes too, not only clips: the nominal stance
 /// is sys1's own vocabulary and therefore sits further from a clip's exit pose

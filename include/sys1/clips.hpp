@@ -2,7 +2,7 @@
 
 /// SETTLE -> read -> SCAN or CLIP. Three modes, one state integer, one ranking
 /// scalar. Port of vibe `planner/clips.py::Sys1Clips` — the algorithm only; the
-/// clock lives in the node, because on hardware sys0 owns it (docs/sys1.md §2).
+/// clock lives in the node, because on hardware sys0 owns it (docs/sys1/planner.md §2).
 
 #include <set>
 #include <string>

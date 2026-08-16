@@ -1,5 +1,5 @@
 # The planner's whole state, once per decision — the viser "sys1 — state" pane
-# as a topic. scripts/sys1_console.py renders it and sets target_color back.
+# as a topic. scripts/sys1/sys1_console.py renders it and sets target_color back.
 
 uint8 INIT=0
 uint8 SETTLE=1
