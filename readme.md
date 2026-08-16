@@ -32,17 +32,18 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
 publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
 
-# G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
-ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
+# G1 vibe-SONIC (vision): each task launch owns its encoder + controller
+ros2 launch cpp_control g1_vibe_repose.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_uolm.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/path/to/checkpoint
 ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/path/to/checkpoint
-publish-motion /path/to/motion.npz       # UOLM / PerLoco only
-ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
+publish-motion /path/to/motion.npz       # Repose / UOLM / PerLoco only
 
-# offboard: /enc/frame beside the latest policy-attention overlay
-ros2 run cpp_control attention_overlay_offboard.sh
+# offboard from a fresh terminal at the unitree_ros2 repository root
+bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh
+bash cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh record
+bash cyclonedds_ws/src/cpp_control/scripts/vibe/replay_vibes.sh [BAG_DIRECTORY]
 # the typed reference independently carries root twist, per-body contact, and
 # UOLM's sibling object_motion.npz goal; missing channels stay explicit
 
@@ -81,7 +82,10 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/onnx_policies.md](docs/onnx_policies.md) | the two ONNX serving stacks (legacy vs manifest) and when to use which |
 | [docs/motion.md](docs/motion.md) | `g1::Motion` — the one reference-motion class |
 | [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
-| [docs/vibe_tasks.md](docs/vibe_tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
+| [docs/vibe/experiments.md](docs/vibe/experiments.md) | real/simulation experiment commands, viewing, and recording |
+| [docs/vibe/tasks.md](docs/vibe/tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
+| [docs/vibe/background.md](docs/vibe/background.md) | deployment constraints, reference lessons, and design decisions |
+| [docs/vibe/roadmap.md](docs/vibe/roadmap.md) | measured hardening priorities and explicitly deferred work |
 
 ## acknowledgements
 

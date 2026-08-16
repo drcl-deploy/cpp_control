@@ -509,7 +509,8 @@ RobotCommand G1VibeSonicNode::policy_control() {
                          "no tokens yet — kv/cls ports run on zeros");
   else if ((this->now() - last_token_time_).seconds() > stale_ticks_ * dt)
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                         "tokens stale (>%.0f ms) — encoder alive?",
+                         "STALE VISION TOKENS (>%.0f ms) — encoder/camera "
+                         "stream stalled; press Y for damping if needed",
                          stale_ticks_ * dt * 1e3);
 
   auto cmd = G1SonicNode::policy_control();

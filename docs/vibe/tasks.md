@@ -8,12 +8,13 @@ family does not match the task contract.
 
 | launch | artifact task | external command | lifecycle |
 |---|---|---|---|
+| `g1_vibe_repose.launch.py` | Repose | goal up-face color | motion, prep, run |
 | `g1_vibe_uolm.launch.py` | UOLM | root twist + contact; final object pose query | motion, prep, run |
 | `g1_vibe_perloco_grail.launch.py` | PerLoco Grail | root twist (also the aliased task query) | motion, prep, run |
 | `g1_vibe_perloco_omre.launch.py` | PerLoco OmRe | same interface as Grail, different weights | motion, prep, run |
 | `g1_vibe_dodge.launch.py` | Dodge | none | stand-reactive; no motion or prep |
 
-All four use Theia Tiny image tokens. Token tag, patch grid, feature width,
+All five use Theia Tiny image tokens. Token tag, patch grid, feature width,
 CLS width, finite values, and freshness are checked before policy entry.
 
 ## Reference transport
@@ -33,22 +34,23 @@ therefore not heading-rebased at deployment.
 ## Operation
 
 Checkpoints and manifests stay together in their external export directory and
-are not tracked by this experimental package. Start the encoder, pass that
-directory explicitly, then stage a clip where required:
+are not tracked by this experimental package. Each Vibe task launch starts the
+Theia Tiny encoder first and then the controller. Pass the artifact directory
+explicitly, then stage a clip where required:
 
 ```bash
-ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
 ros2 launch cpp_control g1_vibe_uolm.launch.py \
     artifact_dir:=/absolute/path/to/wandb_checkpoints/xhej6sbd
 publish-motion /path/to/motion.npz
 ```
 
-The task launches resolve `model_24999.onnx` for UOLM, `model_14999.onnx`
-for both PerLoco variants, and `model_6000.onnx` for Dodge. The generic launch
-still accepts a full `onnx_path` for other exports.
+The task launches discover the matching `.onnx` and `.manifest.json` pair in
+the artifact directory. A directory with multiple exported pairs must also
+specify `checkpoint:=<training_step>`; the launch fails rather than silently
+choosing a policy. The generic launch uses the same artifact interface.
 
-UOLM and PerLoco use `RB` stand → `L1` prep → `A` run. Dodge uses `A` or
-`RB` to engage the nominal SONIC reference and ignores staged clips.
+Repose, UOLM, and PerLoco use `RB` stand → `L1` prep → `A` run. Dodge uses
+`A` or `RB` to engage the nominal SONIC reference and ignores staged clips.
 
 ## Simulator follow-up
 

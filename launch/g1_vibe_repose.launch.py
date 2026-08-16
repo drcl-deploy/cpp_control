@@ -1,4 +1,4 @@
-"""Launch perceptive parkour (OmRe) on the shared G1 Vibe runtime."""
+"""Launch Repose on the shared G1 Vibe runtime."""
 
 import os
 
@@ -13,9 +13,8 @@ def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
     common = os.path.join(pkg, 'launch', 'g1_vibe_sonic.launch.py')
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'artifact_dir',
-            description='Absolute PerLoco OmRe checkpoint directory'),
+        DeclareLaunchArgument('artifact_dir',
+                              description='Absolute Repose checkpoint directory'),
         DeclareLaunchArgument('checkpoint', default_value='',
                               description='Artifact step if the directory has multiple exports'),
         IncludeLaunchDescription(
@@ -23,7 +22,7 @@ def generate_launch_description():
             launch_arguments={
                 'artifact_dir': LaunchConfiguration('artifact_dir'),
                 'checkpoint': LaunchConfiguration('checkpoint'),
-                'expected_task_family': 'perloco',
+                'expected_task_family': 'repose',
             }.items(),
         ),
     ])

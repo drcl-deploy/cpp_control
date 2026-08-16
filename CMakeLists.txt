@@ -242,9 +242,11 @@ install(DIRECTORY launch config models include
 install(PROGRAMS
   scripts/npz_motion_publisher.py
   # scripts/viser_ghost_g1_residual.py   # LEGACY (vibe v1) — reference only
-  scripts/attn_viewer.py
-  scripts/attention_overlay_viewer.py
-  scripts/attention_overlay_offboard.sh
+  scripts/vibe/attention_overlay_viewer.py
+  scripts/vibe/record_topics.sh
+  scripts/vibe/replay_vibes.py
+  scripts/vibe/replay_vibes.sh
+  scripts/vibe/stream_vibes.sh
   DESTINATION lib/${PROJECT_NAME}/
 )
 
