@@ -2,9 +2,11 @@
 
 One `G1VibeSonicNode` serves every extractor-era G1 Vibe artifact. Tensor
 layout comes from `vibe.onnx.v1`; `task_id` selects the small amount of
-lifecycle and command behavior that shapes alone cannot express. Startup
-rejects an artifact whose model class, logical groups, term order, or launch
-family does not match the task contract.
+lifecycle and command behavior that shapes alone cannot express. Only the
+family token is read from it, case-insensitively and anywhere in the string
+(`repose | uolm | perloco | dodge`), so the training side can rename around it;
+naming two families is an error. Startup rejects an artifact whose model class,
+logical groups, term order, or launch family does not match the task contract.
 
 | launch | artifact task | external command | lifecycle |
 |---|---|---|---|

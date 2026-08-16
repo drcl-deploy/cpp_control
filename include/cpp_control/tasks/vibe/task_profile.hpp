@@ -33,6 +33,8 @@ struct TaskProfile {
   bool stand_reactive = false;
 };
 
+/// Family by case-insensitive substring; the rest of the id names the
+/// architecture, which validate_contract checks structurally instead.
 TaskProfile profile_from_task_id(const std::string& task_id);
 
 /// Validate the logical observation contract, including deduplicated groups.

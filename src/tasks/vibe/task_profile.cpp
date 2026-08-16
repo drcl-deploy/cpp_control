@@ -1,7 +1,9 @@
 #include "cpp_control/tasks/vibe/task_profile.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
+#include <utility>
 
 namespace cpp_control {
 namespace vibe {
@@ -10,6 +12,12 @@ namespace {
 
 bool starts_with(const std::string& value, const std::string& prefix) {
   return value.rfind(prefix, 0) == 0;
+}
+
+std::string lowered(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return value;
 }
 
 std::vector<std::string> term_names(const deploy::PortSpec* port) {
@@ -53,17 +61,27 @@ const char* cube_color_name(int index) {
 }
 
 TaskProfile profile_from_task_id(const std::string& task_id) {
-  if (starts_with(task_id, "Vibe-Repose-"))
-    return {"repose", GoalKind::COLOR, true, true, true, false};
-  if (task_id == "Vibe-Uolm-AdaptSonic-ImgFeat-Ext")
-    return {"uolm", GoalKind::OBJECT_POSE, true, true, true, false};
-  if (starts_with(task_id, "Vibe-PerLoco-") &&
-      task_id.find("-AdaptSonic-ImgFeat-Ext") != std::string::npos)
-    return {"perloco", GoalKind::NONE, true, true, true, false};
-  if (task_id == "Vibe-Dodge-AdaptSonic-ImgFeat-Ext")
-    return {"dodge", GoalKind::NONE, false, false, false, true};
-  throw std::runtime_error("g1_vibe: unsupported manifest task_id '" + task_id +
-                           "'");
+  static const std::pair<const char*, TaskProfile> kFamilies[] = {
+      {"repose", {"repose", GoalKind::COLOR, true, true, true, false}},
+      {"uolm", {"uolm", GoalKind::OBJECT_POSE, true, true, true, false}},
+      {"perloco", {"perloco", GoalKind::NONE, true, true, true, false}},
+      {"dodge", {"dodge", GoalKind::NONE, false, false, false, true}},
+  };
+  const std::string id = lowered(task_id);
+  const TaskProfile* found = nullptr;
+  for (const auto& entry : kFamilies) {
+    if (id.find(entry.first) == std::string::npos) continue;
+    if (found)
+      throw std::runtime_error("g1_vibe: manifest task_id '" + task_id +
+                               "' names two task families, '" + found->family +
+                               "' and '" + entry.second.family + "'");
+    found = &entry.second;
+  }
+  if (!found)
+    throw std::runtime_error("g1_vibe: manifest task_id '" + task_id +
+                             "' names no known task family "
+                             "(repose | uolm | perloco | dodge)");
+  return *found;
 }
 
 std::vector<std::string> query_groups(const deploy::DeployManifest& manifest) {

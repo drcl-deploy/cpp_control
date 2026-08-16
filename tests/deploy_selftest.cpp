@@ -412,7 +412,7 @@ static void clip_report(const std::string& motion_path)
 static deploy::DeployManifest check_vibe_contract(const std::string& manifest_path)
 {
     auto manifest = deploy::DeployManifest::load(manifest_path);
-    if (manifest.task_id.rfind("Vibe-", 0) == 0)
+    if (manifest.model_class == "ExtractorSonicAdapterModel")
     {
         const auto profile = vibe::profile_from_task_id(manifest.task_id);
         vibe::validate_contract(manifest, profile);
