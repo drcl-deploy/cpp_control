@@ -75,12 +75,12 @@ ZEROING --X--> NOMINAL_POSE (PD interp to default) --A--> POLICY
    |                                                      ^
    B/Y (zero/damp from anywhere)                          | A
    |                                                      |
-   +------RB-----> STAND (g1::SonicStand, active balance)-+
+   +------RB-----> STAND (g1::StandPolicy, active balance)+
 ```
 
-`STAND` is robot-level: any g1 controller gets it from one yaml field
-(`stand_onnx_path` → a base-SONIC export). Tasks with their own stand
-semantics (sonic tracker, textop) simply don't set it.
+`STAND` is robot-level and universal: every G1 controller loads the packaged
+stand-only checkpoint. The engine owns its own observation/action history and
+checkpoint gains; `stand_onnx_path` is an override, not an opt-in switch.
 
 ## the shared spine (`common/`)
 
@@ -88,7 +88,7 @@ semantics (sonic tracker, textop) simply don't set it.
 |---|---|
 | `g1/joint_orders.hpp` | IL/MJ tables built from name lists — the only joint-order truth |
 | `g1/motion.{hpp,cpp}` | the one motion container + clock — [docs/motion.md](motion.md) |
-| `g1/sonic_stand.{hpp,cpp}` | robot-level stand kernel over a base-SONIC export |
+| `g1/stand_policy.{hpp,cpp}` | self-contained robot-level stand-only policy |
 | `deploy_manifest` + `onnx_session` | manifest-driven serving — [docs/onnx_policies.md](onnx_policies.md) |
 | `obs_terms.hpp` | `HistoryTerm` (mjlab CircularBuffer semantics) |
 | `math_utils.hpp` | wxyz quat algebra, projected gravity, 6D rotations, frame math |

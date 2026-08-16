@@ -125,7 +125,8 @@ or delayed samples remain visible.
 ## Controls and shutdown
 
 - Repose, UOLM, and PerLoco: `RB` stand, `L1` prep, `A` run.
-- Dodge: `A` or `RB` engages its nominal reactive reference.
+- Dodge: `RB` runs the standalone stand policy; `A` engages its nominal
+  reactive SONIC reference.
 - If the controller prints `STALE VISION TOKENS`, press `Y` for damping if the
   experiment requires it.
 - Stop the task launch before starting a different experiment.

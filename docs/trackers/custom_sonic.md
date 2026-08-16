@@ -160,8 +160,8 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 
 joystick: `X` nominal pose → `A` track the clip from frame 0 (yaw-aligns to the
 robot at that instant; pressing `A` again restarts) · **`RB`/`R1` stand mode** —
-SONIC tracks a synthetic 1-frame nominal-pose reference at the robot's heading
-(the hardware idle while loading/exporting motions) · `B` zero · `Y` damp.
+G1's standalone stand-only policy, independent of the SONIC checkpoint and any
+vision/motion inputs · `B` zero · `Y` damp.
 launch args: `manifest_path` (default: sibling of the onnx), `motion_start_frame`,
 `il_ordered`, `config_path`.
 
@@ -171,14 +171,14 @@ a posture near the clip's frame 0.
 
 ## prep gate (`g1_vibe_sonic`)
 
-`g1_vibe_sonic` enforces that last sentence instead of trusting it. `L1` is not
-a new control mode — it is **stand with a different stand clip**:
+`g1_vibe_sonic` enforces that last sentence instead of trusting it. `L1`
+deliberately hands control from standalone stand to SONIC prep:
 
 | | stand (`RB`) | prep (`L1`) |
 |---|---|---|
-| reference | `Motion::stand` — 1 frame, nominal | `Motion::lead_in` — T frames, nominal → `jp(motion_start_frame)` |
-| root / twist / contact | identity, zero, zero | identity, zero, zero (same) |
-| who balances | SONIC | SONIC |
+| reference | none (stand-only policy obs) | `Motion::lead_in` — T frames, measured handoff pose → selected joints of `jp(motion_start_frame)` |
+| root / twist / contact | n/a | identity, zero, zero |
+| who balances | `g1::StandPolicy` | SONIC |
 
 so the ramp is **closed-loop**: the policy carries the robot onto frame 0. An
 open-loop PD walk to an arbitrary pose is a fall on hardware — the robot has no
@@ -191,14 +191,15 @@ instead of chasing a setpoint it is told is static.
 
 ### which joints ramp (`prep_joints`, default `arms`)
 
-Only `prep_joints` chase the clip; every other joint holds nominal. Groups come
+Only `prep_joints` chase the clip; every other joint holds its measured handoff
+posture. Groups come
 from `g1::{LEG,WAIST,ARM}_JOINT_INDICES` (joint_orders.hpp), name-derived from
 the MJ table like `MJ2IL` — never written out as ranges.
 
 | `prep_joints` | ramps | pose held until `A` | handover at `A` |
 |---|---|---|---|
-| `arms` (default) | MJ 15-28 | nominal stance | arms continuous, **legs+waist step** |
-| `arms_waist` | MJ 12-28 | nominal stance | legs step |
+| `arms` (default) | MJ 15-28 | measured stand stance | arms continuous, **legs+waist step** |
+| `arms_waist` | MJ 12-28 | measured stand legs | legs step |
 | `all` | MJ 0-28 | the clip's frame 0 | fully continuous |
 
 the default is `arms` because a flip clip's frame 0 is a **dynamic** pose —
@@ -227,8 +228,8 @@ flow and refusals:
 
 ```
 X ──▶ NOMINAL (joint PD)        L1 outside stand  ──▶ "press RB first"
-RB ─▶ stand   [nominal]         A without a prep  ──▶ refused, mode unchanged
-L1 ─▶ prep    [nominal … f0]    A after re-staging──▶ "press L1 again"
+RB ─▶ standalone policy         A without a prep  ──▶ refused, mode unchanged
+L1 ─▶ SONIC prep [measured … f0] A after re-staging──▶ "press L1 again"
 A ──▶ track   clip from t=0
 ```
 
@@ -237,4 +238,5 @@ flip — vetoing afterwards would mean undoing a mode change blind, which can
 strand `DAMPING`/`ZEROING` inside `POLICY`. Every swap of `stand_motion_` also
 arms `pending_engage_`, so `active_motion_` can never outlive its clip.
 
-the base `g1_sonic_node` is unchanged — `A` engages directly, as before.
+the base `g1_sonic_node` still lets `A` engage directly; only RB ownership moved
+to the standalone G1 policy.

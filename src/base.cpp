@@ -186,7 +186,7 @@ void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
     else if (msg->buttons.size() > joy::XMODE_R1 && pressed(joy::XMODE_R1) && has_stand())
     {
         engage_stand();
-        RCLCPP_INFO(this->get_logger(), "-> stand (robot-level SONIC)");
+        RCLCPP_INFO(this->get_logger(), "-> stand (stand-only policy)");
     }
 
     // Let Level 2 add task-specific joystick behaviour (velocity, etc.)

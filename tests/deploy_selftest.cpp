@@ -5,6 +5,7 @@
 //   deploy_selftest policy.onnx [policy.manifest.json]  # + load, zero-obs run
 //   deploy_selftest --manifest policy.manifest.json  # + Vibe contract only
 //   deploy_selftest --motion clip.npz                # + contact schedule report
+//   deploy_selftest --stand-policy g1.onnx           # + stand-policy smoke run
 //
 // Plain asserts, no gtest — run it, exit 0 means pass.
 
@@ -20,6 +21,7 @@
 #include "common/deploy_manifest.hpp"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
+#include "common/g1/stand_policy.hpp"
 #include "common/math_utils.hpp"
 #include "common/obs_terms.hpp"
 #include "common/onnx_session.hpp"
@@ -452,6 +454,47 @@ static void smoke_run(const std::string& onnx, const std::string& manifest_path)
     std::puts("ok  smoke run (zero obs)");
 }
 
+static void stand_policy_smoke_run(const std::string& onnx)
+{
+    g1::StandPolicy policy(onnx);
+    RobotState state;
+    state.joint_positions.assign(g1::StandPolicy::NUM_JOINTS, 0.0f);
+    state.joint_velocities.assign(g1::StandPolicy::NUM_JOINTS, 0.0f);
+
+    const auto first = policy.step(state);
+    CHECK(first.motor_commands.size() == g1::StandPolicy::NUM_JOINTS);
+    for (const auto& motor : first.motor_commands)
+    {
+        CHECK(std::isfinite(motor.q));
+        CHECK(motor.kp > 0.0f && motor.kd > 0.0f);
+    }
+
+    // A paused simulator keeps publishing the same physical tick while the
+    // controller's wall timer continues. Frozen calls must neither change the
+    // command nor advance the policy's autoregressive last_action input.
+    for (int repeat = 0; repeat < 100; ++repeat)
+    {
+        const auto frozen = policy.step(state);
+        for (int i = 0; i < g1::StandPolicy::NUM_JOINTS; ++i)
+            CHECK(first.motor_commands[i].q == frozen.motor_commands[i].q);
+    }
+
+    ++state.tick;
+    const auto second = policy.step(state);
+    bool advanced = false;
+    for (int i = 0; i < g1::StandPolicy::NUM_JOINTS; ++i)
+        advanced |= first.motor_commands[i].q != second.motor_commands[i].q;
+    CHECK(advanced);
+
+    policy.reset();
+    state.tick = 0;
+    const auto reset = policy.step(state);
+    for (int i = 0; i < g1::StandPolicy::NUM_JOINTS; ++i)
+        CHECK(first.motor_commands[i].q == reset.motor_commands[i].q);
+    std::puts(
+        "ok  stand policy (shape, frozen-state cache, deterministic reset)");
+}
+
 int main(int argc, char** argv)
 {
     test_history();
@@ -463,12 +506,15 @@ int main(int argc, char** argv)
     std::vector<std::string> pos;
     std::string motion;
     std::string contract_manifest;
+    std::string stand_policy;
     for (int i = 1; i < argc; ++i)
     {
         if (std::string(argv[i]) == "--motion" && i + 1 < argc)
             motion = argv[++i];
         else if (std::string(argv[i]) == "--manifest" && i + 1 < argc)
             contract_manifest = argv[++i];
+        else if (std::string(argv[i]) == "--stand-policy" && i + 1 < argc)
+            stand_policy = argv[++i];
         else
             pos.push_back(argv[i]);
     }
@@ -479,6 +525,8 @@ int main(int argc, char** argv)
         check_vibe_contract(contract_manifest);
         std::puts("ok  Vibe manifest contract");
     }
+    if (!stand_policy.empty())
+        stand_policy_smoke_run(stand_policy);
     if (!pos.empty())
     {
         std::string manifest = pos.size() > 1

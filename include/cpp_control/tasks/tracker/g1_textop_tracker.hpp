@@ -78,7 +78,7 @@ protected:
 
     // ── Stand mode ──────────────────────────────────────────────
     bool stand_mode_ = false;
-    bool prev_rb_    = false;
+    void on_stand_engaged() override;
     virtual void enter_stand_mode();
 
     // ── Frame alignment (ref -> robot) ──────────────────────────

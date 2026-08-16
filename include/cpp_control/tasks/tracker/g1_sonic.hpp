@@ -32,9 +32,9 @@ namespace cpp_control {
  *     STAGED; A commits + starts it. `motion_path` empty -> boot into stand
  *     and wait for streamed motions — the controller never has to die.
  *
- * Stand mode (RB / R1): SONIC tracks a synthetic 1-frame reference — nominal
- * pose, identity anchor at the robot's heading. A (re)starts the loaded clip
- * (committing any staged one first).
+ * RB / R1 selects G1Node's standalone stand-only policy. A (re)starts the
+ * loaded clip (committing any staged one first); without a clip, A enters this
+ * task's synthetic nominal SONIC reference.
  */
 class G1SonicNode : public G1Node {
  public:
@@ -42,6 +42,7 @@ class G1SonicNode : public G1Node {
 
  protected:
   RobotCommand policy_control() override;
+  void on_stand_engaged() override;
   void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
 #ifdef HAS_UNITREE_HG
   void on_gamepad() override;
@@ -94,7 +95,6 @@ class G1SonicNode : public G1Node {
   bool stand_mode_ = false;
   bool pending_engage_ =
       false;  ///< explicit re-engage (stand <-> track switches)
-  bool prev_rb_joy_ = false;
 
   // obs state
   std::vector<std::unique_ptr<obs::HistoryTerm>> histories_;

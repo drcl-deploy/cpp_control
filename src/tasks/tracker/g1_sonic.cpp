@@ -240,6 +240,13 @@ void G1SonicNode::enter_stand() {
   control_mode_ = ControlMode::POLICY;
 }
 
+void G1SonicNode::on_stand_engaged() {
+  // Keep the task ready to fall back to its nominal reference if A is pressed
+  // without a motion, but never replace the robot-level STAND mode here.
+  stand_mode_ = true;
+  pending_engage_ = true;
+}
+
 // ── Manifest is the authority on action metadata ─────────────────
 
 void G1SonicNode::apply_manifest_action_meta() {
@@ -468,17 +475,9 @@ RobotCommand G1SonicNode::policy_control() {
   return cmd;
 }
 
-// ── Joystick / Gamepad (textop parity: RB/R1 = stand, A = track) ─
+// ── Joystick / Gamepad (G1 owns RB/R1; A enters this task) ─────
 
 void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
-  const bool rb =
-      msg->buttons.size() > joy::XMODE_R1 && msg->buttons[joy::XMODE_R1] == 1;
-  if (rb && !prev_rb_joy_) {
-    enter_stand();
-    RCLCPP_INFO(this->get_logger(), "-> stand (SONIC @ nominal)");
-  }
-  prev_rb_joy_ = rb;
-
   // A (base already switched to POLICY): commit any staged motion, then
   // leave stand and (re)start it.
   if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1)
@@ -487,10 +486,6 @@ void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
 
 #ifdef HAS_UNITREE_HG
 void G1SonicNode::on_gamepad() {
-  if (gamepad_.R1.on_press) {
-    enter_stand();
-    RCLCPP_INFO(this->get_logger(), "[GP] -> stand (SONIC @ nominal)");
-  }
   if (gamepad_.A.on_press) on_button_a();
 }
 #endif

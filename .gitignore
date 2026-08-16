@@ -5,3 +5,6 @@ __pycache__/
 
 # Vibe task artifacts are experimental/local; pass their external directory.
 models/vibe/
+
+# One-time export provenance; runtime constants live in g1::StandPolicy.
+models/stand/deploy_mjlab.yaml

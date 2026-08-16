@@ -1,6 +1,13 @@
 #include "cpp_control/robots/g1.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
+
+#include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <stdexcept>
+
+#include "common/g1/joint_orders.hpp"
 
 namespace cpp_control
 {
@@ -59,14 +66,26 @@ void G1Node::init_robot()
         action_scale_.assign(G1_NUM_MOTOR, 0.5f);
     }
 
-    // ── Robot-level SONIC stand (opt-in: yaml stand_onnx_path) ──
+    // ── Robot-level stand-only policy (always available to every G1 task) ──
+    const std::filesystem::path package_share =
+        ament_index_cpp::get_package_share_directory("cpp_control");
+    std::filesystem::path stand_onnx =
+        package_share / "models" / "stand" / "g1.onnx";
     if (config_ && !config_->stand_onnx_path.empty())
     {
-        sonic_stand_ = std::make_unique<g1::SonicStand>(config_->stand_onnx_path);
-        RCLCPP_INFO(this->get_logger(), "SONIC stand engine loaded: %s (%s)",
-                    config_->stand_onnx_path.c_str(),
-                    sonic_stand_->manifest().model_class.c_str());
+        stand_onnx = config_->stand_onnx_path;
+        if (stand_onnx.is_relative())
+            stand_onnx = package_share / "models" / stand_onnx;
     }
+    if (joint_names_ != g1::MJ_JOINTS)
+        throw std::runtime_error(
+            "G1 stand policy requires canonical MuJoCo/hardware joint order");
+    const double control_dt = config_ ? config_->control_dt : 0.02;
+    if (std::abs(control_dt - g1::StandPolicy::STEP_DT) > 1e-6)
+        throw std::runtime_error("G1 stand policy requires control_dt=0.02");
+    stand_policy_ = std::make_unique<g1::StandPolicy>(stand_onnx.string());
+    RCLCPP_INFO(this->get_logger(), "Stand-only policy loaded: %s",
+                stand_onnx.c_str());
 
     // ── Workflow-based backend init ──
     switch (workflow_)
@@ -92,18 +111,18 @@ void G1Node::init_robot()
                 config_ ? config_->workflow.c_str() : "unitree");
 }
 
-// ── Robot-level SONIC stand ───────────────────────────────────
+// ── Robot-level stand-only policy ─────────────────────────────
 
 void G1Node::engage_stand()
 {
-    sonic_stand_->engage(robot_state_);
+    stand_policy_->reset();
     control_mode_ = ControlMode::STAND;
+    on_stand_engaged();
 }
 
 RobotCommand G1Node::stand_control()
 {
-    const double dt = config_ ? config_->control_dt : 0.02;
-    return sonic_stand_->tick(robot_state_, dt);
+    return stand_policy_->step(robot_state_);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -196,7 +215,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
     if (gamepad_.R1.on_press && has_stand())
     {
         engage_stand();
-        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (robot-level SONIC)");
+        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (stand-only policy)");
     }
     if ((gamepad_.up.on_press || gamepad_.A.on_press) && allow_policy_entry())
     {
@@ -264,6 +283,10 @@ void G1Node::subscribe_g1_state(messages::msg::G1State::SharedPtr msg)
         robot_state_.joint_velocities[i] = msg->motor_state[i].dq;
         robot_state_.joint_torques[i] = msg->motor_state[i].tauest;
     }
+
+    // G1State has no simulator/robot tick. Its callback cadence is the state
+    // progression token for the self-contained stand policy.
+    ++robot_state_.tick;
 }
 
 void G1Node::publish_g1_command(const RobotCommand& cmd)

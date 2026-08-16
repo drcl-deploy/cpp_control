@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Dependencies ───────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -98,7 +99,7 @@ add_library(cpp_control_deploy STATIC
   src/common/deploy_manifest.cpp
   src/common/onnx_session.cpp
   src/common/g1/motion.cpp
-  src/common/g1/sonic_stand.cpp
+  src/common/g1/stand_policy.cpp
   thirdparty/cnpy/cnpy.cpp)
 target_include_directories(cpp_control_deploy PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
@@ -115,6 +116,8 @@ add_executable(deploy_selftest tests/deploy_selftest.cpp)
 target_link_libraries(deploy_selftest cpp_control_deploy cpp_control_vibe_contract)
 if(BUILD_TESTING)
   add_test(NAME deploy_selftest COMMAND deploy_selftest)
+  add_test(NAME stand_policy_selftest COMMAND deploy_selftest
+    --stand-policy ${CMAKE_CURRENT_SOURCE_DIR}/models/stand/g1.onnx)
 endif()
 
 # ── Level 0: base ────────────────────────────────────────
@@ -137,7 +140,7 @@ if(unitree_hg_FOUND OR messages_FOUND)
 
   add_library(cpp_control_g1 STATIC src/robots/g1.cpp)
   target_link_libraries(cpp_control_g1 cpp_control_base cpp_control_deploy)
-  ament_target_dependencies(cpp_control_g1 ${G1_DEPS})
+  ament_target_dependencies(cpp_control_g1 ament_index_cpp ${G1_DEPS})
 
   # Tracker library (motion handling, WBC obs, frame alignment)
   add_library(cpp_control_g1_textop_tracker STATIC src/tasks/tracker/g1_textop_tracker.cpp)
@@ -237,6 +240,7 @@ endif()
 
 install(DIRECTORY launch config models include
   DESTINATION share/${PROJECT_NAME}/
+  PATTERN "deploy_mjlab.yaml" EXCLUDE
 )
 
 install(PROGRAMS

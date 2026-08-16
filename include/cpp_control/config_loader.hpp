@@ -22,7 +22,7 @@ struct Config
     std::string onnx_path;       // WBC (or single-policy tasks)
     std::string hlc_onnx_path;   // HLC (vibe residual)
     std::string motion_path;
-    std::string stand_onnx_path; // robot-level SONIC stand (ControlMode::STAND)
+    std::string stand_onnx_path; // optional override; packaged stand/g1.onnx is the default
 
     // Control gains for 29DOF
     std::vector<double> kps;  // [29]

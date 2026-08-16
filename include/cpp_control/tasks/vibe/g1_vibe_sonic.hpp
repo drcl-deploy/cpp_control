@@ -35,14 +35,15 @@ namespace cpp_control {
  * Smoke output: the graph's `attn` (queries x patches) is republished on
  * `attention_topic` every policy tick and carried into the Vibe viewers.
  *
- * Prep (L1) — not a new mode, just stand running a different stand clip: the
- * 1-frame nominal reference is swapped for a `Motion::lead_in` ramp onto the
- * clip's first frame, so SONIC itself carries the robot there, closed-loop.
+ * Prep (L1) hands off from G1's standalone stand mode to a
+ * `Motion::lead_in` ramp starting at the measured posture, so SONIC itself
+ * carries the robot toward the clip's first frame, closed-loop.
  * A is refused until the ramp plays out (allow_policy_entry), because the
  * clip engages at t=0 and a robot not already on frame 0 gets a step input.
- * `prep_joints` picks what ramps (default: arms) — everything else holds
- * nominal, so SONIC is never asked to balance on a dynamic keyframe while it
- * waits for A. See docs/trackers/custom_sonic.md#which-joints-ramp.
+ * `prep_joints` picks what ramps (default: arms) — everything else holds the
+ * measured handoff posture, so SONIC is never asked to balance on a dynamic
+ * keyframe while it waits for A. See
+ * docs/trackers/custom_sonic.md#which-joints-ramp.
  */
 class G1VibeSonicNode : public G1SonicNode {
  public:
@@ -52,6 +53,7 @@ class G1VibeSonicNode : public G1SonicNode {
   Binding make_binding(float* dst, const deploy::PortSpec& port,
                        const deploy::TermSpec& spec) override;
   RobotCommand policy_control() override;
+  void on_stand_engaged() override;
   void engage_reset() override;
   void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
 #ifdef HAS_UNITREE_HG
@@ -73,7 +75,6 @@ class G1VibeSonicNode : public G1SonicNode {
   bool prep_active_ = false;  ///< stand_motion_ is the lead-in, not nominal
   bool prepped_ = false;      ///< lead-in played out — A is armed
   bool prev_l1_ = false;
-  bool prev_rb_ = false;
   double prep_rate_ = 1.5;  ///< rad/s: max |dq| sets the ramp duration
   double prep_min_s_ = 0.5;
   double prep_max_s_ = 2.0;  ///< longer than this and SONIC slouches

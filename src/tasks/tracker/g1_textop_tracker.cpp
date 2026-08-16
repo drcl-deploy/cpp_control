@@ -183,10 +183,16 @@ void G1TextopTrackerNode::enter_stand_mode()
     if (!mot_ready_)
         init_stand_motion();
     frame_init_ = false;
-    control_mode_ = ControlMode::POLICY;
     std::fill(wbc_last_actions_.begin(), wbc_last_actions_.end(), 0.0f);
     if (wbc_policy_)
         wbc_policy_->reset_memory();
+}
+
+void G1TextopTrackerNode::on_stand_engaged()
+{
+    // Preserve motion staging/reset semantics while G1Node owns the actual
+    // stand command stream.
+    enter_stand_mode();
 }
 
 // ── Default WBC-only policy control ─────────────────────────────
@@ -355,16 +361,6 @@ G1TextopTrackerNode::transform_ref_to_robot(const std::array<float, 3>& pos,
 
 void G1TextopTrackerNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 {
-    constexpr size_t RB = 5;  // Xbox X-mode right bumper
-
-    bool rb = (msg->buttons.size() > RB) && (msg->buttons[RB] == 1);
-    if (rb && !prev_rb_)
-    {
-        enter_stand_mode();
-        RCLCPP_INFO(this->get_logger(), "-> stand (WBC @ settle)");
-    }
-    prev_rb_ = rb;
-
     // A exits stand mode
     if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1 && stand_mode_)
     {
@@ -382,12 +378,6 @@ void G1TextopTrackerNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg)
 #ifdef HAS_UNITREE_HG
 void G1TextopTrackerNode::on_gamepad()
 {
-    if (gamepad_.R1.on_press)
-    {
-        enter_stand_mode();
-        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (WBC @ default pose)");
-    }
-
     // A exits stand mode
     if (gamepad_.A.on_press && stand_mode_)
     {

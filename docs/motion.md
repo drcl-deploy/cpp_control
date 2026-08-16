@@ -17,7 +17,7 @@ npz / wire / stand  ──>  g1::Motion  ──views──>  jp/jv (MJ), jp_il/j
 | `from_npz(path, perm)` | retargeted-dataset / mjlab npz (`joint_pos`, `joint_vel`, `body_{pos,quat,lin_vel,ang_vel}_w`, `fps`) + sibling `contact_matrix.npz` — mocke `MjMotionLoader` twin; `perm = g1::MJ2IL` for IL-ordered clips | from file | from file | sonic, vibe-sonic |
 | `from_wire(T, rows, cols)` | legacy motion topic rows, IL-ordered, 65 or 83 wide | 83 only | 83 only | textop (65), sonic, vibe-sonic |
 | `from_wire(T, rows, 83, flags, fps)` | versioned `MotionReference`; full storage with independent twist/contact validity | explicit flag | explicit flag | sonic, vibe-sonic |
-| `stand(defaults)` | nominal pose, identity anchor | zeros (truth) | zeros (truth) | every stand mode |
+| `stand(defaults)` | nominal pose, identity anchor | zeros (truth) | zeros (truth) | task-internal SONIC stand/prep |
 
 **The wire**, two widths (`g1::WIRE_COLS_{MIN,FULL}`, written by
 `scripts/npz_motion_publisher.py`):
@@ -86,7 +86,6 @@ consumer samples through:
 | `g1_sonic` | `jp/jv` (tokenizer, motion_cmd), `aligned_root_quat` (tokenizer r6d) |
 | `g1_vibe_sonic` | + `root_{lin,ang}_vel_b` and `contact` — the full augmentation port |
 | `g1_textop` | `jp_il/jv_il` (WBC command), `root_pos/quat` (frame alignment); pads pre/post directly on the public arrays |
-| `g1::SonicStand` | `stand()` reference + clock alignment |
 
 ## invariants (deploy_selftest-checked)
 

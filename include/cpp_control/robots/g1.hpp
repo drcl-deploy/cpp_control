@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cpp_control/base.hpp"
-#include "common/g1/sonic_stand.hpp"
+#include "common/g1/stand_policy.hpp"
 
 #ifdef HAS_UNITREE_HG
 #include "common/gamepad.hpp"
@@ -52,11 +52,13 @@ namespace cpp_control
         void publish_command(const RobotCommand &cmd) override;
         int num_motors() const override { return G1_NUM_MOTOR; }
 
-        // --- Robot-level SONIC stand (config: stand_onnx_path) ---
-        bool has_stand() const override { return sonic_stand_ != nullptr; }
+        // --- Robot-level stand-only policy ---
+        bool has_stand() const override { return stand_policy_ != nullptr; }
         void engage_stand() override;
         RobotCommand stand_control() override;
-        std::unique_ptr<g1::SonicStand> sonic_stand_;
+        /// Task bookkeeping only; implementations must not replace STAND mode.
+        virtual void on_stand_engaged() {}
+        std::unique_ptr<g1::StandPolicy> stand_policy_;
 
 #ifdef HAS_UNITREE_HG
         // --- Hook for Level 2: read velocities from gamepad_ after mode switching ---

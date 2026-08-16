@@ -66,3 +66,14 @@ cd drcl_deploy/
 source install/setup.sh 
 ros2 launch cpp_control g1_locomotion.launch.py 
 ```
+
+## G1 stand mode
+
+Every G1 controller loads the packaged `models/stand/g1.onnx`. With either
+backend, joystick `RB` enters the standalone actively-balancing policy and `A`
+returns to the task policy. The stand policy always receives a zero velocity
+command and does not consume task, motion, or vision state.
+
+For Vibe tasks that require preparation, the hardware sequence remains
+`RB` → `L1` → `A`: `L1` hands off from the measured standalone-stand posture
+to the task's SONIC lead-in, and `A` remains refused until that lead-in ends.

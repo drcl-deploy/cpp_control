@@ -147,15 +147,16 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
               attn_name_.empty() ? "(absent)" : attn_topic.c_str());
   if (task_profile_.requires_prep)
     RCLCPP_INFO(this->get_logger(),
-                "prep gate ON: RB stand -> L1 ramp onto the clip's first frame "
-                "(%s, %zu joints, %.1f rad/s, %.1f-%.1f s) -> A.",
+                "prep gate ON: L1 ramps onto the clip's first frame "
+                "(%s, %zu joints, %.1f rad/s, %.1f-%.1f s) -> A; "
+                "RB stand is optional between runs.",
                 prep_joints_name_.c_str(), prep_joints_.size(), prep_rate_,
                 prep_min_s_, prep_max_s_);
   else
     RCLCPP_INFO(
         this->get_logger(),
-        "stand-reactive task: A or RB engages the nominal SONIC reference; "
-        "no motion/prep stream is used");
+        "stand-reactive task: RB engages the standalone policy; A engages "
+        "the nominal SONIC reference; no motion/prep stream is used");
 }
 
 // ── Extractor-era port writers ───────────────────────────────────
@@ -291,8 +292,7 @@ bool G1VibeSonicNode::allow_policy_entry() {
   if (task_profile_.requires_prep && !prepped_) {
     RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
-        "policy entry refused — RB to stand, then L1 to prep frame %d",
-        start_frame_);
+        "policy entry refused — press L1 to prep frame %d", start_frame_);
     return false;
   }
   return true;
@@ -304,9 +304,10 @@ void G1VibeSonicNode::enter_prep() {
                 task_profile_.family.c_str());
     return;
   }
-  if (control_mode_ != ControlMode::POLICY || !stand_mode_) {
-    RCLCPP_WARN(this->get_logger(),
-                "L1 refused — prep runs inside stand: press RB first");
+  const bool from_global_stand = control_mode_ == ControlMode::STAND;
+  const bool from_sonic_policy = control_mode_ == ControlMode::POLICY;
+  if (!from_global_stand && !from_sonic_policy) {
+    RCLCPP_WARN(this->get_logger(), "L1 refused — enter stand or policy first");
     return;
   }
   if (pend_ready_) commit_pending_motion();
@@ -323,19 +324,25 @@ void G1VibeSonicNode::enter_prep() {
     return;
   }
 
-  // Start from the reference SONIC is holding, not the measured pose: it is
-  // the only pose the policy is currently being asked for, so a re-press of
-  // L1 mid-ramp continues from where the ramp got to instead of snapping back.
-  const int cur =
-      std::clamp(stand_clock_->frame(), 0, stand_motion_->num_frames - 1);
-  const std::vector<float> from(stand_motion_->jp(cur),
-                                stand_motion_->jp(cur) + G1_NUM_MOTOR);
+  // Global stand and an active task run hand off from measured posture. A
+  // re-press during SONIC prep continues from its active lead-in reference.
+  std::vector<float> from;
+  if (from_global_stand || !stand_mode_) {
+    from.assign(robot_state_.joint_positions.begin(),
+                robot_state_.joint_positions.begin() + G1_NUM_MOTOR);
+  } else {
+    const int cur =
+        std::clamp(stand_clock_->frame(), 0, stand_motion_->num_frames - 1);
+    from.assign(stand_motion_->jp(cur),
+                stand_motion_->jp(cur) + G1_NUM_MOTOR);
+  }
   const int f = std::clamp(start_frame_, 0, motion_->num_frames - 1);
   const float* f0 = motion_->jp(f);
 
-  // Only prep_joints_ chase the clip; the rest hold nominal, so the pose SONIC
-  // must balance on until A is a stance it can hold, not a dynamic keyframe.
-  std::vector<float> to = default_angles_;
+  // Only prep_joints_ chase the clip; the rest hold the handoff posture. This
+  // makes global-stand -> SONIC continuous without asking SONIC to balance on
+  // an arbitrary dynamic keyframe while it waits for A.
+  std::vector<float> to = from;
   for (int i : prep_joints_) to[i] = f0[i];
 
   const auto worst_of = [&](const float* a, const float* b) {
@@ -384,6 +391,13 @@ void G1VibeSonicNode::restore_stand_reference() {
   prepped_ = false;
 }
 
+void G1VibeSonicNode::on_stand_engaged() {
+  // RB aborts any lead-in and restores the task's nominal reference for the
+  // next deliberate L1/A handoff. G1Node remains in the standalone STAND mode.
+  restore_stand_reference();
+  G1SonicNode::on_stand_engaged();
+}
+
 void G1VibeSonicNode::on_button_a() {
   if (task_profile_.stand_reactive) {
     if (pend_ready_) {
@@ -406,7 +420,7 @@ void G1VibeSonicNode::on_button_a() {
   if (!prepped_) {
     RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
-        "A refused — RB to stand, then L1 to ramp onto frame %d", start_frame_);
+        "A refused — press L1 to ramp onto frame %d", start_frame_);
     return;
   }
   restore_stand_reference();   // a later RB must mean nominal again
@@ -554,20 +568,17 @@ void G1VibeSonicNode::publish_attn() {
   attn_pub_->publish(msg);
 }
 
-// ── Joystick / Gamepad: L1 preps, RB restores the nominal stand ──
+// ── Joystick / Gamepad: G1 owns RB; L1 preps; A enters the task ─
 
 void G1VibeSonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
   const auto down = [&](size_t i) {
     return msg->buttons.size() > i && msg->buttons[i] == 1;
   };
-  const bool rb = down(joy::XMODE_R1), l1 = down(joy::XMODE_L1);
-  if (task_profile_.requires_prep && rb && !prev_rb_)
-    restore_stand_reference();  // before the base engages stand on the lead-in
+  const bool l1 = down(joy::XMODE_L1);
   if (l1 && !prev_l1_) enter_prep();
-  prev_rb_ = rb;
   prev_l1_ = l1;
 
-  G1SonicNode::on_joy(msg);  // RB -> stand, A -> on_button_a (gated above)
+  G1SonicNode::on_joy(msg);  // A -> on_button_a (gated above)
 
   if (task_profile_.requires_prep && control_mode_ != ControlMode::POLICY)
     restore_stand_reference();  // X / B / Y left policy — the prep is void
@@ -575,8 +586,6 @@ void G1VibeSonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
 
 #ifdef HAS_UNITREE_HG
 void G1VibeSonicNode::on_gamepad() {
-  if (task_profile_.requires_prep && gamepad_.R1.on_press)
-    restore_stand_reference();
   if (gamepad_.L1.on_press) enter_prep();
 
   G1SonicNode::on_gamepad();

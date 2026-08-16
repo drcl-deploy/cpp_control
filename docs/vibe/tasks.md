@@ -49,8 +49,9 @@ the artifact directory. A directory with multiple exported pairs must also
 specify `checkpoint:=<training_step>`; the launch fails rather than silently
 choosing a policy. The generic launch uses the same artifact interface.
 
-Repose, UOLM, and PerLoco use `RB` stand → `L1` prep → `A` run. Dodge uses
-`A` or `RB` to engage the nominal SONIC reference and ignores staged clips.
+Repose, UOLM, and PerLoco use `RB` standalone stand → `L1` SONIC prep → `A`
+run. Dodge uses `RB` for standalone stand and `A` to engage its nominal SONIC
+reference; it ignores staged clips.
 
 ## Simulator follow-up
 

@@ -70,8 +70,7 @@ protected:
     virtual bool allow_policy_entry() { return true; }
 
     // --- Robot-level stand mode (ControlMode::STAND) ---
-    // Level 1 provides an engine (e.g. g1::SonicStand); base wires RB to it.
-    // Tasks with their own stand semantics simply leave it unconfigured.
+    // Level 1 provides the engine; base wires RB to it.
     virtual bool has_stand() const { return false; }
     virtual void engage_stand() {}
     virtual RobotCommand stand_control() { return nominal_pose_control(); }
