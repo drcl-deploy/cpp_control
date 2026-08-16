@@ -2,7 +2,8 @@
 
 /// sys1 knobs — the C++ twin of vibe `planner/clips.py::ClipCfg`.
 /// Rationale for every default lives there; the migration spec is
-/// vibe `docs/sys1_cpp.md`. v5 and v6 differ by four values and nothing else.
+/// vibe `docs/sys1_cpp.md`. v5, v6 and v7 differ by five values, nothing else,
+/// so one binary A/B/Cs on the robot.
 
 #include <string>
 
@@ -24,6 +25,20 @@ struct Cfg {
   float min_rel_sat = 0.22f;
   float up_dot_min = 0.90f;  ///< |n.z| for a fitted plane to BE the top face
   int settle_steps = 40;
+
+  /// v7: hold the robot's NOMINAL STANCE in a still mode, not the library's
+  /// stand frame. sys1's own vocabulary — the borrowed pose was picked for
+  /// quietness and carries a waist that aims the head at the near ground.
+  /// Measured on THIS deployment's mount quat and its own baked stand row:
+  ///
+  ///     library frame 12953   waist +26.7 deg -> cam 71.2 deg down, -27.2 yaw
+  ///     nominal stance        waist 0         -> cam 45.0 deg down,   0.0 yaw
+  ///
+  /// 45.0 is the mount angle, recovered exactly because a nominal pose has
+  /// waist = 0 and the torso is therefore vertical. Sim: cube-top band
+  /// 0.02-0.57 m -> 0.26-1.35 m, clip exits in view 0% -> 100%, solve 62.5%
+  /// -> 95% (n=120, z=6.15). False is v5/v6.
+  bool nominal_stand = false;
 
   // ── the loop ──
   std::string pattern = "RRB";  ///< v6: "RRF" — the single biggest win
@@ -49,6 +64,13 @@ struct Cfg {
     c.pattern = "RRF";
     c.horizon_gain = 0.3f;
     c.min_visible_color = 0.0f;
+    return c;
+  }
+  /// v7 = v6 + the nominal stand. Built ON v6 rather than beside it, so a v6
+  /// revision reaches v7 and the pair can never disagree about what they share.
+  static Cfg v7() {
+    Cfg c = v6();
+    c.nominal_stand = true;
     return c;
   }
   static Cfg preset(const std::string& name);

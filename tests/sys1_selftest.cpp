@@ -24,6 +24,7 @@
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
 #include "sys1/clips.hpp"
+#include "sys1/kinematics.hpp"
 #include "sys1/table.hpp"
 #include "sys1/writer.hpp"
 
@@ -59,6 +60,70 @@ void check_cfg() {
   check(threw, "a pattern outside FBLR is refused");
 }
 
+/// THE v7 RESULT, asserted offline: a nominal stance has waist = 0, so the torso
+/// is vertical and the camera reads back its mount angle. The library's stand
+/// frame does not, which is why v5/v6 aimed at the near ground and saw 44-47%
+/// side faces. No robot, no camera — three joint angles and the mount quat.
+void check_gaze() {
+  std::puts("gaze");
+  const Mount mount;  // the xml's, same defaults the node falls back to
+  const std::array<float, 4> level{1.f, 0.f, 0.f, 0.f};
+  auto look = [&](float yaw, float roll, float pitch) {
+    return gaze_of(camera_pose(level, {yaw, roll, pitch}, mount));
+  };
+
+  const Gaze nom = look(0.f, 0.f, 0.f);
+  std::printf("       nominal (waist 0)      %5.1f deg down  %+6.1f off-axis\n",
+              nom.pitch_deg, nom.yaw_deg);
+  check(std::fabs(nom.pitch_deg - 45.0f) < 0.5f,
+        "a nominal stance recovers the 45 deg mount angle");
+  check(std::fabs(nom.yaw_deg) < 0.5f, "and looks straight ahead");
+
+  // Library stand frame 12953, the pose v5/v6 held. Measured off the baked row.
+  const Gaze lib = look(-0.2435f, -0.0780f, 0.4666f);
+  std::printf("       library frame 12953    %5.1f deg down  %+6.1f off-axis\n",
+              lib.pitch_deg, lib.yaw_deg);
+  check(lib.pitch_deg > 65.0f, "the library stand aims at the near ground");
+  check(std::fabs(lib.yaw_deg) > 20.0f,
+        "and its waist yaw skews the search window too");
+
+  // The gaze must be a pure function of the waist: any base tilt the IMU
+  // reports is already removed before perception, so it cannot enter here.
+  const float h = 0.5f * 0.4f;
+  const Gaze yawed = gaze_of(camera_pose(
+      {std::cos(h), 0.f, 0.f, std::sin(h)}, {0.f, 0.f, 0.f}, mount));
+  check(std::fabs(yawed.pitch_deg - nom.pitch_deg) < 1e-3f &&
+            std::fabs(yawed.yaw_deg - nom.yaw_deg) < 1e-3f,
+        "heading is removed before the gaze, so a turned robot sees the same");
+}
+
+/// v7's still pose must BE the nominal stance and nothing else: the sim's
+/// `_fk_nominal` channel for channel, so a sim result transfers.
+void check_nominal_stand(ClipTable& t) {
+  std::puts("nominal stand");
+  std::vector<float> nominal(g1::NUM_JOINTS, 0.0f);
+  for (size_t i = 0; i < g1::MJ_JOINTS.size(); ++i)
+    nominal[i] = 0.1f * static_cast<float>(i % 3);  // any stance, waist included
+  for (int i : g1::WAIST_JOINT_INDICES) nominal[i] = 0.0f;
+
+  t.set_nominal_stand(nominal);
+  const float* s = t.stand_row();
+  const int cols = t.cols(), J = g1::NUM_JOINTS;
+
+  float dq = 0.0f;
+  for (int j = 0; j < J; ++j)
+    dq = std::max(dq, std::fabs(s[j] - nominal[g1::IL2MJ[j]]));
+  check(dq < 1e-6f, "joints ARE the nominal stance, IL-ordered");
+
+  float rest = 0.0f;
+  for (int c = J; c < cols; ++c)
+    if (c != 2 * J + 3) rest = std::max(rest, std::fabs(s[c]));
+  check(rest < 1e-6f,
+        "velocity, root position, twist and contact are all zero");
+  check(std::fabs(s[2 * J + 3] - 1.0f) < 1e-6f,
+        "the anchor quat is identity — upright, and engage rebases the heading");
+}
+
 /// The warp must be exactly the heading term the retrieval minimises, or the
 /// planner is ranking one thing and commanding another.
 void check_warp_identity() {
@@ -87,14 +152,16 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
   live.joint_pos_il.assign(g1::NUM_JOINTS, 0.0f);
   live.joint_vel_il.assign(g1::NUM_JOINTS, 0.0f);
   const auto& rows = w.build(p, live);
-  const int cols = t.cols();
-  check(w.frames() == cfg.scan_steps, "one row per held frame");
+  const int cols = t.cols(), lead = w.lead_in_frames();
+  check(w.frames() == lead + cfg.scan_steps,
+        "one row per held frame, after the ramp onto the still pose");
 
   // Only the yaw RELATIVE to frame 0 is a command: MotionClock::engage aligns
   // frame 0 onto the robot, so the stand pose's own recorded heading cancels.
+  // The sweep is over the HELD frames — the lead-in holds the entry heading.
   const int aq = 2 * g1::NUM_JOINTS + 3;
   auto yaw_of = [&](int f) {
-    const float* q = &rows[static_cast<size_t>(f) * cols + aq];
+    const float* q = &rows[static_cast<size_t>(lead + f) * cols + aq];
     return std::atan2(2.0f * (q[0] * q[3] + q[1] * q[2]),
                       1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3]));
   };
@@ -110,11 +177,16 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
   check(swept(ramp / 2) > 0.1f && swept(ramp / 2) < p.yaw_offset,
         "and is monotone across the window, not a step");
   const int aang = g1::WIRE_COLS_MIN + 3;
-  check(rows[static_cast<size_t>(ramp / 2) * cols + aang + 2] > 0.0f,
-        "a turning reference commands a turn rate");
-  check(std::fabs(rows[static_cast<size_t>(cfg.scan_steps - 1) * cols + aang + 2]) <
-            1e-6f,
+  auto ang_z = [&](int f) {
+    return rows[static_cast<size_t>(lead + f) * cols + aang + 2];
+  };
+  check(ang_z(ramp / 2) > 0.0f, "a turning reference commands a turn rate");
+  check(std::fabs(ang_z(cfg.scan_steps - 1)) < 1e-6f,
         "and zero once it is done turning");
+  float head = 0.0f;
+  for (int j = 0; j < g1::NUM_JOINTS; ++j)
+    head = std::max(head, std::fabs(rows[j] - live.joint_pos_il[j]));
+  check(head < 1e-5f, "row 0 IS the live pose — a still commit ramps, not steps");
 }
 
 /// The lead-in must be continuous with the live pose and land on the clip.
@@ -214,7 +286,7 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
 
 int main(int argc, char** argv) {
   std::string table_path, frames_path, library_path, bake_path, replay_dir,
-      version = "v6";
+      version = "v7";
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() { return i + 1 < argc ? argv[++i] : ""; };
@@ -232,6 +304,7 @@ int main(int argc, char** argv) {
 
   const Cfg cfg = Cfg::preset(version);
   check_cfg();
+  check_gaze();
   check_warp_identity();
 
   if (table_path.empty()) {
@@ -254,13 +327,19 @@ int main(int argc, char** argv) {
     }
   }
   check_table(table);
-  if (table.has_frames()) {
-    check_still_rows(table, cfg);
-    check_lead_in(table, cfg);
-  }
+  // BEFORE the checks below, which overwrite the stand row: a bundle carries
+  // the library's pose and nothing else. v7's stance is per-robot and arrives
+  // at runtime from sys0's manifest, so the bundle stays version-agnostic.
   if (!bake_path.empty()) {
     table.bake(bake_path);
     std::printf("baked -> %s\n", bake_path.c_str());
+  }
+  if (table.has_frames()) {
+    // Deliberately BEFORE the two below, so they exercise the still pose the
+    // configured version actually ships.
+    if (cfg.nominal_stand) check_nominal_stand(table);
+    check_still_rows(table, cfg);
+    check_lead_in(table, cfg);
   }
   if (!replay_dir.empty() && replay(replay_dir, table, cfg) != 0) ++failures;
 

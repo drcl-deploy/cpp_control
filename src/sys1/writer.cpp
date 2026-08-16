@@ -49,6 +49,45 @@ void ReferenceWriter::push_stand(int count) {
                 cols_ * sizeof(float));
 }
 
+/// Rate-limited ramp from the live pose onto `target`. The sim pays this as a
+/// 12-frame blend; on hardware a reference that STEPS is a step input to a
+/// balancing policy, so walk there instead — the same mechanism the human-driven
+/// L1 prep provides, just automatic (docs/sys1.md §1 F4).
+///
+/// Under v7 this matters for STILL modes too, not only clips: the nominal stance
+/// is sys1's own vocabulary and therefore sits further from a clip's exit pose
+/// than the library frame it replaced, so the settle that follows every clip is
+/// the largest joint step in the loop. Cost is `lead_in_min_s` (0.2 s) when the
+/// delta is small, which is what a settle-after-settle sees.
+void ReferenceWriter::push_lead_in(const float* target, const LiveState& live) {
+  if (cfg_.lead_in_rate <= 0.0f) return;
+  float max_dq = 0.0f;
+  for (int j = 0; j < J; ++j)
+    max_dq = std::max(max_dq, std::fabs(target[j] - live.joint_pos_il[j]));
+  const float secs = std::clamp(max_dq / cfg_.lead_in_rate, cfg_.lead_in_min_s,
+                                cfg_.lead_in_max_s);
+  lead_ = std::max(2, static_cast<int>(std::lround(secs * t_.fps())));
+
+  const size_t at = rows_.size();
+  rows_.resize(at + static_cast<size_t>(lead_) * cols_);
+  for (int f = 0; f < lead_; ++f) {
+    float* row = &rows_[at + static_cast<size_t>(f) * cols_];
+    // Root channels are the target's, so the heading the ramp holds is the one
+    // the mode is about to start from; twist and contact stay zero.
+    std::memcpy(row + APOS, target + APOS, (cols_ - APOS) * sizeof(float));
+    std::memset(row + ALIN, 0, (cols_ - ALIN) * sizeof(float));
+    const float a = static_cast<float>(f) / (lead_ - 1);
+    const float s = a * a * (3.0f - 2.0f * a);  // smoothstep, as Motion::lead_in
+    for (int j = 0; j < J; ++j)
+      row[j] = (1.0f - s) * live.joint_pos_il[j] + s * target[j];
+  }
+  for (int f = 0; f + 1 < lead_; ++f)  // jv from jp, so the two cannot disagree
+    for (int j = 0; j < J; ++j)
+      rows_[at + static_cast<size_t>(f) * cols_ + J + j] =
+          (rows_[at + static_cast<size_t>(f + 1) * cols_ + j] -
+           rows_[at + static_cast<size_t>(f) * cols_ + j]) * t_.fps();
+}
+
 /// Motion matching's inertialization: pay the pose discontinuity, buy task
 /// adherence, then decay the offset. Tokenizer channels only — contact flags
 /// are binary and stay hard.
@@ -78,56 +117,28 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     // so the 6D row says "still turning", not "hold this heading". A one-shot
     // ask saturates the tracking error instead (28.5 deg achieved per 90 asked).
     const int hold = std::max(plan.frames, 1);
+    push_lead_in(t_.stand_row(), live);
+    const size_t at = rows_.size();  // the sweep is over the HELD frames only
     push_stand(hold);
     const int ramp = std::max(hold - 2 * cfg_.read_tail, 1);
     const float rate = plan.yaw_offset / ramp;  // rad per frame
     for (int f = 0; f < hold; ++f) {
       const float frac = std::min(static_cast<float>(f) / ramp, 1.0f);
-      float* row = &rows_[static_cast<size_t>(f) * cols_];
+      float* row = &rows_[at + static_cast<size_t>(f) * cols_];
       rotate_row(row, plan.yaw_offset * frac);
       // The robot IS turning, so say so: zero here would lie to the adapter's
       // robot_root_ang_vel_cmd for the whole sweep.
       row[AANG + 2] = f < ramp ? rate * t_.fps() : 0.0f;
     }
-    frames_ = hold;
-    if (cfg_.blend_frames > 0)
+    frames_ = static_cast<int>(rows_.size() / cols_);
+    if (lead_ == 0 && cfg_.blend_frames > 0)
       blend_head(live, std::min(cfg_.blend_frames, frames_));
     return rows_;
   }
 
   const ClipRow& r = t_.rows()[plan.row];
   const float* span = t_.span(plan.row);
-
-  // Rate-limited lead-in onto the clip's entry pose. The sim pays this as a
-  // 12-frame blend; on hardware a reference that STEPS is a step input to a
-  // balancing policy, so walk there instead — same mechanism as the L1 prep,
-  // just automatic (docs/sys1.md §4).
-  if (cfg_.lead_in_rate > 0.0f) {
-    float max_dq = 0.0f;
-    for (int j = 0; j < J; ++j)
-      max_dq = std::max(max_dq, std::fabs(span[j] - live.joint_pos_il[j]));
-    const float secs = std::clamp(max_dq / cfg_.lead_in_rate, cfg_.lead_in_min_s,
-                                  cfg_.lead_in_max_s);
-    lead_ = std::max(2, static_cast<int>(std::lround(secs * t_.fps())));
-    const size_t at = rows_.size();
-    rows_.resize(at + static_cast<size_t>(lead_) * cols_);
-    for (int f = 0; f < lead_; ++f) {
-      float* row = &rows_[at + static_cast<size_t>(f) * cols_];
-      // Root channels are the clip entry's, so the heading the ramp holds is
-      // the one the clip is about to start from; twist and contact stay zero.
-      std::memcpy(row + APOS, span + APOS, (cols_ - APOS) * sizeof(float));
-      std::memset(row + ALIN, 0, (cols_ - ALIN) * sizeof(float));
-      const float a = static_cast<float>(f) / (lead_ - 1);
-      const float s = a * a * (3.0f - 2.0f * a);  // smoothstep, as Motion::lead_in
-      for (int j = 0; j < J; ++j)
-        row[j] = (1.0f - s) * live.joint_pos_il[j] + s * span[j];
-    }
-    for (int f = 0; f + 1 < lead_; ++f)  // jv from jp, so the two cannot disagree
-      for (int j = 0; j < J; ++j)
-        rows_[at + static_cast<size_t>(f) * cols_ + J + j] =
-            (rows_[at + static_cast<size_t>(f + 1) * cols_ + j] -
-             rows_[at + static_cast<size_t>(f) * cols_ + j]) * t_.fps();
-  }
+  push_lead_in(span, live);
 
   const size_t at = rows_.size();
   rows_.resize(at + static_cast<size_t>(r.span_len) * cols_);

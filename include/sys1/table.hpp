@@ -39,6 +39,14 @@ class ClipTable {
   void load_frames_baked(const std::string& bundle_npz);
   void bake(const std::string& out_npz) const;
 
+  /// v7: replace the still pose with the robot's NOMINAL STANCE (`nominal_stand`).
+  /// `default_angles_mj` is the manifest's `default_joint_pos` — the same array
+  /// sys0 holds in NOMINAL_POSE and the same one mjlab FKs, so the two sides
+  /// cannot drift. Call after a frame loader; the still path then never reads
+  /// the table again. No-op'd by config, so v5/v6 keep the library frame.
+  void set_nominal_stand(const std::vector<float>& default_angles_mj);
+  bool nominal_stand() const { return nominal_stand_; }
+
   const std::vector<ClipRow>& rows() const { return rows_; }
   /// Clean rows for a delta letter (F | B | L | R); empty if none.
   const std::vector<int>& pool(char delta) const;
@@ -59,7 +67,8 @@ class ClipTable {
   std::vector<int> clip_start_, clip_len_;
   std::vector<int> pools_[4];  ///< SLOTS index 2..5 -> F B L R
   std::vector<float> frames_;  ///< (N, cols_) wire rows
-  std::vector<float> stand_;   ///< (cols_,) the library's stand pose
+  std::vector<float> stand_;   ///< (cols_,) the pose a still mode holds
+  bool nominal_stand_ = false;
   int stand_frame_ = 0;
   int cols_ = 0;
   float fps_ = 50.f, half_extent_ = 0.3048f;

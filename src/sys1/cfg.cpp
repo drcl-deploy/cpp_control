@@ -9,7 +9,9 @@ namespace sys1 {
 Cfg Cfg::preset(const std::string& name) {
   if (name == "v5") return Cfg::v5();
   if (name == "v6") return Cfg::v6();
-  throw std::runtime_error("sys1: version must be v5 | v6, got '" + name + "'");
+  if (name == "v7") return Cfg::v7();
+  throw std::runtime_error("sys1: version must be v5 | v6 | v7, got '" + name +
+                           "'");
 }
 
 void Cfg::validate() const {

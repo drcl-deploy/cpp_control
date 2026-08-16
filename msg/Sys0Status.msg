@@ -17,3 +17,11 @@ string reference_id     # the reference currently engaged ('' = none)
 uint32 frame            # playback position within it
 uint32 frames
 bool finished           # holding the last frame
+
+# The robot's NOMINAL STANCE, MJ order — the manifest's `default_joint_pos`,
+# which is what sys0 actually holds in NOMINAL_POSE. sys1 builds its v7 still
+# pose from this rather than parsing the manifest a second time: one source, so
+# the pose the planner commands and the pose the controller stands in cannot
+# drift. Constant, but it rides the status message so it can never be missed by
+# a late subscriber or go stale. Empty until the manifest has loaded.
+float32[] default_joint_pos

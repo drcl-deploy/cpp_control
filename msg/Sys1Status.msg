@@ -31,5 +31,5 @@ float32 cost            # metres of stance residual sys0 must self-correct
 float32 entry_yaw
 int32 frames
 int32 lead_in_frames
-string version          # v5 | v6
+string version          # v5 | v6 | v7
 float32 observe_ms

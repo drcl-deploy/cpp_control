@@ -42,6 +42,7 @@
 #include "common/math_utils.hpp"
 #include "cpp_control/tasks/vibe/task_profile.hpp"
 #include "sys1/clips.hpp"
+#include "sys1/kinematics.hpp"
 #include "sys1/table.hpp"
 #include "sys1/writer.hpp"
 
@@ -51,48 +52,6 @@ namespace sys1 {
 namespace wire = vision_encoders::wire;
 
 namespace {
-
-/// G1 waist chain, straight off unitree_robots/g1/g1_29dof.xml — the camera is
-/// rigid to torso_link, so three hinges are the whole of the kinematics.
-constexpr float WAIST_ROLL_OFFSET[3] = {-0.0039635f, 0.0f, 0.035f};
-constexpr float TORSO_OFFSET[3] = {0.0f, 0.0f, 0.019f};
-
-using Mat3 = std::array<float, 9>;
-
-Mat3 mat_mul(const Mat3& a, const Mat3& b) {
-  Mat3 o{};
-  for (int r = 0; r < 3; ++r)
-    for (int c = 0; c < 3; ++c)
-      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] +
-                     a[r * 3 + 2] * b[6 + c];
-  return o;
-}
-
-std::array<float, 3> mat_vec(const Mat3& m, const std::array<float, 3>& v) {
-  return {m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
-          m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
-          m[6] * v[0] + m[7] * v[1] + m[8] * v[2]};
-}
-
-Mat3 rot_x(float a) {
-  const float c = std::cos(a), s = std::sin(a);
-  return {1, 0, 0, 0, c, -s, 0, s, c};
-}
-Mat3 rot_y(float a) {
-  const float c = std::cos(a), s = std::sin(a);
-  return {c, 0, s, 0, 1, 0, -s, 0, c};
-}
-Mat3 rot_z(float a) {
-  const float c = std::cos(a), s = std::sin(a);
-  return {c, -s, 0, s, c, 0, 0, 0, 1};
-}
-
-Mat3 mat_from_quat(const std::array<float, 4>& q) {
-  const float w = q[0], x = q[1], y = q[2], z = q[3];
-  return {1 - 2 * (y * y + z * z), 2 * (x * y - w * z),     2 * (x * z + w * y),
-          2 * (x * y + w * z),     1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
-          2 * (x * z - w * y),     2 * (y * z + w * x),     1 - 2 * (x * x + y * y)};
-}
 
 std::array<float, 3> yaml_vec3(const YAML::Node& n,
                                const std::array<float, 3>& fallback) {
@@ -117,7 +76,11 @@ class Sys1Node : public rclcpp::Node {
     sys0_sub_ = this->create_subscription<msg::Sys0Status>(
         this->declare_parameter("sys0_status_topic", "/vibe/sys0/status"),
         rclcpp::QoS(1).best_effort().durability_volatile(),
-        [this](msg::Sys0Status::SharedPtr m) { sys0_ = *m; sys0_seen_ = true; });
+        [this](msg::Sys0Status::SharedPtr m) {
+          sys0_ = *m;
+          sys0_seen_ = true;
+          adopt_nominal_stand(m->default_joint_pos);
+        });
     lowstate_sub_ = this->create_subscription<unitree_hg::msg::LowState>(
         this->declare_parameter("lowstate_topic", "/lowstate"), 10,
         [this](unitree_hg::msg::LowState::SharedPtr m) { on_lowstate(m); });
@@ -157,7 +120,9 @@ class Sys1Node : public rclcpp::Node {
     if (const auto k = root["knobs"]) {
       auto f = [&](const char* n, float& v) { if (k[n]) v = k[n].as<float>(); };
       auto i = [&](const char* n, int& v) { if (k[n]) v = k[n].as<int>(); };
+      auto b = [&](const char* n, bool& v) { if (k[n]) v = k[n].as<bool>(); };
       if (k["pattern"]) cfg_.pattern = k["pattern"].as<std::string>();
+      b("nominal_stand", cfg_.nominal_stand);  // v6 + this IS v7; A/B in one edit
       i("retry_limit", cfg_.retry_limit);
       i("stall_limit", cfg_.stall_limit);
       i("settle_steps", cfg_.settle_steps);
@@ -200,14 +165,10 @@ class Sys1Node : public rclcpp::Node {
     stale_s_ = root["stale_s"] ? root["stale_s"].as<double>() : 1.0;
 
     const auto mount = root["mount"];
-    mount_pos_ = yaml_vec3(mount ? mount["xyz"] : YAML::Node(),
-                           {0.05f, 0.0f, 0.4318f});
-    const auto q = mount ? mount["quat"] : YAML::Node();
-    mount_quat_ = (q && q.size() == 4)
-                      ? std::array<float, 4>{q[0].as<float>(), q[1].as<float>(),
-                                             q[2].as<float>(), q[3].as<float>()}
-                      : std::array<float, 4>{0.6533f, 0.2706f, -0.2706f, -0.6533f};
-    R_tc_ = mat_from_quat(mount_quat_);
+    mount_.pos = yaml_vec3(mount ? mount["xyz"] : YAML::Node(), Mount{}.pos);
+    if (const auto q = mount ? mount["quat"] : YAML::Node(); q && q.size() == 4)
+      mount_.quat = {q[0].as<float>(), q[1].as<float>(), q[2].as<float>(),
+                     q[3].as<float>()};
 
     const int target = root["target_color"] ? root["target_color"].as<int>() : 4;
     clips_ = std::make_unique<Sys1Clips>(table_, cfg_, target);
@@ -240,28 +201,42 @@ class Sys1Node : public rclcpp::Node {
     last_state_ = this->now();
   }
 
-  /// Camera pose in the robot's GRAVITY-ALIGNED base frame: the IMU with its
-  /// heading removed, then the waist chain, then the fixed mount. Pure
-  /// kinematics — no odometry anywhere, because the tokenizer never reads a
-  /// reference position and yaw drift cancels in every difference (§1).
   CameraPose camera_pose() const {
-    const Mat3 R_grav = mat_from_quat(
-        math::qmul(math::qinv(math::heading_quat(imu_quat_)), imu_quat_));
-    const Mat3 R_wy = rot_z(waist_q_[0]);
-    const Mat3 R_wr = mat_mul(R_wy, rot_x(waist_q_[1]));
-    const Mat3 R_pt = mat_mul(R_wr, rot_y(waist_q_[2]));
-    std::array<float, 3> p_pt = mat_vec(
-        R_wy, {WAIST_ROLL_OFFSET[0], WAIST_ROLL_OFFSET[1], WAIST_ROLL_OFFSET[2]});
-    const auto p_torso =
-        mat_vec(R_wr, {TORSO_OFFSET[0], TORSO_OFFSET[1], TORSO_OFFSET[2]});
-    for (int i = 0; i < 3; ++i) p_pt[i] += p_torso[i];
+    return sys1::camera_pose(imu_quat_, waist_q_, mount_);
+  }
 
-    CameraPose out;
-    out.R = mat_mul(R_grav, mat_mul(R_pt, R_tc_));
-    const auto cam_in_pelvis = mat_vec(R_pt, mount_pos_);
-    out.t = mat_vec(R_grav, {p_pt[0] + cam_in_pelvis[0], p_pt[1] + cam_in_pelvis[1],
-                             p_pt[2] + cam_in_pelvis[2]});
-    return out;
+  // ── The v7 still pose ──────────────────────────────────────────
+  //
+  // Taken from sys0 rather than parsed here: `default_joint_pos` is the
+  // manifest's, which is the pose the controller actually holds in
+  // NOMINAL_POSE and the same array mjlab FKs. One source, so the stance the
+  // planner commands and the stance the robot stands in cannot disagree.
+  // Arrives on the first Sys0Status, which the planner already waits for.
+
+  void adopt_nominal_stand(const std::vector<float>& jp_mj) {
+    if (stand_ready_ || !cfg_.nominal_stand) return;
+    if (jp_mj.size() != static_cast<size_t>(g1::NUM_JOINTS)) return;
+    bool any = false;
+    for (float v : jp_mj) any = any || v != 0.0f;
+    if (!any) return;  // manifest not loaded yet — all-zero is not a stance
+
+    table_.set_nominal_stand(jp_mj);
+    stand_ready_ = true;
+
+    // Log the gaze, because the gaze IS the change. A deployed robot whose
+    // nominal stance carries a stooped waist gets v6's band back, silently.
+    std::array<float, 3> waist{};
+    for (int i = 0; i < 3; ++i) waist[i] = jp_mj[waist_[i]];
+    const Gaze g = gaze_of(sys1::camera_pose({1.f, 0.f, 0.f, 0.f}, waist, mount_));
+    RCLCPP_INFO(this->get_logger(),
+                "v7 nominal stand: waist %.1f/%.1f/%.1f deg -> camera %.1f deg "
+                "down, %+.1f off-axis (mount is 45.0)",
+                waist[0] * 57.2958f, waist[1] * 57.2958f, waist[2] * 57.2958f,
+                g.pitch_deg, g.yaw_deg);
+    if (std::fabs(g.pitch_deg - 45.0f) > 5.0f)
+      RCLCPP_WARN(this->get_logger(),
+                  "nominal stance does not recover the mount angle — the whole "
+                  "v7 result is that waist ~ 0 makes the torso vertical");
   }
 
   void on_goal_color(std_msgs::msg::Int32::SharedPtr m) {
@@ -374,11 +349,15 @@ class Sys1Node : public rclcpp::Node {
       armed_ = false;
       return;
     }
-    if (!fresh(last_state_) || !fresh(last_frame_)) {
+    if (!fresh(last_state_) || !fresh(last_frame_) ||
+        (cfg_.nominal_stand && !stand_ready_)) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                           "sys1: waiting for %s%s",
+                           "sys1: waiting for %s%s%s",
                            fresh(last_state_) ? "" : "lowstate ",
-                           fresh(last_frame_) ? "" : "camera frames");
+                           fresh(last_frame_) ? "" : "camera frames ",
+                           (!cfg_.nominal_stand || stand_ready_)
+                               ? ""
+                               : "sys0's nominal stance");
       return;
     }
 
@@ -495,9 +474,8 @@ class Sys1Node : public rclcpp::Node {
   std::string camera_ip_;
   uint16_t camera_port_ = 5555;
   double rate_hz_ = 20.0, stale_s_ = 1.0;
-  std::array<float, 3> mount_pos_{};
-  std::array<float, 4> mount_quat_{};
-  Mat3 R_tc_{};
+  Mount mount_;
+  bool stand_ready_ = false;  ///< v7: the nominal stance has arrived from sys0
   std::array<int, 3> waist_{};
 
   // live state

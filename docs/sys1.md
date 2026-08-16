@@ -13,6 +13,41 @@ structural requirements do not apply to this stack.
 
 ---
 
+## 0. Three versions, one binary
+
+They differ by five config values and nothing else, so `version:` in the yaml
+A/B/Cs them on the robot. **v7 is what ships.**
+
+| knob | v5 | v6 | v7 | what it does |
+|---|---|---|---|---|
+| `nominal_stand` | false | false | **true** | hold the robot's own nominal stance in a still mode, not the library's stand frame |
+| `pattern` | RRB | **RRF** | RRF | which ladder |
+| `horizon_gain` | 0.0 | **0.3** | 0.3 | penalise a clip's exit range by \|r_exit − 0.70\| |
+| `min_visible_color` | =`min_visible` | **0.0** | 0.0 | split the colour channel from the pose channel |
+| `retry_limit` | 3 | 3 | 3 | commits before swapping the roll axis |
+
+`nominal_stand` is one boolean and it is the largest win in the algorithm's
+history: sim solve 62.5% → **95%** (n=120, z=6.15), usable reads 35% → 82–89%,
+`side_face` 44–47% → **5–7%**. Not a perception fix — a **gaze** fix. The
+library's quietest frame was chosen for quietness and carries a waist that aims
+the head at the near ground. Measured on this deployment's own mount quat and
+its own baked stand row, and asserted every run by `sys1_selftest`:
+
+| still pose | waist yaw/roll/pitch | camera | cube-top band |
+|---|---|---|---|
+| library frame 12953 | −14.0° / −4.5° / **+26.7°** | **71.2° down, −27.2° off-axis** | ends at 0.57 m — *before* the median clip's own exit, so the cube left view on its own every other commit |
+| **nominal stance** | 0 / 0 / 0 | **45.0° down, 0.0°** | 0.26 – 1.35 m, 100% of clip exits in view |
+
+45.0° is the camera's **mount angle**, recovered exactly because a nominal pose
+has waist = 0 and the torso is therefore vertical. No search, no tuning. The
+−27.2° head yaw is ours to add — the sim spec never noticed it — and it means
+v5/v6 also swept their scan window from 27° off the robot's heading.
+
+`stall_limit` and `scan_peek_every` were built, measured and ship **OFF** in all
+three; `clips.py`'s docstrings are the post-mortems.
+
+---
+
 ## 1. Four things this stack does not need
 
 The migration spec was written against the sim's data model. cpp_control's SONIC
@@ -23,7 +58,7 @@ seam is narrower, and that deletes most of it.
 | F1 | cube-exact SE(2) warp of 19852 frames | **one scalar.** `fill_tokenizer` reads `jp`, `jv` and root ORIENTATION only; `motion_cmd` reads `jp`/`jv`; the adapter's twist is body-frame. Root POSITION reaches no observation, so the translation half of the warp is unobservable and `_pristine` disappears |
 | F2 | `robot_yaw`, `root_xy`, odometry drift budget | **nothing.** The tokenizer's 6D is `qinv(imu) · ref_quat` and sys1's yaw comes from the same IMU, so the IMU *is* the world frame and drift cancels in every difference |
 | F3 | a 10-slot ring buffer, rewritten every step | **`MotionClock`.** `future_frame(k)` already yields `t + [0,5,…,45]` clamped to the clip end — same `FUTURE_STEPS`/`FRAME_SKIP`. A still mode is published as a clip whose frames happen to be identical apart from the yaw ramp |
-| F4 | a 12-frame blend at commit | **a rate-limited lead-in.** A reference that steps is a step input to a balancing policy. `lead_in_rate` walks there instead — the same mechanism the human-driven L1 prep provides, which is why the prep gate turns off under sys1 |
+| F4 | a 12-frame blend at commit | **a rate-limited lead-in**, on *every* commit — clips and stills alike. A reference that steps is a step input to a balancing policy. `lead_in_rate` walks there instead — the same mechanism the human-driven L1 prep provides, which is why the prep gate turns off under sys1. v7 makes this matter more, not less: the nominal stance is sys1's own vocabulary, so it sits further from a clip's exit pose than the library frame did, and the settle after every clip is the largest joint step in the loop |
 
 What survives of the warp is `entry_yaw_offset`, and it is exactly the heading
 term the retrieval minimises:
@@ -147,11 +182,26 @@ means. The index order is `vibe::cube_color_name`: 0 red, 1 orange, 2 green,
 | `Sys0Status` | not published | 20 Hz, its own timer |
 | `entry_yaw_offset` | 0 from every publisher, so inert | applied at engage |
 
+`Sys0Status.default_joint_pos` carries the manifest's nominal stance, and sys1's
+v7 still pose is built from it rather than parsed here a second time — **one
+source**, so the stance the planner commands and the stance the controller holds
+in `NOMINAL_POSE` cannot drift. It also means the pose is the *deployed* robot's
+by construction (`sys1_cpp.md` §8.6) and a baked bundle stays version-agnostic.
+The planner refuses to arm until it has arrived, and logs the achieved gaze:
+
+```
+v7 nominal stand: waist 0.0/0.0/0.0 deg -> camera 45.0 deg down, +0.0 off-axis (mount is 45.0)
+```
+
+A robot whose nominal stance carries a stooped waist gets v6's band back, so
+that line warns rather than fails — it is a config truth, not a code fault.
+
 ## 8. Bring-up order
 
 | phase | what | gate |
 |---|---|---|
 | P0 | the wire + `sys1_selftest --replay` on recorded reads | labels match the Python oracle; `Sight.pos/.phi` ≤ 1e-4. Settles the palette and depth-realism risks with the robot standing still |
+| P0.5 | the **gaze**, `sys1_selftest` unit checks | 45.0 ± 0.5° down, \|yaw\| < 0.5°. Free, offline, every run — and it is the whole v7 result, so nothing else is worth measuring until it passes |
 | P1 | `retrieve()` picks the same `(row, sym)` as the oracle | offline |
 | P2 | closed loop in sim | 40 trials against `sys1_eval.py` |
 | P3 | onboard, **settle/scan only** | ψ, reference continuity, the 20 Hz budget under the live loop |

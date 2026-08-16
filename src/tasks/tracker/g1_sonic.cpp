@@ -477,6 +477,7 @@ void G1SonicNode::publish_sys0_status() {
   s.frame = static_cast<uint32_t>(std::max(0, active_clock_->frame()));
   s.frames = static_cast<uint32_t>(std::max(0, active_motion_->num_frames));
   s.finished = active_clock_->finished();
+  s.default_joint_pos = default_angles_;  // manifest-sourced; sys1's v7 stand
   status_pub_->publish(s);
 }
 

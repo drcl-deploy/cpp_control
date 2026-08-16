@@ -355,6 +355,25 @@ void ClipTable::load_frames_baked(const std::string& path) {
   }
 }
 
+// The v7 still pose, and the whole of v7. `g1::Motion::stand` is already the
+// STAND-mode reference builder, and its channels ARE the sim's `_fk_nominal`
+// one for one: nominal joints, zero velocity, IDENTITY root quat, zero twist,
+// zero contact. So there is no new pose math here — only a different source.
+//
+// Root POSITION is left at the origin and is inert: no observation port reads a
+// reference position (§1 F1), and `MotionClock::engage` rebases the heading
+// onto the live robot, which is the C++ form of the sim's `still_yaw` latch.
+void ClipTable::set_nominal_stand(const std::vector<float>& default_angles_mj) {
+  if (cols_ == 0 || stand_.size() != static_cast<size_t>(cols_))
+    throw std::runtime_error(
+        "sys1 table: load frames before setting the nominal stand");
+  if (default_angles_mj.size() != static_cast<size_t>(g1::NUM_JOINTS))
+    throw std::runtime_error("sys1 table: nominal stance is not " +
+                             std::to_string(g1::NUM_JOINTS) + " MJ joints");
+  write_row(g1::Motion::stand(default_angles_mj, fps_), 0, stand_.data());
+  nominal_stand_ = true;
+}
+
 void ClipTable::bake(const std::string& out) const {
   if (frames_.empty()) throw std::runtime_error("sys1 bake: no frames loaded");
   std::vector<int32_t> off(rows_.size()), len(rows_.size());

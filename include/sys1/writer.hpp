@@ -33,6 +33,7 @@ class ReferenceWriter {
 
  private:
   void push_stand(int count);
+  void push_lead_in(const float* target, const LiveState& live);
   void blend_head(const LiveState& live, int count);
 
   const ClipTable& t_;

@@ -4,7 +4,7 @@
 # `version` picks the preset; anything under `knobs` overrides it, so an A/B is
 # a one-line edit and cannot silently drift from the numbers it baselines.
 
-version: v6        # v5 | v6 — RRF + horizon + graded sighting is v6
+version: v7        # v5 | v6 | v7 — v7 is v6 + the NOMINAL STAND (62.5% -> 95%)
 target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink
 
 rate_hz: 20.0      # planner tick. Soft real-time; ~2 ms of work per tick.
@@ -29,7 +29,10 @@ camera:
   port: 5555
 
 # Camera in torso_link, verbatim from unitree_robots/g1/g1_29dof.xml. The waist
-# chain (yaw/roll/pitch) is the only kinematics between it and the pelvis.
+# chain (yaw/roll/pitch) is the only kinematics between it and the pelvis —
+# which is exactly why v7 works: a nominal stance has waist = 0, so the torso is
+# vertical and the camera reads back the 45 deg below-horizontal it is bolted at.
+# The node logs the achieved gaze at boot and warns if it is not the mount angle.
 mount:
   xyz: [0.05, 0.0, 0.4318]
   quat: [0.6533, 0.2706, -0.2706, -0.6533]   # wxyz, 45 deg down-forward
