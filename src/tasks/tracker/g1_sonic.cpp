@@ -214,8 +214,8 @@ void G1SonicNode::on_reference(
   // would stall the loop it closes. The FSM still owns entry into POLICY, so a
   // reference arriving anywhere else waits exactly as it does for a human.
   if (sys1_ && control_mode_ == ControlMode::POLICY) {
+    stand_mode_ = false;  // before the commit, so it rebinds active_* to the clip
     commit_pending_motion();
-    stand_mode_ = false;
     pending_engage_ = true;
     return;
   }
@@ -240,6 +240,7 @@ void G1SonicNode::commit_pending_motion() {
     anchor = 0;
   }
   clock_ = std::make_unique<g1::MotionClock>(*motion_, anchor);
+  rebind_active();  // the two lines above freed what active_* may have named
   start_frame_ = 0;  // streamed clips always start at their first frame
   entry_yaw_ = pend_entry_yaw_;
   reference_id_ = pend_reference_id_;
@@ -267,6 +268,7 @@ void G1SonicNode::make_stand_motion() {
   stand_motion_ = std::make_unique<g1::Motion>(
       g1::Motion::stand(default_angles_, motion_ ? motion_->fps : 50.0f));
   stand_clock_ = std::make_unique<g1::MotionClock>(*stand_motion_, 0);
+  rebind_active();
 }
 
 void G1SonicNode::enter_stand() {
@@ -443,9 +445,17 @@ void G1SonicNode::fill_tokenizer(float* dst) {
 
 // ── Engage / reset ───────────────────────────────────────────────
 
-void G1SonicNode::engage_reset(bool reset_history) {
+// Two owning pairs, one pair of raw views. A mode switch only changes WHICH
+// pair is read and is safe to defer to the next policy tick; replacing an owner
+// is not, because it frees the object a view may still name — and the sys1
+// status timer runs outside that tick. So every replacement calls this.
+void G1SonicNode::rebind_active() {
   active_motion_ = stand_mode_ ? stand_motion_.get() : motion_.get();
   active_clock_ = stand_mode_ ? stand_clock_.get() : clock_.get();
+}
+
+void G1SonicNode::engage_reset(bool reset_history) {
+  rebind_active();
   active_clock_->engage(robot_state_.imu_quaternion,
                         stand_mode_ ? 0 : start_frame_,
                         stand_mode_ ? 0.0f : entry_yaw_);

@@ -77,6 +77,10 @@ class G1SonicNode : public G1Node {
   void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void on_reference(cpp_control::msg::MotionReference::SharedPtr msg);
   void commit_pending_motion();
+  /// Point `active_*` at the live pair. Call after replacing ANY of the four
+  /// owning pointers: replacing one frees what `active_*` may still name, and
+  /// the sys1 status timer reads them outside the policy tick that re-engages.
+  void rebind_active();
   void publish_sys0_status();
   virtual void on_button_a();  ///< commit staged motion (if any) + track
 

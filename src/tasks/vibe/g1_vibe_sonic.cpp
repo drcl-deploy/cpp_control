@@ -373,8 +373,8 @@ void G1VibeSonicNode::enter_prep() {
   stand_clock_ = std::make_unique<g1::MotionClock>(*stand_motion_, 0);
   prep_active_ = true;
   prepped_ = false;
-  enter_stand();  // stand_mode_, pending_engage_ (active_* still point at the
-                  // old clip)
+  enter_stand();   // stand_mode_, pending_engage_ — the switch is deferred
+  rebind_active();  // ...but the two lines above freed the previous stand pair
   RCLCPP_INFO(this->get_logger(),
               "prep -> frame %d [%s]: ramp max |dq| %.2f rad (%s), %.2f s / %d "
               "frames · "
@@ -386,9 +386,8 @@ void G1VibeSonicNode::enter_prep() {
 
 void G1VibeSonicNode::restore_stand_reference() {
   if (!prep_active_) return;
-  make_stand_motion();
-  pending_engage_ =
-      true;  // active_* must never outlive the lead-in they point at
+  make_stand_motion();  // rebinds active_* off the lead-in it just freed
+  pending_engage_ = true;
   prep_active_ = false;
   prepped_ = false;
 }
