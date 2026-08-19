@@ -73,11 +73,11 @@ float median_of(std::vector<float>& v) {
 
 }  // namespace
 
-CubeSight::CubeSight(const Cfg& cfg, const Palette& palette, float half_extent)
+CubeSight::CubeSight(const Cfg& cfg, float half_extent)
     : cfg_(cfg), half_extent_(half_extent) {
   for (int i = 0; i < NUM_COLORS * REFS_PER_COLOR; ++i) {
-    const float r = palette[i * 3], g = palette[i * 3 + 1],
-                b = palette[i * 3 + 2];
+    const float r = cfg.palette[i * 3], g = cfg.palette[i * 3 + 1],
+                b = cfg.palette[i * 3 + 2];
     const float s = std::max(r + g + b, 1e-6f);
     ref_[i * 2] = r / s;
     ref_[i * 2 + 1] = g / s;
@@ -164,7 +164,8 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
   build_rays(depth.cols, depth.rows, k);
 
   const int total = depth.rows * depth.cols;
-  const int min_px = std::max(8, static_cast<int>(cfg_.min_area_frac * total));
+  const int min_px =
+      std::max(cfg_.min_px_floor, static_cast<int>(cfg_.min_area_frac * total));
   const float edge = 2.0f * half_extent_;
   const float vis_color = cfg_.color_gate();
   const float* R = cam.R.data();
@@ -186,7 +187,8 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
     idx_.clear();
     for (int i = 0; i < total; ++i) {
       const float z = depth.ptr<float>()[i];
-      if (labels_.ptr<int16_t>()[i] == col && std::isfinite(z) && z > 0.05f)
+      if (labels_.ptr<int16_t>()[i] == col && std::isfinite(z) &&
+          z > cfg_.z_min_m)
         idx_.push_back(i);
     }
     if (static_cast<int>(idx_.size()) < min_px) continue;
@@ -219,7 +221,7 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
     zs.resize(n_all);
     for (int n = 0; n < n_all; ++n) zs[n] = pts_[n * 3 + 2];
     std::nth_element(zs.begin(), zs.begin() + (n_all - min_px), zs.end());
-    const float z_cut = zs[n_all - min_px] - 0.25f * edge;
+    const float z_cut = zs[n_all - min_px] - cfg_.slab_frac * edge;
 
     int n_top = 0;
     for (int n = 0; n < n_all; ++n) {
@@ -252,7 +254,7 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
       why = "side_face";
       continue;
     }
-    if (big > 1.4f) {  // wider than a cube: this is the floor
+    if (big > cfg_.big_max) {  // wider than a cube: this is the floor
       why = "too_big";
       continue;
     }

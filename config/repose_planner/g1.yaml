@@ -1,8 +1,16 @@
 # the planner — the retrieval planner above the repose SONIC policy.
 #
-# Knobs are documented where they were measured: vibe planner/clips.py::ClipCfg.
-# `version` picks the preset; anything under `knobs` overrides it, so an A/B is
-# a one-line edit and cannot silently drift from the numbers it baselines.
+# THIS FILE IS THE TRUTH. `version` names a preset in
+# include/cpp_control/planners/repose/cfg.hpp — a measured point in the ablation
+# ledger — and every key below overrides it. Nothing the observe or plan stack
+# reads is reachable any other way, and an unknown key is a hard error: a knob
+# that is silently ignored reads as tuned and behaves as stock.
+#
+# THE THREE KNOBS THE PRESETS DISAGREE ON ARE DELIBERATELY ABSENT:
+# `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Writing
+# them here would pin them, and `version:` would stop switching the ablations it
+# exists to switch. Write one only to override a preset on purpose — and expect
+# `repose_planner_selftest --config` to tell you that you did.
 
 version: v7        # each version is ONE knob over the last: v6 has no NOMINAL
                    # STAND (62.5% -> 95%), v7.1 adds the ENTER ramp (§7.1).
@@ -33,7 +41,7 @@ frames:
 # `host` is the STANDALONE fallback: under g1_repose_planner.launch.py the same
 # `camera_ip` reaches the encoder and the planner (from VIBE_CAMERA_ADDRESS),
 # so the two halves of a run cannot end up watching different cameras. Same for
-# `target_color` below, which the launch feeds from its `goal_color`.
+# `target_color` above, which the launch feeds from its `goal_color`.
 camera:
   host: 127.0.0.1
   port: 5555
@@ -47,21 +55,91 @@ mount:
   xyz: [0.05, 0.0, 0.4318]
   quat: [0.6533, 0.2706, -0.2706, -0.6533]   # wxyz, 45 deg down-forward
 
-# Overrides on top of `version`. Every default is in include/cpp_control/planners/repose/cfg.hpp; these
-# are the three the hardware bring-up actually turns.
-#
-#   omega_still       rad/s of camera motion above which a frame is blur, not
-#                     evidence. A held stance sits near 0.05, a 90 deg sweep at
-#                     0.96 — read `omega_cam` and `accept_rate` off
-#                     /vibe/planner/status to place it between the two.
-#   belief_min_votes  agreeing reads before the planner may act. Raise it if the
-#                     palette is noisy; it buys recall back without touching a
-#                     single perception threshold.
-#   scan_steps        a SCAN sweeps for `scan_steps - 2*hold_tail` frames and
-#                     then holds still for the rest. Only the held part is
-#                     readable, so `hold_tail` is sized in EVIDENCE: 15 frames
-#                     at 50 fps is 0.6 s, or ~12 reads at a 20 Hz tick.
-#   enter_yaw_rate_deg  0 is v7. Non-zero (v7.1 preset: 50) ramps the heading
-#                     residual across the lead-in instead of stepping it at
-#                     engage. A PEAK rate: raising it shortens the ramp.
-knobs: {}
+# ── OBSERVE ──────────────────────────────────────────────────────────────────
+# RGB + depth -> the cube's top colour and pose. Depth is unprojected into the
+# gravity-aligned base frame first, so every geometry test below is metres, not
+# an image statistic.
+observe:
+  proc_width: 0    # 0 = work at the depth plane's own size, which the wire already downscaled
+
+  # Chromaticity references the classifier argmins against: nearest of 12 in
+  # (r, g) after the gates. There is no "none" class, so EVERY pixel that passes
+  # `gates` becomes one of these six.
+  #
+  # These twelve were measured off the SIM renderer. On hardware they are wrong
+  # in a way no threshold repairs — the deployment's blue reads cyan under the
+  # D435i's auto white balance, and lands nearer this green than this blue.
+  # Re-measure per deployment; g1_real.yaml is where those numbers go.
+  palette:
+    red:    {lit: [255, 105, 107], shaded: [ 53, 11, 12]}
+    orange: {lit: [255, 239,  53], shaded: [ 49, 23,  5]}
+    green:  {lit: [106, 255, 107], shaded: [  6, 28,  7]}
+    yellow: {lit: [255, 255, 107], shaded: [ 71, 71, 16]}
+    blue:   {lit: [104, 104, 255], shaded: [ 10, 10, 51]}
+    pink:   {lit: [255, 107, 255], shaded: [ 54, 13, 47]}
+
+  # Which pixels are colour at all. Everything else is background and never votes.
+  gates:
+    min_value: 30       # 8-bit; below this the pixel is unlit, not coloured
+    min_rel_sat: 0.22   # (hi-lo)/hi. RELATIVE, because shading scales all three
+                        # channels and an absolute threshold does not survive it
+    min_area_frac: 0.002  # of the frame, per colour blob
+    min_px_floor: 8       # ...and never fewer than this, whatever the frac says
+
+  # Which blobs are a cube's TOP FACE. All in cube edges or unit normals, so
+  # nothing here is resolution- or range-dependent.
+  geometry:
+    up_dot_min: 0.90        # |n.z| of the fitted plane. Below this it is a side face
+    min_visible: 0.60       # shortest rect side / edge, for a POSE — a cut face
+                            # puts the rect centre off by half the missing strip
+    min_visible_color: 0.0  # the same gate for COLOUR, which needs far less: the
+                            # plane test already proved this is the top face
+    big_max: 1.4            # longest rect side / edge. Wider than a cube = the floor
+    slab_frac: 0.25         # TOP SLAB depth below the blob's min_px-th highest point
+    z_min_m: 0.05           # depth nearer than this is not a measurement
+
+# ── BELIEF ───────────────────────────────────────────────────────────────────
+# A vote over the reads taken while the camera was quiet. Replaces four rules
+# the fused observe/decide carried (docs/planners/repose/planner.md §3).
+belief:
+  window: 8        # reads kept; at 20 Hz this is the last 0.4 s
+  min_votes: 3     # agreeing reads before the belief may be acted on. Raise it if
+                   # the palette is noisy — it buys recall back without touching
+                   # a single perception threshold
+  omega_still: 0.15  # rad/s of CAMERA motion above which a frame is blur, not
+                     # evidence. A held stance sits near 0.05, a 90 deg sweep at
+                     # 0.96 — read `omega_cam` and `accept_rate` off
+                     # /vibe/planner/status to place it between the two
+
+# ── THE LOOP ─────────────────────────────────────────────────────────────────
+loop:
+  # nominal_stand      OWNED BY `version`. true is v7, false is v6: the library's
+  #                    stand frame, whose waist aims the head at the near ground.
+  #                    The single largest win in the algorithm's history, and a
+  #                    GAZE fix, not a perception one — 62.5% -> 95% (n=120, z=6.15)
+  pattern: RRF          # a Hamiltonian cycle on the cube's 6 faces; FBLR only
+  retry_limit: 3        # commits at a rung before swapping the axis
+  arm_radius: 0.30      # m/rad: heading residual -> one distance
+  horizon_gain: 0.3     # penalise a clip's exit range
+  stance_band_m: 0.70
+  scan_sweep_deg: 90.0  # swept over one SCAN, signed by the hint
+  settle_steps: 40      # hold for one SETTLE (yaw = 0 throughout, so all of it reads)
+  scan_steps: 110       # hold for one SCAN; with scan_sweep_deg this sets the RATE
+  hold_tail: 15         # quiescent frames a SCAN ends on — the only thing that
+                        # makes a SCAN observable at all, since every frame of the
+                        # sweep itself fails omega_still. Sized in EVIDENCE: 15
+                        # frames at 50 fps is 0.6 s, ~12 reads at a 20 Hz tick
+
+# ── THE SEAM ─────────────────────────────────────────────────────────────────
+# Live pose -> a clip's entry pose. No sim twin: hardware has no teleport.
+seam:
+  blend_frames: 12      # live->reference offset decay; only if there is no lead-in
+  lead_in_rate: 1.5     # rad/s MEAN ramp onto a clip's entry; 0 = blend only
+  lead_in_min_s: 0.2
+  # lead_in_max_s       OWNED BY `version`. 0.6 under v7, 1.2 under v7.1, which
+  #                     needs the room: 0.6 truncates even the MEDIAN heading ask
+  # enter_yaw_rate_deg  OWNED BY `version`. 0 is v7; v7.1 is 50, putting the
+  #                     HEADING in the ramp instead of stepping it at engage.
+  #                     A PEAK rate — raising it shortens the ramp
+  enter_joint_rate: 2.0  # the same PEAK bound on the largest single joint the
+                         # ramp moves, rad/s. Whichever term needs longer wins

@@ -16,12 +16,6 @@ namespace cpp_control {
 namespace planners {
 namespace repose {
 
-/// MEASURED lit/shaded chromaticity refs, 6 colours x 2 rows, RGB.
-/// 0 red 1 orange 2 green 3 yellow 4 blue 5 pink. Painted refs read orange as
-/// yellow 100% of the time — every lit face clips a channel to 255.
-using Palette = std::array<float, 36>;
-extern const Palette PALETTE_SIM;
-
 /// Pinhole, in one plane's own pixels — carried per-plane on the camera wire,
 /// so a downscaled depth plane stays exact and nothing needs calibrating here.
 struct Intrinsics {
@@ -61,7 +55,9 @@ struct Candidate {
 
 class CubeSight {
  public:
-  CubeSight(const Cfg& cfg, const Palette& palette, float half_extent);
+  /// The palette rides IN the cfg, so there is exactly one thing to load and
+  /// exactly one thing that can be wrong about a deployment's colours.
+  CubeSight(const Cfg& cfg, float half_extent);
 
   /// `bgr` CV_8UC3 (wire order), `depth_m` CV_32FC1 metres with `intr` in the
   /// depth plane's pixels. Colour is resized onto depth: it is the plane the

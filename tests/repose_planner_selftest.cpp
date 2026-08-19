@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include <yaml-cpp/yaml.h>
+
 #include "cnpy/cnpy.h"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
@@ -41,6 +43,18 @@ int failures = 0;
 void check(bool ok, const std::string& what) {
   std::printf("  [%s] %s\n", ok ? " ok " : "FAIL", what.c_str());
   if (!ok) ++failures;
+}
+
+/// A gate that does not reject is not a gate — every `refuses`-style check runs
+/// through here so a silently-accepted bad config fails the build, not the robot.
+template <typename F>
+bool threw(F&& f) {
+  try {
+    f();
+  } catch (const std::exception&) {
+    return true;
+  }
+  return false;
 }
 
 // ── Unit checks: the invariants the seam depends on ──────────────
@@ -529,7 +543,7 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
     return 1;
   }
   Clips clips(t, cfg, 4);
-  CubeSight eye(cfg, PALETTE_SIM, t.half_extent());
+  CubeSight eye(cfg, t.half_extent());  // palette rides in the cfg now
   Belief belief(cfg);
   std::printf("replay: %zu reads\n", files.size());
   for (const auto& f : files) {
@@ -564,11 +578,58 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
   return 0;
 }
 
+/// The SHIPPED yaml must reproduce the preset it names, field for field.
+/// This is what makes "the config refactor changed nothing" checkable: the
+/// schema can grow, but the day a key is renamed and its reader is not, this
+/// fails instead of the robot quietly running stock numbers.
+void check_config_roundtrip(const std::string& path) {
+  std::puts("config");
+  const YAML::Node root = YAML::LoadFile(path);
+  const std::string named =
+      root["version"] ? root["version"].as<std::string>() : "v7";
+  const Cfg from_file = Cfg::from_yaml(root);
+  check(from_file == Cfg::preset(named),
+        "the shipped yaml round-trips to the preset it names");
+
+  // `version:` is the ablation switch, so all three of them have to survive the
+  // same file — that is the "one line A/Bs both" claim, tested.
+  for (const char* v : {"v6", "v7", "v7.1"}) {
+    YAML::Node n = YAML::Clone(root);
+    n["version"] = v;
+    check(Cfg::from_yaml(n) == Cfg::preset(v),
+          std::string("...and so does ") + v);
+  }
+  check(threw([&] {
+          YAML::Node n = YAML::Clone(root);
+          n["version"] = "v8";
+          Cfg::from_yaml(n);
+        }),
+        "an unknown version is refused rather than defaulted");
+
+  // ...and the schema is strict, or "tuned" and "ignored" look the same.
+  YAML::Node typo = YAML::Clone(root);
+  typo["observe"]["gates"]["min_rel_saturation"] = 0.4;
+  check(threw([&] { Cfg::from_yaml(typo); }),
+        "a misspelt knob is an error, not a silent no-op");
+
+  YAML::Node legacy;
+  legacy["knobs"]["min_rel_sat"] = 0.4;
+  check(threw([&] { Cfg::from_yaml(legacy); }),
+        "the pre-split flat 'knobs:' schema is refused by name");
+
+  // One override reaches the struct — the whole point of the file.
+  YAML::Node tuned = YAML::Clone(root);
+  tuned["observe"]["palette"]["blue"]["lit"] = std::vector<float>{1, 181, 255};
+  check(Cfg::from_yaml(tuned).palette[24] == 1.0f &&
+            Cfg::from_yaml(tuned).palette[25] == 181.0f,
+        "a palette row written in yaml is the row the classifier gets");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   std::string table_path, frames_path, library_path, bake_path, replay_dir,
-      version = "v7";  // v6 is the gaze ablation
+      config_path, version = "v7";  // v6 is the gaze ablation
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() { return i + 1 < argc ? argv[++i] : ""; };
@@ -578,6 +639,7 @@ int main(int argc, char** argv) {
     else if (a == "--bake") bake_path = next();
     else if (a == "--replay") replay_dir = next();
     else if (a == "--version") version = next();
+    else if (a == "--config") config_path = next();
     else {
       std::printf("unknown argument '%s'\n", a.c_str());
       return 2;
@@ -589,6 +651,7 @@ int main(int argc, char** argv) {
   check_belief();
   check_gaze();
   check_warp_identity();
+  if (!config_path.empty()) check_config_roundtrip(config_path);
 
   if (table_path.empty()) {
     std::printf("\n%d failure(s). Pass --table <sys1_clips.npz> for the rest.\n",

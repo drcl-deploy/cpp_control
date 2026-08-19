@@ -229,6 +229,34 @@ repose_planner_selftest --table sys1_clips.npz --library sys1_library.npz \
               --frames <retargeted_root> --bake repose_bundle.npz
 ```
 
+## 5.5 The config
+
+`config/repose_planner/g1.yaml` is the only truth for every knob the observe and
+plan stack has. `version:` names a preset in `cfg.hpp` — a measured point in the
+ablation ledger — and supplies the defaults; every key overrides it.
+
+| block | holds |
+|---|---|
+| `observe.palette` | the 12 chromaticity refs, `<colour>: {lit, shaded}` RGB. Partial is fine: an unlisted colour keeps the preset's row |
+| `observe.gates` | which pixels are colour at all — `min_value`, `min_rel_sat`, `min_area_frac`, `min_px_floor` |
+| `observe.geometry` | which blobs are a top face — `up_dot_min`, `min_visible`, `min_visible_color`, `big_max`, `slab_frac`, `z_min_m`. All in cube edges or unit normals, so none of it is range- or resolution-dependent |
+| `belief` | `window`, `min_votes`, `omega_still` |
+| `loop` | the ladder and the stills |
+| `seam` | lead-in, blend, the v7.1 ramp |
+
+Two rules the loader enforces, both by throwing:
+
+1. **An unknown key is an error.** A silently ignored knob reads as tuned and
+   behaves as stock, which is the worst outcome available.
+2. **The three knobs the presets disagree on are absent from the shipped file** —
+   `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Pinning
+   them in yaml would make `version:` stop switching the ablations it exists to
+   switch. `repose_planner_selftest --config <file>` asserts all three presets
+   still round-trip through it, so the day someone pins one, the test says so.
+
+The pre-split flat `knobs:` block is refused by name, with the migration in the
+message.
+
 ## 6. Running it
 
 Full runbook: [experiments.md](experiments.md). The shape, and why it is that

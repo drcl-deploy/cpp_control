@@ -1,7 +1,12 @@
 #include "cpp_control/planners/repose/cfg.hpp"
 
+#include <yaml-cpp/yaml.h>
+
 #include <cstring>
+#include <set>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace cpp_control {
 namespace planners {
@@ -13,6 +18,176 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v7.1") return Cfg::v7_1();
   throw std::runtime_error("repose planner: version must be v6 | v7 | v7.1, got '" +
                            name + "'");
+}
+
+// ── The loader ───────────────────────────────────────────────────
+//
+// One reader for one schema. Every knob the perception and planning stack has
+// is reachable from here, so a deployment is a FILE and not a rebuild; the
+// preset named by `version` supplies the defaults, because a preset is a
+// measured point in the ablation ledger and a half-written yaml should fall
+// back to one, not to zeros.
+//
+// Unknown keys are an ERROR. A silently ignored knob is the worst outcome
+// available: it reads as tuned and behaves as stock.
+
+namespace {
+
+/// Colour order IS the palette's row order, and the goal-colour one-hot's.
+const char* const kColors[6] = {"red", "orange", "green", "yellow", "blue", "pink"};
+
+void reject_unknown(const YAML::Node& n, const char* section,
+                    const std::set<std::string>& known) {
+  if (!n) return;
+  if (!n.IsMap())
+    throw std::runtime_error(std::string("repose planner: '") + section +
+                             "' must be a map");
+  for (const auto& kv : n) {
+    const std::string key = kv.first.as<std::string>();
+    if (!known.count(key))
+      throw std::runtime_error(std::string("repose planner: unknown key '") +
+                               section + "." + key +
+                               "'. A knob that is not read is worse than one that "
+                               "is wrong — fix the name or delete the line");
+  }
+}
+
+struct Reader {
+  const YAML::Node& n;
+  void operator()(const char* k, float& v) const { if (n && n[k]) v = n[k].as<float>(); }
+  void operator()(const char* k, int& v) const { if (n && n[k]) v = n[k].as<int>(); }
+  void operator()(const char* k, bool& v) const { if (n && n[k]) v = n[k].as<bool>(); }
+  void operator()(const char* k, std::string& v) const {
+    if (n && n[k]) v = n[k].as<std::string>();
+  }
+};
+
+std::array<float, 3> rgb(const YAML::Node& n, const std::string& what) {
+  if (!n || !n.IsSequence() || n.size() != 3)
+    throw std::runtime_error("repose planner: palette." + what +
+                             " must be a 3-element RGB sequence");
+  return {n[0].as<float>(), n[1].as<float>(), n[2].as<float>()};
+}
+
+/// 6 colours x {lit, shaded}. Partial is allowed — an unlisted colour keeps the
+/// preset's row, so a deployment that only re-measured blue writes only blue.
+void read_palette(const YAML::Node& n, Palette& p) {
+  if (!n) return;
+  reject_unknown(n, "observe.palette",
+                 {kColors[0], kColors[1], kColors[2], kColors[3], kColors[4], kColors[5]});
+  for (int c = 0; c < 6; ++c) {
+    const YAML::Node row = n[kColors[c]];
+    if (!row) continue;
+    reject_unknown(row, (std::string("observe.palette.") + kColors[c]).c_str(),
+                   {"lit", "shaded"});
+    if (!row["lit"] || !row["shaded"])
+      throw std::runtime_error(std::string("repose planner: palette.") + kColors[c] +
+                               " needs both 'lit' and 'shaded' — the pair is what "
+                               "survives shading, and one alone silently halves it");
+    const auto lit = rgb(row["lit"], std::string(kColors[c]) + ".lit");
+    const auto sha = rgb(row["shaded"], std::string(kColors[c]) + ".shaded");
+    for (int i = 0; i < 3; ++i) {
+      p[(c * 2) * 3 + i] = lit[i];
+      p[(c * 2 + 1) * 3 + i] = sha[i];
+    }
+  }
+}
+
+}  // namespace
+
+Cfg Cfg::from_yaml(const YAML::Node& root) {
+  if (root["knobs"])
+    throw std::runtime_error(
+        "repose planner: 'knobs:' is the pre-split flat schema and is no longer read. "
+        "Move its entries under observe.gates / observe.geometry / belief / loop / "
+        "seam — see config/repose_planner/g1.yaml");
+
+  Cfg c = Cfg::preset(root["version"] ? root["version"].as<std::string>() : "v7");
+
+  const YAML::Node obs = root["observe"];
+  reject_unknown(obs, "observe", {"proc_width", "palette", "gates", "geometry"});
+  Reader{obs}("proc_width", c.proc_width);
+  read_palette(obs ? obs["palette"] : YAML::Node(), c.palette);
+
+  const YAML::Node g = obs ? obs["gates"] : YAML::Node();
+  reject_unknown(g, "observe.gates",
+                 {"min_value", "min_rel_sat", "min_area_frac", "min_px_floor"});
+  Reader r_g{g};
+  r_g("min_value", c.min_value);
+  r_g("min_rel_sat", c.min_rel_sat);
+  r_g("min_area_frac", c.min_area_frac);
+  r_g("min_px_floor", c.min_px_floor);
+
+  const YAML::Node geo = obs ? obs["geometry"] : YAML::Node();
+  reject_unknown(geo, "observe.geometry",
+                 {"up_dot_min", "min_visible", "min_visible_color", "big_max",
+                  "slab_frac", "z_min_m"});
+  Reader r_geo{geo};
+  r_geo("up_dot_min", c.up_dot_min);
+  r_geo("min_visible", c.min_visible);
+  r_geo("min_visible_color", c.min_visible_color);
+  r_geo("big_max", c.big_max);
+  r_geo("slab_frac", c.slab_frac);
+  r_geo("z_min_m", c.z_min_m);
+
+  const YAML::Node b = root["belief"];
+  reject_unknown(b, "belief", {"window", "min_votes", "omega_still"});
+  Reader r_b{b};
+  r_b("window", c.belief_window);
+  r_b("min_votes", c.belief_min_votes);
+  r_b("omega_still", c.omega_still);
+
+  const YAML::Node l = root["loop"];
+  reject_unknown(l, "loop",
+                 {"nominal_stand", "pattern", "retry_limit", "arm_radius",
+                  "horizon_gain", "stance_band_m", "scan_sweep_deg", "settle_steps",
+                  "scan_steps", "hold_tail"});
+  Reader r_l{l};
+  r_l("nominal_stand", c.nominal_stand);
+  r_l("pattern", c.pattern);
+  r_l("retry_limit", c.retry_limit);
+  r_l("arm_radius", c.arm_radius);
+  r_l("horizon_gain", c.horizon_gain);
+  r_l("stance_band_m", c.stance_band_m);
+  r_l("scan_sweep_deg", c.scan_sweep_deg);
+  r_l("settle_steps", c.settle_steps);
+  r_l("scan_steps", c.scan_steps);
+  r_l("hold_tail", c.hold_tail);
+
+  const YAML::Node s = root["seam"];
+  reject_unknown(s, "seam",
+                 {"blend_frames", "lead_in_rate", "lead_in_min_s", "lead_in_max_s",
+                  "enter_yaw_rate_deg", "enter_joint_rate"});
+  Reader r_s{s};
+  r_s("blend_frames", c.blend_frames);
+  r_s("lead_in_rate", c.lead_in_rate);
+  r_s("lead_in_min_s", c.lead_in_min_s);
+  r_s("lead_in_max_s", c.lead_in_max_s);
+  r_s("enter_yaw_rate_deg", c.enter_yaw_rate_deg);
+  r_s("enter_joint_rate", c.enter_joint_rate);
+
+  c.validate();
+  return c;
+}
+
+bool Cfg::operator==(const Cfg& o) const {
+  return proc_width == o.proc_width && min_area_frac == o.min_area_frac &&
+         min_px_floor == o.min_px_floor && min_visible == o.min_visible &&
+         min_visible_color == o.min_visible_color && min_value == o.min_value &&
+         min_rel_sat == o.min_rel_sat && up_dot_min == o.up_dot_min &&
+         big_max == o.big_max && z_min_m == o.z_min_m &&
+         slab_frac == o.slab_frac && palette == o.palette &&
+         nominal_stand == o.nominal_stand && belief_window == o.belief_window &&
+         belief_min_votes == o.belief_min_votes && omega_still == o.omega_still &&
+         pattern == o.pattern && retry_limit == o.retry_limit &&
+         arm_radius == o.arm_radius && horizon_gain == o.horizon_gain &&
+         stance_band_m == o.stance_band_m && scan_sweep_deg == o.scan_sweep_deg &&
+         settle_steps == o.settle_steps && scan_steps == o.scan_steps &&
+         hold_tail == o.hold_tail && blend_frames == o.blend_frames &&
+         lead_in_rate == o.lead_in_rate && lead_in_min_s == o.lead_in_min_s &&
+         lead_in_max_s == o.lead_in_max_s &&
+         enter_yaw_rate_deg == o.enter_yaw_rate_deg &&
+         enter_joint_rate == o.enter_joint_rate;
 }
 
 void Cfg::validate() const {
@@ -46,6 +221,34 @@ void Cfg::validate() const {
         "enter_joint_rate > 0");
   if (lead_in_max_s < lead_in_min_s)
     throw std::runtime_error("repose planner: lead_in_max_s must be >= lead_in_min_s");
+
+  // ── the knobs the yaml only just gained a way to get wrong ──
+  if (min_value < 0 || min_value > 255)
+    throw std::runtime_error("repose planner: min_value is an 8-bit level, [0, 255]");
+  if (min_rel_sat < 0.0f || min_rel_sat >= 1.0f)
+    throw std::runtime_error("repose planner: min_rel_sat must be in [0, 1)");
+  if (min_area_frac <= 0.0f || min_area_frac > 1.0f)
+    throw std::runtime_error("repose planner: min_area_frac must be in (0, 1]");
+  if (min_px_floor < 3)
+    throw std::runtime_error(
+        "repose planner: min_px_floor must be >= 3 — a plane fit needs three points");
+  if (up_dot_min <= 0.0f || up_dot_min > 1.0f)
+    throw std::runtime_error("repose planner: up_dot_min must be in (0, 1]");
+  if (min_visible_color < 0.0f || min_visible_color > 1.0f)
+    throw std::runtime_error("repose planner: min_visible_color must be in [0, 1]");
+  if (big_max < min_visible)
+    throw std::runtime_error(
+        "repose planner: big_max is the LONGEST rect side and min_visible the "
+        "shortest, so big_max < min_visible rejects every square");
+  if (slab_frac <= 0.0f || slab_frac > 1.0f)
+    throw std::runtime_error(
+        "repose planner: slab_frac is a depth in cube edges and must be in (0, 1]");
+  if (z_min_m <= 0.0f)
+    throw std::runtime_error("repose planner: z_min_m must be > 0");
+  for (float v : palette)
+    if (!(v >= 0.0f && v <= 255.0f))
+      throw std::runtime_error(
+          "repose planner: palette entries are 8-bit RGB levels, [0, 255]");
 }
 
 }  // namespace repose

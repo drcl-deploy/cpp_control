@@ -259,9 +259,13 @@ if(OpenCV_FOUND)
 
   # Replay rig + bake: no robot, no ROS, no risk (docs/planners/repose/planner.md §8 P0).
   add_executable(repose_planner_selftest tests/repose_planner_selftest.cpp)
-  target_link_libraries(repose_planner_selftest cpp_control_repose_planner cpp_control_vibe_contract)
+  target_link_libraries(repose_planner_selftest
+    cpp_control_repose_planner cpp_control_vibe_contract yaml-cpp)
   if(BUILD_TESTING)
-    add_test(NAME repose_planner_selftest COMMAND repose_planner_selftest)
+    # The shipped yaml is part of the contract: the round-trip check reads it
+    # from the source tree, so a schema change that forgets a reader fails here.
+    add_test(NAME repose_planner_selftest COMMAND repose_planner_selftest
+             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1.yaml)
   endif()
   list(APPEND INSTALL_TARGETS repose_planner_selftest)
 

@@ -5,7 +5,12 @@
 /// vibe `docs/sys1_cpp.md`. Each version is one knob over the last, so one
 /// binary A/Bs both ablations still worth running on the robot.
 
+#include <array>
 #include <string>
+
+namespace YAML {
+class Node;  // the loader takes one; nothing else here needs yaml-cpp
+}
 
 namespace cpp_control {
 namespace planners {
@@ -14,10 +19,18 @@ namespace repose {
 /// Ladder rungs, indexing `pattern`. Only the four roll deltas are retrievable.
 inline constexpr char SLOTS[] = "UDFBLR";
 
+/// Chromaticity references, 6 colours x 2 rows (lit, shaded), RGB.
+/// 0 red 1 orange 2 green 3 yellow 4 blue 5 pink. A config value, not a
+/// constant: the twelve defaults were measured off the SIM renderer, and a
+/// deployment's own lighting is a different set of numbers entirely.
+using Palette = std::array<float, 36>;
+extern const Palette PALETTE_SIM;
+
 struct Cfg {
   // ── perception ──
   int proc_width = 0;  ///< 0 = work at the depth plane's own size (the wire's)
   float min_area_frac = 0.002f;
+  int min_px_floor = 8;  ///< a blob is never smaller than this, whatever the frac
   float min_visible = 0.60f;  ///< shortest rect side / cube edge, for a POSE
   /// Same gate for the COLOUR channel, which needs far less — the plane test
   /// already proved the face is the top one.
@@ -25,6 +38,13 @@ struct Cfg {
   int min_value = 30;
   float min_rel_sat = 0.22f;
   float up_dot_min = 0.90f;  ///< |n.z| for a fitted plane to BE the top face
+  float big_max = 1.4f;      ///< longest rect side / cube edge: above this it is floor
+  float z_min_m = 0.05f;     ///< depth nearer than this is not a measurement
+  /// TOP SLAB depth, in cube edges, below the blob's `min_px`-th highest point.
+  /// A same-coloured floor touching the cube is ONE component and the floor is
+  /// the larger half, so the cut is by height.
+  float slab_frac = 0.25f;
+  Palette palette = PALETTE_SIM;
 
   /// v7: hold the robot's NOMINAL STANCE in a still mode, not the library's
   /// stand frame. The planner's own vocabulary — the borrowed pose was picked for
@@ -117,8 +137,20 @@ struct Cfg {
   }
   static Cfg preset(const std::string& name);
 
+  /// The yaml IS the truth. `version` picks a preset for the defaults; every
+  /// field below may override it, and an unknown key is an error rather than a
+  /// silent no-op. One loader, so the planner and the observe rig cannot drift
+  /// into reading the same file two different ways.
+  static Cfg from_yaml(const YAML::Node& root);
+
   float color_gate() const { return min_visible_color; }
   void validate() const;
+
+  /// Field-for-field. Exists so `repose_planner_selftest` can assert that the
+  /// SHIPPED yaml round-trips to the preset it names — which turns "the config
+  /// refactor is bit-identical" from a claim into a test.
+  bool operator==(const Cfg& o) const;
+  bool operator!=(const Cfg& o) const { return !(*this == o); }
 };
 
 }  // namespace repose

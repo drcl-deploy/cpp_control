@@ -166,39 +166,7 @@ class ReposeNode : public rclcpp::Node {
   void load_config(const std::string& path) {
     const YAML::Node root = YAML::LoadFile(path);
     version_ = root["version"] ? root["version"].as<std::string>() : "v7";
-    cfg_ = Cfg::preset(version_);
-    if (const auto k = root["knobs"]) {
-      auto f = [&](const char* n, float& v) { if (k[n]) v = k[n].as<float>(); };
-      auto i = [&](const char* n, int& v) { if (k[n]) v = k[n].as<int>(); };
-      auto b = [&](const char* n, bool& v) { if (k[n]) v = k[n].as<bool>(); };
-      if (k["pattern"]) cfg_.pattern = k["pattern"].as<std::string>();
-      b("nominal_stand", cfg_.nominal_stand);  // v6 + this IS v7; A/B in one edit
-      i("retry_limit", cfg_.retry_limit);
-      i("settle_steps", cfg_.settle_steps);
-      i("scan_steps", cfg_.scan_steps);
-      i("hold_tail", cfg_.hold_tail);
-      i("belief_window", cfg_.belief_window);
-      i("belief_min_votes", cfg_.belief_min_votes);
-      f("omega_still", cfg_.omega_still);
-      i("blend_frames", cfg_.blend_frames);
-      i("proc_width", cfg_.proc_width);
-      i("min_value", cfg_.min_value);
-      f("min_area_frac", cfg_.min_area_frac);
-      f("min_visible", cfg_.min_visible);
-      f("min_visible_color", cfg_.min_visible_color);
-      f("min_rel_sat", cfg_.min_rel_sat);
-      f("up_dot_min", cfg_.up_dot_min);
-      f("arm_radius", cfg_.arm_radius);
-      f("horizon_gain", cfg_.horizon_gain);
-      f("stance_band_m", cfg_.stance_band_m);
-      f("scan_sweep_deg", cfg_.scan_sweep_deg);
-      f("lead_in_rate", cfg_.lead_in_rate);
-      f("lead_in_min_s", cfg_.lead_in_min_s);
-      f("lead_in_max_s", cfg_.lead_in_max_s);
-      f("enter_yaw_rate_deg", cfg_.enter_yaw_rate_deg);  // 0 = v7; v7.1 is 50
-      f("enter_joint_rate", cfg_.enter_joint_rate);
-    }
-    cfg_.validate();
+    cfg_ = Cfg::from_yaml(root);
 
     table_ = ClipTable::load(root["clips"].as<std::string>());
     const auto frames = root["frames"];
@@ -226,7 +194,7 @@ class ReposeNode : public rclcpp::Node {
 
     const int target = root["target_color"] ? root["target_color"].as<int>() : 4;
     clips_ = std::make_unique<Clips>(table_, cfg_, target);
-    eye_ = std::make_unique<CubeSight>(cfg_, PALETTE_SIM, table_.half_extent());
+    eye_ = std::make_unique<CubeSight>(cfg_, table_.half_extent());
     belief_ = std::make_unique<Belief>(cfg_);
     writer_ = std::make_unique<ReferenceWriter>(table_, cfg_);
 

@@ -131,28 +131,10 @@ class ReposeObserveNode final : public rclcpp::Node {
  private:
   void load_config(const std::string& path) {
     const YAML::Node root = YAML::LoadFile(path);
-    const std::string version =
-        root["version"] ? root["version"].as<std::string>() : "v7";
-    cfg_ = Cfg::preset(version);
-    if (const auto k = root["knobs"]) {
-      auto f = [&](const char* n, float& v) {
-        if (k[n]) v = k[n].as<float>();
-      };
-      auto i = [&](const char* n, int& v) {
-        if (k[n]) v = k[n].as<int>();
-      };
-      i("proc_width", cfg_.proc_width);
-      i("min_value", cfg_.min_value);
-      f("min_area_frac", cfg_.min_area_frac);
-      f("min_visible", cfg_.min_visible);
-      f("min_visible_color", cfg_.min_visible_color);
-      f("min_rel_sat", cfg_.min_rel_sat);
-      f("up_dot_min", cfg_.up_dot_min);
-    }
-    cfg_.validate();
+    cfg_ = Cfg::from_yaml(root);
 
     const ClipTable table = ClipTable::load(root["clips"].as<std::string>());
-    eye_ = std::make_unique<CubeSight>(cfg_, PALETTE_SIM, table.half_extent());
+    eye_ = std::make_unique<CubeSight>(cfg_, table.half_extent());
 
     const auto cam = root["camera"];
     camera_ip_ = cam["host"] ? cam["host"].as<std::string>() : "127.0.0.1";
