@@ -24,7 +24,7 @@ claim; right column is what actually backs it.
 | SETTLE | 40 f | 40 f | unchanged |
 | solve rate, sim2sim | v7 | v7-simplified | **indistinguishable** (operator call, one session) |
 | wire | `Sys1Status` @ 1 Hz | `Sys1Status` @ 20 Hz, +10 fields | additive; `Sys0Status`, `MotionReference` untouched |
-| binary | v5 / v6 / v7 | v6 / v7 | one dead config removed |
+| binary | v5 / v6 / v7 | v6 / v7 (+ v7.1) | one dead config removed; v7.1 landed after, [planner.md §7.1](planner.md) |
 
 Parity was the goal. **The changes are all in what happens when something goes
 wrong** — a lost camera, a flickered read, a dropped reference — and sim2sim on the

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -69,6 +70,18 @@ void check_cfg() {
         "a SCAN that never goes quiet is refused");
   check(refuses([](Cfg& c) { c.belief_min_votes = c.belief_window + 1; }),
         "a vote that can never carry is refused");
+  const Cfg r = Cfg::v7_1();
+  check(r.enter_yaw_rate_deg > 0.0f && v7.enter_yaw_rate_deg == 0.0f,
+        "v7.1 is v7 plus one rate; 0 is the ramp off");
+  check(r.nominal_stand == v7.nominal_stand && r.pattern == v7.pattern &&
+            r.hold_tail == v7.hold_tail,
+        "and shares everything else with v7, so a v7 revision reaches it");
+  check(r.lead_in_max_s > v7.lead_in_max_s,
+        "with a ceiling that does not truncate the median heading ask");
+  check(Cfg::preset("v7.1").enter_yaw_rate_deg == r.enter_yaw_rate_deg,
+        "the preset name resolves");
+  check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
+        "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
         "a quiescence gate that never opens is refused");
 }
@@ -333,6 +346,117 @@ void check_lead_in(const ClipTable& t, const Cfg& cfg) {
   check(w.frames() == lead + p.frames, "clip follows the ramp intact");
 }
 
+/// v7.1: the heading joins the ramp, the seam is C1, and 0 is v7 exactly.
+void check_enter_ramp(const ClipTable& t) {
+  std::puts("enter ramp (v7.1)");
+  if (t.pool('R').empty()) {
+    check(false, "table has an R pool");
+    return;
+  }
+  Plan p;
+  p.mode = Mode::CLIP;
+  p.row = t.pool('R').front();
+  p.frames = t.rows()[p.row].span_len;
+  p.entry_yaw = 0.60f;  // 34 deg: between the measured median and p90
+  LiveState live;
+  live.joint_pos_il.assign(g1::NUM_JOINTS, 0.35f);
+  live.joint_vel_il.assign(g1::NUM_JOINTS, 0.0f);
+
+  // 1. the knob at zero is v7, byte for byte — the new paths short-circuit.
+  Cfg off = Cfg::v7_1();
+  off.enter_yaw_rate_deg = 0.0f;
+  off.lead_in_max_s = Cfg::v7().lead_in_max_s;
+  ReferenceWriter wv7(t, Cfg::v7()), woff(t, off);
+  const std::vector<float> a = wv7.build(p, live), b = woff.build(p, live);
+  check(a == b && !woff.ramped(), "enter_yaw_rate_deg = 0 IS v7, byte for byte");
+
+  const Cfg cfg = Cfg::v7_1();
+  ReferenceWriter w(t, cfg);
+  const auto& rows = w.build(p, live);
+  const int cols = t.cols(), lead = w.lead_in_frames(), J = g1::NUM_JOINTS;
+  const float* span = t.span(p.row);
+  check(w.ramped() && lead > 2, "a clip commit ramps its heading");
+  check(w.frames() == lead + p.frames, "clip follows the ramp intact");
+
+  // 2. the heading is swept, not stepped. Only yaw RELATIVE to frame 0 is a
+  // command — engage() aligns frame 0 onto the robot, cancelling the rest.
+  const int aq = 2 * J + 3, aang = g1::WIRE_COLS_MIN + 3;
+  auto yaw_at = [&](int f) {
+    const float* q = &rows[static_cast<size_t>(f) * cols + aq];
+    return std::atan2(2.0f * (q[0] * q[3] + q[1] * q[2]),
+                      1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3]));
+  };
+  auto swept = [&](int f) {
+    return std::atan2(std::sin(yaw_at(f) - yaw_at(0)),
+                      std::cos(yaw_at(f) - yaw_at(0)));
+  };
+  check(std::fabs(swept(lead - 1) - p.entry_yaw) < 1e-3f,
+        "the ramp lands on entry_yaw, so the clip plays where v7 put it");
+  check(std::fabs(swept(lead) - p.entry_yaw) < 1e-3f,
+        "and the clip's own rows carry it on unchanged");
+  check(swept(lead / 2) > 0.1f && swept(lead / 2) < p.entry_yaw,
+        "monotone across the window, not a step");
+
+  // 3. both bounds hold, and they are PEAK rates.
+  float peak_yaw = 0.0f, peak_dq = 0.0f;
+  for (int f = 0; f + 1 < lead; ++f) {
+    peak_yaw = std::max(peak_yaw, std::fabs(swept(f + 1) - swept(f)) * t.fps());
+    for (int j = 0; j < J; ++j)
+      peak_dq = std::max(peak_dq,
+                         std::fabs(rows[static_cast<size_t>(f + 1) * cols + j] -
+                                   rows[static_cast<size_t>(f) * cols + j]) *
+                             t.fps());
+  }
+  const float w_max = cfg.enter_yaw_rate_deg * 3.14159265f / 180.0f;
+  check(peak_yaw <= w_max * 1.02f,
+        "peak commanded yaw rate is inside enter_yaw_rate_deg");
+  check(peak_dq <= cfg.enter_joint_rate * 1.02f,
+        "peak commanded joint rate is inside enter_joint_rate");
+  check(peak_yaw > 0.4f * w_max || peak_dq > 0.4f * cfg.enter_joint_rate,
+        "and one of them is actually binding — the ramp is not padded");
+
+  // 4. C1 at both ends: the whole point.
+  float head = 0.0f, tail = 0.0f, dv = 0.0f;
+  for (int j = 0; j < J; ++j) {
+    head = std::max(head, std::fabs(rows[j] - live.joint_pos_il[j]));
+    const float* last = &rows[static_cast<size_t>(lead - 1) * cols];
+    tail = std::max(tail, std::fabs(last[j] - span[j]));
+    dv = std::max(dv, std::fabs(last[J + j] - span[J + j]));
+  }
+  check(head < 1e-5f, "row 0 IS the live pose");
+  check(tail < 1e-5f, "the last ramp row IS the clip's entry pose");
+  // The position path is MONOTONE, and that is the binding constraint: a clip
+  // span is sliced mid-motion, so its entry velocity (this alphabet: med 4.8,
+  // p90 7.1 rad/s) can only be matched by winding backwards first. The ramp
+  // arrives moving as far as it can without doing that, and no further.
+  float over = 0.0f, step_v7 = 0.0f;
+  for (int j = 0; j < J; ++j) {
+    step_v7 = std::max(step_v7, std::fabs(span[J + j]));
+    const float lo = std::min(live.joint_pos_il[j], span[j]);
+    const float hi = std::max(live.joint_pos_il[j], span[j]);
+    for (int f = 0; f < lead; ++f) {
+      const float x = rows[static_cast<size_t>(f) * cols + j];
+      over = std::max(over, std::max(lo - x, x - hi));
+    }
+  }
+  check(over < 1e-4f, "the ramp never overshoots either endpoint");
+  check(dv < 0.95f * step_v7,
+        "and arrives moving, where v7 arrived from rest");
+  check(std::fabs(rows[J]) < 1e-5f, "the ramp starts from rest, as a still is");
+  check(std::fabs(rows[static_cast<size_t>(lead - 1) * cols + aang + 2] -
+                  span[aang + 2]) < 1e-3f,
+        "the commanded turn rate hands off to the clip's own");
+
+  // 5. a still is untouched by the ramp: v7.1 is a clip-entry change only.
+  Plan q = p;
+  q.mode = Mode::SETTLE;
+  q.frames = cfg.settle_steps;
+  q.entry_yaw = 0.0f;
+  ReferenceWriter ws(t, cfg), wr(t, Cfg::v7());
+  check(ws.build(q, live) == wr.build(q, live) && !ws.ramped(),
+        "a still builds the same rows under v7 and v7.1");
+}
+
 void check_table(const ClipTable& t) {
   std::puts("table");
   check(!t.rows().empty(), "rows loaded");
@@ -462,6 +586,7 @@ int main(int argc, char** argv) {
     if (cfg.nominal_stand) check_nominal_stand(table);
     check_still_rows(table, cfg);
     check_lead_in(table, cfg);
+    check_enter_ramp(table);
     check_decide_is_pure(table);
   }
   if (!replay_dir.empty() && replay(replay_dir, table, cfg) != 0) ++failures;

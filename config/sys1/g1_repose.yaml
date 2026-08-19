@@ -4,8 +4,9 @@
 # `version` picks the preset; anything under `knobs` overrides it, so an A/B is
 # a one-line edit and cannot silently drift from the numbers it baselines.
 
-version: v7        # v7 ships; v6 is the same planner without the NOMINAL STAND,
-                   # the one ablation still worth running (62.5% -> 95%)
+version: v7        # each version is ONE knob over the last: v6 has no NOMINAL
+                   # STAND (62.5% -> 95%), v7.1 adds the ENTER ramp (§7.1).
+                   # Both ablations run from this one line.
 target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
                    # goal_color overrides it, so sys0 and sys1 boot agreeing
 
@@ -60,4 +61,7 @@ mount:
 #                     then holds still for the rest. Only the held part is
 #                     readable, so `hold_tail` is sized in EVIDENCE: 15 frames
 #                     at 50 fps is 0.6 s, or ~12 reads at a 20 Hz tick.
+#   enter_yaw_rate_deg  0 is v7. Non-zero (v7.1 preset: 50) ramps the heading
+#                     residual across the lead-in instead of stepping it at
+#                     engage. A PEAK rate: raising it shortens the ramp.
 knobs: {}

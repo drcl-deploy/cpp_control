@@ -122,16 +122,22 @@ class Sys1Node : public rclcpp::Node {
             std::chrono::duration<double>(1.0 / rate_hz_)),
         [this]() { tick(); });
 
+    const std::string ramp =
+        cfg_.enter_yaw_rate_deg > 0.0f
+            ? " | ENTER ramp " +
+                  std::to_string(static_cast<int>(cfg_.enter_yaw_rate_deg)) +
+                  " deg/s"
+            : "";
     RCLCPP_INFO(this->get_logger(),
                 "sys1 %s ready: %zu clips (F%zu B%zu L%zu R%zu) | pattern %s | "
-                "target %s | belief %d/%d reads under %.2f rad/s | camera "
+                "target %s | belief %d/%d reads under %.2f rad/s%s | camera "
                 "%s:%u @ %.0f Hz",
                 version_.c_str(), table_.rows().size(), table_.pool('F').size(),
                 table_.pool('B').size(), table_.pool('L').size(),
                 table_.pool('R').size(), cfg_.pattern.c_str(),
                 vibe::cube_color_name(clips_->target_color()),
                 cfg_.belief_min_votes, cfg_.belief_window, cfg_.omega_still,
-                camera_ip_.c_str(), camera_port_, rate_hz_);
+                ramp.c_str(), camera_ip_.c_str(), camera_port_, rate_hz_);
   }
 
   ~Sys1Node() override {
@@ -174,6 +180,8 @@ class Sys1Node : public rclcpp::Node {
       f("lead_in_rate", cfg_.lead_in_rate);
       f("lead_in_min_s", cfg_.lead_in_min_s);
       f("lead_in_max_s", cfg_.lead_in_max_s);
+      f("enter_yaw_rate_deg", cfg_.enter_yaw_rate_deg);  // 0 = v7; v7.1 is 50
+      f("enter_joint_rate", cfg_.enter_joint_rate);
     }
     cfg_.validate();
 
@@ -526,7 +534,9 @@ class Sys1Node : public rclcpp::Node {
     m.has_twist = true;
     m.has_contact = true;
     m.has_object_goal = false;
-    m.entry_yaw_offset = plan_.entry_yaw;
+    // v7.1 ramps the heading inside the rows, and engage() would compose the
+    // two: the residual is claimed exactly once, by whoever carried it.
+    m.entry_yaw_offset = writer_->ramped() ? 0.0f : plan_.entry_yaw;
     m.mode = static_cast<uint8_t>(plan_.mode);
     m.data = rows;
     reference_pub_->publish(m);

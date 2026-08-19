@@ -9,7 +9,9 @@ namespace sys1 {
 Cfg Cfg::preset(const std::string& name) {
   if (name == "v6") return Cfg::v6();
   if (name == "v7") return Cfg::v7();
-  throw std::runtime_error("sys1: version must be v6 | v7, got '" + name + "'");
+  if (name == "v7.1") return Cfg::v7_1();
+  throw std::runtime_error("sys1: version must be v6 | v7 | v7.1, got '" +
+                           name + "'");
 }
 
 void Cfg::validate() const {
@@ -37,6 +39,12 @@ void Cfg::validate() const {
         "planner blind and standing still forever");
   if (blend_frames < 0 || lead_in_rate < 0.0f)
     throw std::runtime_error("sys1: blend_frames / lead_in_rate must be >= 0");
+  if (enter_yaw_rate_deg < 0.0f || enter_joint_rate <= 0.0f)
+    throw std::runtime_error(
+        "sys1: need enter_yaw_rate_deg >= 0 (0 is v7, the ramp off) and "
+        "enter_joint_rate > 0");
+  if (lead_in_max_s < lead_in_min_s)
+    throw std::runtime_error("sys1: lead_in_max_s must be >= lead_in_min_s");
 }
 
 }  // namespace sys1

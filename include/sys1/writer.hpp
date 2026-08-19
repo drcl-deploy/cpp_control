@@ -24,23 +24,29 @@ class ReferenceWriter {
  public:
   ReferenceWriter(const ClipTable& table, const Cfg& cfg);
 
-  /// Build the reference for `plan`. Returns rows [frames, cols] IL-ordered;
-  /// `entry_yaw` goes on the message and is applied by MotionClock at engage.
+  /// Build the reference for `plan`. Returns rows [frames, cols] IL-ordered.
+  /// Under v7 `entry_yaw` goes on the message and MotionClock applies it at
+  /// engage; under v7.1 the ramp carries it and `ramped()` says so.
   const std::vector<float>& build(const Plan& plan, const LiveState& live);
 
   int frames() const { return frames_; }
   int cols() const { return cols_; }
   int lead_in_frames() const { return lead_; }
+  /// v7.1 carried the heading residual in the ROWS, so the message must not
+  /// also carry it in `entry_yaw_offset` — the two would compose.
+  bool ramped() const { return ramp_; }
 
  private:
   void push_stand(int count);
-  void push_lead_in(const float* target, const LiveState& live);
+  void push_lead_in(const Plan& plan, const float* target,
+                    const LiveState& live);
   void blend_head(const LiveState& live, int count);
 
   const ClipTable& t_;
   Cfg cfg_;
   std::vector<float> rows_;
   int frames_ = 0, cols_ = 0, lead_ = 0;
+  bool ramp_ = false;
 };
 
 }  // namespace sys1

@@ -2,8 +2,8 @@
 
 /// sys1 knobs — the C++ twin of vibe `planner/clips.py::ClipCfg`.
 /// Rationale for every default lives there; the migration spec is
-/// vibe `docs/sys1_cpp.md`. v6 and v7 differ by one boolean, so one binary
-/// A/Bs the only ablation still worth running on the robot.
+/// vibe `docs/sys1_cpp.md`. Each version is one knob over the last, so one
+/// binary A/Bs both ablations still worth running on the robot.
 
 #include <string>
 
@@ -74,6 +74,27 @@ struct Cfg {
   float lead_in_min_s = 0.2f;
   float lead_in_max_s = 0.6f;
 
+  /// v7.1: put the HEADING in the ramp too. 0 is v7, every new path
+  /// short-circuited.
+  ///
+  /// The lead-in has always walked the JOINTS onto a clip's entry pose. The
+  /// heading never joined them: `MotionClock::engage` pins frame 0 to
+  /// `robot_yaw + entry_yaw`, so the whole residual lands in one frame.
+  /// Measured over the clean pools a commit asks med 9-22 deg, p90 21-45 —
+  /// 157-321 deg/s delivered that way, 3-6x the only rate sys1 has ever
+  /// measured as followable (the SCAN sweep, 50 deg/s). Sim v7.1: clip hit at
+  /// stance residual >= 0.35 m, 0.745 -> 0.854 (z = 2.52), and below it the
+  /// arms are identical — the mechanism's signature. Solve rate is a wash;
+  /// what moves is speed and jerk (vibe `docs/sys1_v7.md` §7.1).
+  ///
+  /// A RATE, because what is bounded is what sys0 can follow.
+  float enter_yaw_rate_deg = 0.0f;
+  /// The same bound on the largest single joint the ramp moves, rad/s. Both
+  /// enter_* knobs are PEAK rates — a smoothstep peaks at 1.5x its mean and
+  /// the sizing pays for that. Distinct from `lead_in_rate`, which is v7's
+  /// mean-rate knob and keeps its meaning; whichever term needs longer wins.
+  float enter_joint_rate = 2.0f;
+
   /// v6 — the library's stand frame, i.e. v7 without the gaze fix. The one
   /// ablation still worth running; everything else the versions used to carry
   /// is now the single shipping default.
@@ -83,6 +104,16 @@ struct Cfg {
     return c;
   }
   static Cfg v7() { return Cfg{}; }
+  /// v7.1 — v7 + the ENTER ramp. Built ON v7(), so a v7 revision reaches it
+  /// and the pair cannot disagree about what they share. The ceiling moves
+  /// with it: 0.6 s truncates even the MEDIAN heading ask (22 deg at 50 deg/s,
+  /// peak-sized, is 0.66 s).
+  static Cfg v7_1() {
+    Cfg c = v7();
+    c.enter_yaw_rate_deg = 50.0f;
+    c.lead_in_max_s = 1.2f;
+    return c;
+  }
   static Cfg preset(const std::string& name);
 
   float color_gate() const { return min_visible_color; }

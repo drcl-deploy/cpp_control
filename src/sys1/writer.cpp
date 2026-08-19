@@ -16,6 +16,8 @@ namespace {
 constexpr int J = g1::NUM_JOINTS;
 constexpr int APOS = 2 * J, AQUAT = 2 * J + 3;
 constexpr int ALIN = g1::WIRE_COLS_MIN, AANG = g1::WIRE_COLS_MIN + 3;
+constexpr float kPi = 3.14159265358979323846f;
+constexpr float kPeak = 1.5f;  ///< a smoothstep's peak slope over its mean
 
 /// Premultiply a wire row's anchor quat by Rz(psi) and turn its world twist
 /// with it. Body-frame twist — what the adapter actually reads — is invariant
@@ -59,15 +61,42 @@ void ReferenceWriter::push_stand(int count) {
 /// than the library frame it replaced, so the settle that follows every clip is
 /// the largest joint step in the loop. Cost is `lead_in_min_s` (0.2 s) when the
 /// delta is small, which is what a settle-after-settle sees.
-void ReferenceWriter::push_lead_in(const float* target, const LiveState& live) {
+///
+/// v7.1 puts the HEADING in the same ramp (`enter_yaw_rate_deg`), for clips
+/// only. `MotionClock::engage` cancels the FRAME-0 heading and nothing else, so
+/// a rotation that VARIES across the lead-in survives it — the same mechanism
+/// the SCAN sweep already uses to command a turn. The residual then lives in
+/// the rows and `entry_yaw_offset` goes to zero: one convention, both modes.
+void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
+                                   const LiveState& live) {
   if (cfg_.lead_in_rate <= 0.0f) return;
+  ramp_ = cfg_.enter_yaw_rate_deg > 0.0f && plan.mode == Mode::CLIP;
+
   float max_dq = 0.0f;
   for (int j = 0; j < J; ++j)
     max_dq = std::max(max_dq, std::fabs(target[j] - live.joint_pos_il[j]));
-  const float secs = std::clamp(max_dq / cfg_.lead_in_rate, cfg_.lead_in_min_s,
-                                cfg_.lead_in_max_s);
-  lead_ = std::max(2, static_cast<int>(std::lround(secs * t_.fps())));
 
+  if (!ramp_) {
+    const float secs = std::clamp(max_dq / cfg_.lead_in_rate,
+                                  cfg_.lead_in_min_s, cfg_.lead_in_max_s);
+    lead_ = std::max(2, static_cast<int>(std::lround(secs * t_.fps())));
+  } else {
+    // Whichever bound needs longer wins, and the answer is in FRAMES: the ramp
+    // sweeps over `lead_ - 1` intervals, so rounding UP there is what keeps the
+    // achieved peak under the ask rather than one frame over it.
+    const float w_max = cfg_.enter_yaw_rate_deg * kPi / 180.0f;
+    const float n = kPeak * t_.fps() *
+                    std::max(std::fabs(plan.entry_yaw) / w_max,
+                             max_dq / cfg_.enter_joint_rate);
+    const int lo = std::max(
+        2, static_cast<int>(std::lround(cfg_.lead_in_min_s * t_.fps())));
+    const int hi = std::max(
+        lo, static_cast<int>(std::lround(cfg_.lead_in_max_s * t_.fps())));
+    lead_ = std::clamp(static_cast<int>(std::ceil(n)) + 1, lo, hi);
+  }
+
+  const float T = static_cast<float>(lead_ - 1) / t_.fps();  // swept seconds
+  const float* v1 = target + J;  // the target's own joint velocity
   const size_t at = rows_.size();
   rows_.resize(at + static_cast<size_t>(lead_) * cols_);
   for (int f = 0; f < lead_; ++f) {
@@ -78,9 +107,45 @@ void ReferenceWriter::push_lead_in(const float* target, const LiveState& live) {
     std::memset(row + ALIN, 0, (cols_ - ALIN) * sizeof(float));
     const float a = static_cast<float>(f) / (lead_ - 1);
     const float s = a * a * (3.0f - 2.0f * a);  // smoothstep, as Motion::lead_in
-    for (int j = 0; j < J; ++j)
-      row[j] = (1.0f - s) * live.joint_pos_il[j] + s * target[j];
+    if (!ramp_) {
+      for (int j = 0; j < J; ++j)
+        row[j] = (1.0f - s) * live.joint_pos_il[j] + s * target[j];
+      continue;
+    }
+    // Cubic Hermite. v0 is ZERO because a clip is only ever committed out of a
+    // still — a commit clears the belief, so `decide()` cannot answer CLIP
+    // again until a still has refilled it, and the quiescence gate has already
+    // proved the robot was not moving while it did. v1 is the clip's own entry
+    // velocity, which the smoothstep used to arrive at zero against, and
+    // `joint_vel` is the ANALYTIC derivative: a position command and a
+    // velocity command that disagree is a jerk with two sources, and the
+    // tokenizer reads both. What this does NOT do is close the seam — see the
+    // clamp below.
+    const float a2 = a * a, a3 = a2 * a;
+    const float h01 = -2.0f * a3 + 3.0f * a2, h11 = a3 - a2;
+    const float g01 = 6.0f * a - 6.0f * a2, g11 = 3.0f * a2 - 2.0f * a;
+    for (int j = 0; j < J; ++j) {
+      const float p0 = live.joint_pos_il[j], d = target[j] - p0;
+      // Fritsch-Carlson: keep the cubic MONOTONE between its endpoints. A clip
+      // span is sliced mid-motion, so its entry frame is already moving fast —
+      // med 4.8, p90 7.1 rad/s over this alphabet. Matched unclamped, the
+      // curve detours ~0.8 rad backwards to wind up for it, which is a far
+      // worse thing to command than the velocity step it removes. Clamped, the
+      // ramp arrives moving wherever the geometry allows and never detours:
+      // ~14% of the step goes, the rest is the alphabet's, not the seam's.
+      const float m1 = std::clamp(T * v1[j], std::min(0.0f, 3.0f * d),
+                                  std::max(0.0f, 3.0f * d));
+      row[j] = p0 + h01 * d + h11 * m1;
+      row[J + j] = (g01 * d + g11 * m1) / T;
+    }
+    // The twist ramps onto the clip's own; contact flags are binary, stay hard.
+    for (int k = ALIN; k < ALIN + 6; ++k) row[k] = s * target[k];
+    rotate_row(row, -plan.entry_yaw * (1.0f - s));
+    // ...and say so, as the sweep does: this is the smoothstep's derivative,
+    // added to the clip's own yaw rate so both endpoints stay continuous.
+    row[AANG + 2] += plan.entry_yaw * 6.0f * a * (1.0f - a) / T;
   }
+  if (ramp_) return;  // jv is analytic above; a difference would fight it
   for (int f = 0; f + 1 < lead_; ++f)  // jv from jp, so the two cannot disagree
     for (int j = 0; j < J; ++j)
       rows_[at + static_cast<size_t>(f) * cols_ + J + j] =
@@ -109,6 +174,7 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     throw std::runtime_error("sys1 writer: live state is not 29 IL joints");
   rows_.clear();
   lead_ = 0;
+  ramp_ = false;
 
   if (plan.mode != Mode::CLIP) {
     // A still mode is a clip whose frames happen to be identical — except for
@@ -117,7 +183,7 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     // so the 6D row says "still turning", not "hold this heading". A one-shot
     // ask saturates the tracking error instead (28.5 deg achieved per 90 asked).
     const int hold = std::max(plan.frames, 1);
-    push_lead_in(t_.stand_row(), live);
+    push_lead_in(plan, t_.stand_row(), live);
     const size_t at = rows_.size();  // the sweep is over the HELD frames only
     push_stand(hold);
     const int ramp = std::max(hold - 2 * cfg_.hold_tail, 1);
@@ -138,7 +204,7 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
 
   const ClipRow& r = t_.rows()[plan.row];
   const float* span = t_.span(plan.row);
-  push_lead_in(span, live);
+  push_lead_in(plan, span, live);
 
   const size_t at = rows_.size();
   rows_.resize(at + static_cast<size_t>(r.span_len) * cols_);

@@ -16,15 +16,17 @@ split, with the parity matrix: [v7_simplified.md](v7_simplified.md).
 
 ---
 
-## 0. One shipping config, one ablation
+## 0. One shipping config, two ablations
 
 v5 and its knobs are gone: the A/B is finished, the numbers are below, and a
-binary carrying two dead configurations is not a minimal planner. What survives
-is `nominal_stand`, because that ablation is the result.
+binary carrying dead configurations is not a minimal planner. Each surviving
+version is **one knob** over the last, so one binary A/Bs both.
 
-| knob | v6 | v7 | what it does |
-|---|---|---|---|
-| `nominal_stand` | false | **true** | hold the robot's own nominal stance in a still mode, not the library's stand frame |
+| version | knob | what it does |
+|---|---|---|
+| v6 | — | the baseline: `RRF`, `horizon_gain 0.3`, graded sighting |
+| **v7** | `nominal_stand` | hold the robot's own nominal stance in a still mode, not the library's stand frame |
+| v7.1 | `enter_yaw_rate_deg` | put the HEADING in the lead-in ramp, at a bounded rate (§7.1) |
 
 Everything the versions used to split — `pattern: RRF`, `horizon_gain: 0.3`,
 `min_visible_color: 0.0` — is now simply the default. `stall_limit` and
@@ -282,6 +284,67 @@ v7 nominal stand: waist 0.0/0.0/0.0 deg -> camera 45.0 deg down, +0.0 off-axis (
 
 A robot whose nominal stance carries a stooped waist gets v6's band back, so
 that line warns rather than fails — it is a config truth, not a code fault.
+
+## 7.1 The ENTER ramp (v7.1)
+
+`enter_yaw_rate_deg: 0` is v7 exactly, byte for byte, and the selftest asserts
+it. Non-zero puts the heading residual into the lead-in the joints already ride.
+
+**What was wrong.** `MotionClock::engage` pins reference frame 0 to
+`robot_yaw + entry_yaw`, so the whole heading residual arrives in one frame
+while the joints walk. Measured over the clean pools a commit asks med 9–22°,
+p90 21–45° — 157–321 °/s through `blend_frames`, 3–6× the only rate this stack
+has ever measured as followable (the SCAN sweep, 50 °/s).
+
+**The fix, in one observation.** `engage` cancels the **frame-0** heading and
+nothing else, so a rotation that VARIES across the lead-in survives it. The
+lead-in rows are rotated by `−entry_yaw·(1−s)` and `entry_yaw_offset` goes to
+**zero** on the wire: the residual is claimed exactly once, by whoever carried
+it. This is the mechanism the SCAN sweep already used — after v7.1 the heading
+always lives in the rows, one convention for both modes.
+
+Sizing is a PEAK rate, not a frame count, because what is bounded is what sys0
+can follow. `T = 1.5·max(Δθ/ω_max, Δq/q̇_max)` — the 1.5 is the smoothstep's
+peak slope over its mean — clamped to `[lead_in_min_s, lead_in_max_s]`. The
+ceiling moves to 1.2 s with the preset: 0.6 s truncates even the median ask.
+
+### What the port does NOT need
+
+The sim's v7.1 carries five mechanisms this seam makes free. It rewrites a
+shared buffer in place every step; the C++ precomputes one array and publishes
+it atomically.
+
+| sim needed | here |
+|---|---|
+| `enter` as its own mode, plan and commit | the ramp is prepended to the same reference. `mode` stays CLIP, `lead_in_frames` reports it, `finished` fires once |
+| a previewed horizon (`_write_enter` at 10 phases) | sys0's future window reads the published rows |
+| a frozen warp anchor | `entry_yaw` is computed once at commit and baked; nothing is re-derived mid-ramp |
+| `_pick_still_slot` (3-frame headroom) | stills are synthesized, 40 rows |
+| suppressing `_blend_entry` after a ramp | already `if (lead_ == 0 && blend_frames > 0)` |
+
+### The joint seam, measured — and why it stays open
+
+The lead-in used to arrive at **zero** joint velocity and hand off to the clip's
+entry frame. Those frames are spans sliced mid-motion, so they are already
+moving: **med 4.8, p90 7.1, max 8.8 rad/s** over the 56 clean clips. v7.1's
+Hermite matches the arrival velocity, but under a Fritsch–Carlson **monotone**
+clamp — matched unclamped the curve detours ~0.8 rad backwards to wind up for
+it, which is a worse thing to command than the step it removes.
+
+| at the seam | v7 | v7.1 |
+|---|---|---|
+| position path | C0, monotone | C0, monotone (asserted, 0 overshoot) |
+| joint-velocity step | 5.19 rad/s | 4.46 rad/s |
+| peak commanded joint rate | 2.3 rad/s | **1.43** rad/s (the ramp is longer) |
+| peak commanded yaw rate | one-frame step | **0.87 rad/s**, inside the 50 °/s ask |
+
+**The remaining 4.5 rad/s is the alphabet's, not the seam's** — no ramp duration
+removes it without overshooting. It is a discontinuity in a reference *channel*
+the tokenizer reads, not in the commanded position, so it is a surprise to the
+policy rather than a torque step. Closing it is a clip-slicing change in vibe
+(cut spans at low-velocity frames), not a planner change.
+
+---
 
 ## 8. Bring-up order
 
