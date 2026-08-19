@@ -10,10 +10,16 @@
  * OBSERVE every tick the camera is quiet, PLAN every tick for free, ACT only
  * when the controller says it finished. That split is the whole node:
  *
- *     GUARD    controller accepting? lowstate fresh? nominal stance known?
- *     OBSERVE  new frame AND |omega_cam| < omega_still  ->  belief << look()
+ *     SENSE    lowstate fresh                          ->  belief << look()
+ *              new frame AND |omega_cam| < omega_still
+ *     GUARD    controller accepting? nominal stance known?
  *     PLAN     candidate = decide(belief)                   PURE, ~50 us
  *     ACT      controller.finished                       ->  commit(candidate)
+ *
+ * SENSE sits ABOVE the guard on purpose: the planner reads and publishes its
+ * belief whenever lowstate is alive, controller or not, so the console is a
+ * live view of the perception stack before anything is armed. Arming clears the
+ * belief, so an idle read can never become an episode's evidence.
  *
  *   ros2 launch cpp_control g1_repose_planner.launch.py
  *   ros2 run cpp_control repose_console.py        # set the target colour live
@@ -454,25 +460,47 @@ class ReposeNode : public rclcpp::Node {
   // ── The loop ───────────────────────────────────────────────────
 
   void tick() {
+    // ── SENSE ──────────────────────────────────────────────
+    //
+    // The controller is NOT a gate on LOOKING. A planner that may not act can
+    // still read the cube, and the console is the only window onto what the
+    // perception stack actually sees — which is what a mismeasured palette gets
+    // wrong silently, and the one thing worth watching before arming.
+    //
+    // lowstate STAYS a gate: `camera_pose()` is FK off the IMU and the waist
+    // chain, so without it every geometric test would run against a pose the
+    // node invented, and the belief would be confident about it.
+    //
+    // Arming still clears the belief, so nothing read here can reach an
+    // episode: what is published below is a view, never evidence.
+    const bool state_fresh = fresh(last_state_);
+    const bool stance_known = stand_ready_ || !cfg_.nominal_stand;
+    if (state_fresh) observe();
+
+    // ── GUARD ──────────────────────────────────────────────
     if (!controller_seen_ || !controller_.accepting) {
       if (armed_)
         RCLCPP_INFO(this->get_logger(),
-                    "repose planner: controller left POLICY — idle");
+                    "repose planner: controller left POLICY — idle, still observing");
       armed_ = false;
       in_enter_ = false;  // a ramp is only valid against the yaw it was frozen at
+      // decide() is PURE, so an idle planner can still show what it WOULD do.
+      // Only once the stance is known, or the preview would be solved against
+      // the library's stand frame — v6's gaze, and a quietly wrong answer.
+      if (state_fresh && stance_known) candidate_ = clips_->decide(*belief_);
+      publish_status();
       return;
     }
     // The camera is deliberately NOT a gate. Losing it starves the belief, and
     // a starved belief plans the nominal stance — so a camera that dies mid
     // clip returns the robot to its feet instead of freezing it in the exit
     // pose of a half-finished turn.
-    if (!fresh(last_state_) || (cfg_.nominal_stand && !stand_ready_)) {
+    if (!state_fresh || !stance_known) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                            "repose planner: waiting for %s%s",
-                           fresh(last_state_) ? "" : "lowstate ",
-                           (!cfg_.nominal_stand || stand_ready_)
-                               ? ""
-                               : "the controller's nominal stance");
+                           state_fresh ? "" : "lowstate ",
+                           stance_known ? "" : "the controller's nominal stance");
+      publish_status();
       return;
     }
     if (!camera_fresh())
@@ -493,7 +521,6 @@ class ReposeNode : public rclcpp::Node {
       return;
     }
 
-    observe();
     clips_->observe(*belief_);
     candidate_ = clips_->decide(*belief_);
 
