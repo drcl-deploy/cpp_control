@@ -31,14 +31,22 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg = get_package_share_directory('cpp_control')
     common = os.path.join(pkg, 'launch', 'g1_vibe_sonic.launch.py')
-    default_config = os.path.join(pkg, 'config', 'repose_planner', 'g1.yaml')
 
     return LaunchDescription([
         DeclareLaunchArgument('artifact_dir',
                               description='Absolute Repose checkpoint directory'),
         DeclareLaunchArgument('checkpoint', default_value='',
                               description='Artifact step if the directory has multiple exports'),
-        DeclareLaunchArgument('planner_config', default_value=default_config),
+        # sim by default: the shipping palette was measured off the sim renderer,
+        # and a hardware palette is only ever right for the lighting it was
+        # recorded under. `env:=real` picks the tuned file instead.
+        DeclareLaunchArgument('env', default_value='sim',
+                              choices=['sim', 'real'],
+                              description='which observe block to load'),
+        DeclareLaunchArgument(
+            'planner_config',
+            default_value=[os.path.join(pkg, 'config', 'repose_planner', 'g1_'),
+                           LaunchConfiguration('env'), '.yaml']),
         DeclareLaunchArgument('goal_color', default_value='4',
                               description='0 red 1 orange 2 green 3 yellow 4 blue 5 pink; '
                                           'drives the policy one-hot AND the planner ladder'),

@@ -529,8 +529,13 @@ void check_table(const ClipTable& t) {
 // metres, intrinsics (4,), R_bc (9,), t_bc (3,). Dump them from the sim or from
 // a standing robot; the point is that C++ and the Python oracle see the SAME
 // frames.
+//
+// An optional int32 `label` (0-5, or -1 for a negative/no-cube frame) turns the
+// rig into a SCORER: the number printed is the production read's, under the
+// production config, so a tuning sweep cannot score itself against a second
+// implementation that has quietly drifted.
 
-int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
+int replay(const std::string& dir, ClipTable& t, const Cfg& cfg, bool summary) {
   std::vector<std::string> files;
   for (int i = 0; i < 10000; ++i) {
     char name[512];
@@ -545,7 +550,9 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
   Clips clips(t, cfg, 4);
   CubeSight eye(cfg, t.half_extent());  // palette rides in the cfg now
   Belief belief(cfg);
-  std::printf("replay: %zu reads\n", files.size());
+  int conf[7][7] = {};  // [label + 1][answer + 1], index 0 is "no cube"/"none"
+  bool scored = false;
+  if (!summary) std::printf("replay: %zu reads\n", files.size());
   for (const auto& f : files) {
     cnpy::npz_t z = cnpy::npz_load(f);
     const auto& bgr_a = z.at("bgr");
@@ -565,16 +572,56 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
     // Every recorded read is a standing robot, so all of them are quiescent by
     // construction — the rig feeds the belief the way the node's gate would.
     const Sight s = eye(bgr, depth, {k[0], k[1], k[2], k[3]}, cam);
+    if (z.count("label")) {
+      scored = true;
+      const int lab = *z.at("label").data<int32_t>();
+      const int ans = s.color_ok ? s.color : -1;
+      if (lab >= -1 && lab < 6 && ans >= -1 && ans < 6) ++conf[lab + 1][ans + 1];
+    }
     belief.push(s);
     clips.observe(belief);
     const Plan p = clips.decide(belief);
-    std::printf("%-24s %-10s c%d pos %+.4f %+.4f %+.4f phi %+.5f | vote %d/%d "
-                "c%d | %s cost %.3f yaw %+.4f row %d sym %d\n",
-                f.substr(f.find_last_of('/') + 1).c_str(), s.reason.c_str(),
-                s.color, s.pos[0], s.pos[1], s.pos[2], s.phi, belief.n_votes(),
-                belief.n_reads(), belief.color(), p.label.c_str(), p.cost,
-                p.entry_yaw, p.row, p.sym);
+    if (!summary)
+      std::printf("%-24s %-10s c%d pos %+.4f %+.4f %+.4f phi %+.5f | vote %d/%d "
+                  "c%d | %s cost %.3f yaw %+.4f row %d sym %d\n",
+                  f.substr(f.find_last_of('/') + 1).c_str(), s.reason.c_str(),
+                  s.color, s.pos[0], s.pos[1], s.pos[2], s.phi, belief.n_votes(),
+                  belief.n_reads(), belief.color(), p.label.c_str(), p.cost,
+                  p.entry_yaw, p.row, p.sym);
   }
+  if (!scored) return 0;
+
+  static const char* kName[6] = {"red", "orange", "green", "yellow", "blue", "pink"};
+  int right = 0, n_pos = 0;
+  for (int c = 0; c < 6; ++c)
+    for (int a = -1; a < 6; ++a) {
+      n_pos += conf[c + 1][a + 1];
+      if (a == c) right += conf[c + 1][a + 1];
+    }
+  int n_neg = 0, fp = 0;
+  for (int a = -1; a < 6; ++a) {
+    n_neg += conf[0][a + 1];
+    if (a >= 0) fp += conf[0][a + 1];
+  }
+  std::printf("\n%-8s", "exp\\got");
+  for (int a = 0; a < 6; ++a) std::printf("%8s", kName[a]);
+  std::printf("%8s%8s%8s\n", "none", "n", "recall");
+  for (int c = 0; c < 6; ++c) {
+    int n = 0;
+    for (int a = -1; a < 6; ++a) n += conf[c + 1][a + 1];
+    if (!n) continue;
+    std::printf("%-8s", kName[c]);
+    for (int a = 0; a < 6; ++a) std::printf("%8d", conf[c + 1][a + 1]);
+    std::printf("%8d%8d%7.1f%%\n", conf[c + 1][0], n, 100.0 * conf[c + 1][c + 1] / n);
+  }
+  if (n_neg) {
+    std::printf("%-8s", "no cube");
+    for (int a = 0; a < 6; ++a) std::printf("%8d", conf[0][a + 1]);
+    std::printf("%8d%8d%7.1f%%\n", conf[0][0], n_neg, 100.0 * conf[0][0] / n_neg);
+  }
+  // The one line a sweep reads back.
+  std::printf("\nSCORE accuracy %.4f (%d/%d)  false_positives %d/%d\n",
+              n_pos ? static_cast<double>(right) / n_pos : 0.0, right, n_pos, fp, n_neg);
   return 0;
 }
 
@@ -582,22 +629,27 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
 /// This is what makes "the config refactor changed nothing" checkable: the
 /// schema can grow, but the day a key is renamed and its reader is not, this
 /// fails instead of the robot quietly running stock numbers.
-void check_config_roundtrip(const std::string& path) {
+void check_config_roundtrip(const std::string& path, bool parity) {
   std::puts("config");
   const YAML::Node root = YAML::LoadFile(path);
   const std::string named =
       root["version"] ? root["version"].as<std::string>() : "v7";
-  const Cfg from_file = Cfg::from_yaml(root);
-  check(from_file == Cfg::preset(named),
-        "the shipped yaml round-trips to the preset it names");
+  check(!threw([&] { Cfg::from_yaml(root); }), "the config loads and validates");
 
-  // `version:` is the ablation switch, so all three of them have to survive the
-  // same file — that is the "one line A/Bs both" claim, tested.
-  for (const char* v : {"v6", "v7", "v7.1"}) {
-    YAML::Node n = YAML::Clone(root);
-    n["version"] = v;
-    check(Cfg::from_yaml(n) == Cfg::preset(v),
-          std::string("...and so does ") + v);
+  // Parity is asserted only for a file that CLAIMS to be untuned — the shipped
+  // base. A deployment config exists precisely to differ from its preset, and
+  // asserting otherwise would make tuning a test failure.
+  if (parity) {
+    check(Cfg::from_yaml(root) == Cfg::preset(named),
+          "the shipped yaml round-trips to the preset it names");
+    // `version:` is the ablation switch, so all three have to survive the same
+    // file — that is the "one line A/Bs both" claim, tested.
+    for (const char* v : {"v6", "v7", "v7.1"}) {
+      YAML::Node n = YAML::Clone(root);
+      n["version"] = v;
+      check(Cfg::from_yaml(n) == Cfg::preset(v),
+            std::string("...and so does ") + v);
+    }
   }
   check(threw([&] {
           YAML::Node n = YAML::Clone(root);
@@ -630,6 +682,7 @@ void check_config_roundtrip(const std::string& path) {
 int main(int argc, char** argv) {
   std::string table_path, frames_path, library_path, bake_path, replay_dir,
       config_path, version = "v7";  // v6 is the gaze ablation
+  bool summary = false, check_parity = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() { return i + 1 < argc ? argv[++i] : ""; };
@@ -640,18 +693,24 @@ int main(int argc, char** argv) {
     else if (a == "--replay") replay_dir = next();
     else if (a == "--version") version = next();
     else if (a == "--config") config_path = next();
+    else if (a == "--summary") summary = true;
+    else if (a == "--check-preset-parity") check_parity = true;
     else {
       std::printf("unknown argument '%s'\n", a.c_str());
       return 2;
     }
   }
 
-  const Cfg cfg = Cfg::preset(version);
+  // A config file wins over --version: the whole point of the replay scorer is
+  // that it reads the file a run would actually deploy.
+  const Cfg cfg = config_path.empty()
+                      ? Cfg::preset(version)
+                      : Cfg::from_yaml(YAML::LoadFile(config_path));
   check_cfg();
   check_belief();
   check_gaze();
   check_warp_identity();
-  if (!config_path.empty()) check_config_roundtrip(config_path);
+  if (!config_path.empty()) check_config_roundtrip(config_path, check_parity);
 
   if (table_path.empty()) {
     std::printf("\n%d failure(s). Pass --table <sys1_clips.npz> for the rest.\n",
@@ -689,7 +748,7 @@ int main(int argc, char** argv) {
     check_enter_ramp(table);
     check_decide_is_pure(table);
   }
-  if (!replay_dir.empty() && replay(replay_dir, table, cfg) != 0) ++failures;
+  if (!replay_dir.empty() && replay(replay_dir, table, cfg, summary) != 0) ++failures;
 
   std::printf("\n%d failure(s)\n", failures);
   return failures ? 1 : 0;

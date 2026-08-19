@@ -75,6 +75,12 @@ class CubeSight {
  private:
   void classify(const cv::Mat& bgr);
   void build_rays(int w, int h, const Intrinsics& intr);
+  /// Colour first, six candidates, highest wins. `Cfg::Read::BLOBS`.
+  Sight read_blobs(const cv::Mat& depth, int min_px, float edge,
+                   const CameraPose& cam);
+  /// Geometry first, one mask, modal colour. `Cfg::Read::MASK`.
+  Sight read_mask(const cv::Mat& depth, int min_px, float edge,
+                  const CameraPose& cam);
 
   Cfg cfg_;
   float half_extent_;

@@ -95,6 +95,7 @@ void CubeSight::classify(const cv::Mat& bgr) {
   labels_.create(bgr.rows, bgr.cols, CV_16SC1);
   labels_.setTo(-1);
   const float min_value = static_cast<float>(cfg_.min_value);
+  const float reject2 = cfg_.chroma_reject * cfg_.chroma_reject;
   for (int r = 0; r < bgr.rows; ++r) {
     const uint8_t* src = bgr.ptr<uint8_t>(r);
     int16_t* dst = labels_.ptr<int16_t>(r);
@@ -118,6 +119,9 @@ void CubeSight::classify(const cv::Mat& bgr) {
           arg = k;
         }
       }
+      // Beyond `chroma_reject` a pixel is NO colour rather than the nearest of
+      // six. Off by default: the shipping classifier has no "none" class.
+      if (reject2 > 0.0f && best > reject2) continue;
       dst[c] = static_cast<int16_t>(arg / REFS_PER_COLOR);
     }
   }
@@ -167,6 +171,19 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
   const int min_px =
       std::max(cfg_.min_px_floor, static_cast<int>(cfg_.min_area_frac * total));
   const float edge = 2.0f * half_extent_;
+  return cfg_.read == Cfg::Read::MASK ? read_mask(depth, min_px, edge, cam)
+                                      : read_blobs(depth, min_px, edge, cam);
+}
+
+// ── BLOBS: colour first, six candidates, highest wins ────────────
+//
+// The shipping read. Every gate below is per COLOUR, so one physical face that
+// straddles two chromaticity cells becomes two candidates that then compete on
+// height — which is where this read loses on hardware (`Cfg::Read`).
+
+Sight CubeSight::read_blobs(const cv::Mat& depth, int min_px, float edge,
+                            const CameraPose& cam) {
+  const int total = depth.rows * depth.cols;
   const float vis_color = cfg_.color_gate();
   const float* R = cam.R.data();
 
@@ -298,6 +315,146 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
   s.phi = have_best ? best_phi : seen_phi;
   s.n_px = have_best ? best_n : seen_n;
   s.reason = have_best ? "ok" : why;
+  return s;
+}
+
+// ── MASK: geometry first, one mask, modal colour ─────────────────
+//
+// The cube's top face is ONE horizontal plane, whichever colours the classifier
+// happened to split it into. Find that plane from every coloured pixel at once,
+// then ask what colour it mostly is. The gates are the same numbers as BLOBS
+// and mean the same things — they are applied to one candidate instead of six,
+// so a face that straddles two chromaticity cells can no longer compete with
+// itself, and the loser can no longer win on height.
+
+Sight CubeSight::read_mask(const cv::Mat& depth, int min_px, float edge,
+                           const CameraPose& cam) {
+  const int total = depth.rows * depth.cols;
+  const float* R = cam.R.data();
+  Sight s;
+  last_.clear();
+
+  // LIVE: every pixel the gates called a colour, with a usable depth. Unproject
+  // once — BLOBS does this per colour, which is the same arithmetic six times.
+  idx_.clear();
+  for (int i = 0; i < total; ++i) {
+    const float z = depth.ptr<float>()[i];
+    if (labels_.ptr<int16_t>()[i] >= 0 && std::isfinite(z) && z > cfg_.z_min_m)
+      idx_.push_back(i);
+  }
+  const int n_live = static_cast<int>(idx_.size());
+  if (n_live < min_px) {
+    s.reason = "no_blob";
+    return s;
+  }
+  pts_.resize(static_cast<size_t>(n_live) * 3);
+  double sx = 0.0, sy = 0.0;
+  for (int n = 0; n < n_live; ++n) {
+    const float z = depth.ptr<float>()[idx_[n]];
+    const float* ray = &rays_[static_cast<size_t>(idx_[n]) * 3];
+    const float cx = ray[0] * z, cy = ray[1] * z, cz = ray[2] * z;
+    float* p = &pts_[n * 3];
+    p[0] = R[0] * cx + R[1] * cy + R[2] * cz + cam.t[0];
+    p[1] = R[3] * cx + R[4] * cy + R[5] * cz + cam.t[1];
+    p[2] = R[6] * cx + R[7] * cy + R[8] * cz + cam.t[2];
+    sx += p[0];
+    sy += p[1];
+  }
+  // Bearing of everything coloured — the SCAN's hint, and it survives every
+  // rejection below exactly as it does in BLOBS.
+  s.hint = std::atan2(static_cast<float>(sy / n_live),
+                      static_cast<float>(sx / n_live));
+
+  // TOP PLANE. A percentile, not the max: stray pixels put the max above the
+  // robot's own root, and one of them would carry the band with it.
+  std::vector<float> zs(n_live);
+  for (int n = 0; n < n_live; ++n) zs[n] = pts_[n * 3 + 2];
+  const int kth = std::min(n_live - 1,
+                           std::max(0, static_cast<int>(cfg_.mask_top_pct * 0.01f *
+                                                        (n_live - 1))));
+  std::nth_element(zs.begin(), zs.begin() + kth, zs.end());
+  const float z_top = zs[kth];
+
+  cv::Mat band(depth.rows, depth.cols, CV_8UC1, cv::Scalar(0));
+  for (int n = 0; n < n_live; ++n)
+    if (std::fabs(pts_[n * 3 + 2] - z_top) <= cfg_.mask_band_m)
+      band.ptr<uint8_t>()[idx_[n]] = 255;
+
+  // ONE component: the band still holds anything else at cube height, and the
+  // cube is the connected thing the camera is pointed at.
+  cv::Mat cc, stats, centroids;
+  const int n_cc = cv::connectedComponentsWithStats(band, cc, stats, centroids, 8);
+  if (n_cc < 2) {
+    s.reason = "no_blob";
+    return s;
+  }
+  int best_cc = 1, best_area = 0;
+  for (int c = 1; c < n_cc; ++c) {
+    const int a = stats.at<int>(c, cv::CC_STAT_AREA);
+    if (a > best_area) {
+      best_area = a;
+      best_cc = c;
+    }
+  }
+  cv::Mat mask = (cc == best_cc);
+  if (cfg_.mask_erode > 0)
+    cv::erode(mask, mask, cv::Mat(), cv::Point(-1, -1), cfg_.mask_erode);
+
+  // Keep only the live points the mask survived — no second unprojection.
+  int n_top = 0;
+  std::vector<int> vote(NUM_COLORS, 0);
+  for (int n = 0; n < n_live; ++n) {
+    if (!mask.ptr<uint8_t>()[idx_[n]]) continue;
+    std::copy(&pts_[n * 3], &pts_[n * 3] + 3, &pts_[n_top * 3]);
+    ++vote[labels_.ptr<int16_t>()[idx_[n]]];
+    ++n_top;
+  }
+  if (n_top < min_px) {
+    s.reason = "no_blob";
+    return s;
+  }
+
+  std::vector<cv::Point2f> xy(n_top);
+  std::vector<float> zt(n_top);
+  for (int n = 0; n < n_top; ++n) {
+    xy[n] = {pts_[n * 3], pts_[n * 3 + 1]};
+    zt[n] = pts_[n * 3 + 2];
+  }
+  const cv::RotatedRect rect = cv::minAreaRect(xy);
+  const float vis = std::min(rect.size.width, rect.size.height) / edge;
+  const float big = std::max(rect.size.width, rect.size.height) / edge;
+  const float up_dot = std::fabs(plane_normal(pts_.data(), n_top)[2]);
+  const int color =
+      static_cast<int>(std::max_element(vote.begin(), vote.end()) - vote.begin());
+
+  // Every colour that got a vote, sharing the one geometry — a calibration bag
+  // has to show what the face was SPLIT into, not only what won.
+  for (int c = 0; c < NUM_COLORS; ++c)
+    if (vote[c] > 0)
+      last_.push_back({c, vote[c], up_dot, vis, big, rect.center.x, rect.center.y});
+
+  if (up_dot < cfg_.up_dot_min) {
+    s.reason = "side_face";
+    return s;
+  }
+  if (big > cfg_.big_max) {
+    s.reason = "too_big";
+    return s;
+  }
+  if (vis < cfg_.color_gate()) {
+    s.reason = "cut_face";
+    return s;
+  }
+  s.color_ok = true;
+  s.color = color;
+  s.pos = {rect.center.x, rect.center.y, median_of(zt) - half_extent_};
+  s.phi = fold(rect.angle * static_cast<float>(M_PI) / 180.0f);
+  s.n_px = vote[color];
+  // The COLOUR is settled by the plane test; only the CENTRE needs the face
+  // whole, because a partial view puts the rect centre off by half the missing
+  // strip. Same two gates as BLOBS, same reason.
+  s.ok = vis >= cfg_.min_visible;
+  s.reason = s.ok ? "ok" : "cut_face";
   return s;
 }
 

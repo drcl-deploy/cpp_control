@@ -161,3 +161,51 @@ classification pixels without changing the bag.
 
 A complete run contains 30 snapshots for each of six colors and 60 negative
 snapshots: 240 selected RGB-D frames total.
+
+## 9. Tune the observe block from the bag
+
+Python fits the palette; **C++ scores every candidate**, so a sweep can never
+tune against a second implementation of the read.
+
+```bash
+ros2 run cpp_control repose_export_observe_bag.py /path/to/bag /tmp/reads
+ros2 run cpp_control repose_tune_observe.py   --reads /tmp/reads --table /path/to/sys1_clips.npz   --base   cyclonedds_ws/src/cpp_control/config/repose_planner/g1_sim.yaml   --write  cyclonedds_ws/src/cpp_control/config/repose_planner/g1_real.yaml
+```
+
+The exporter reads the bag's sqlite directly and accepts both the current
+`/vibe/planner/calibration/*` topics and the pre-rename `/vibe/sys1/*`, so an
+older bag still replays.
+
+Score any config, any time — this is the number, not an estimate of it:
+
+```bash
+repose_planner_selftest --replay /tmp/reads --table sys1_clips.npz   --config config/repose_planner/g1_real.yaml --summary
+```
+
+| flag | why |
+|---|---|
+| `--max-fp N` | most no-cube frames the winner may call a colour. **Default 0**: a false colour on empty floor makes the planner commit a clip at a cube that is not there, which a wrong colour does not |
+| `--measure-band-m` | thickness of the slab used to MEASURE the palette. Not the runtime knob |
+
+The palette is measured off a geometry-only cube-top mask, so it carries no
+prior from the palette it replaces.
+
+**It is also bound to the camera state that recorded the frames.** These were
+recorded with the D435i's auto exposure and auto white balance both on — which
+is why the blue face reads cyan. Lock either, or relight the room, and the
+twelve numbers are stale: re-record and re-run.
+
+## 10. Check it live
+
+No staging, no clicks, no bag — the palette, here, now. The onboard side is the
+same `g1_repose_planner_calibration.launch.py` (controller locked in its nominal
+SONIC stand, no reference motion, no planner reference):
+
+```bash
+ros2 launch cpp_control g1_repose_planner_calibration.launch.py   artifact_dir:=<export> env:=real          # env:=sim in sim2sim
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_check_observe.sh
+```
+
+It shows the frame, the classifier's label plane, the verdict, and **every
+candidate the gates threw away** — one face split across two chromaticity cells
+shows up there and nowhere else.

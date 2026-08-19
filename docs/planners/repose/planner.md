@@ -237,12 +237,18 @@ ablation ledger — and supplies the defaults; every key overrides it.
 
 | block | holds |
 |---|---|
+| `observe.read` | **`blobs`** or **`mask`** — which order the gates run in (§5.6) |
 | `observe.palette` | the 12 chromaticity refs, `<colour>: {lit, shaded}` RGB. Partial is fine: an unlisted colour keeps the preset's row |
-| `observe.gates` | which pixels are colour at all — `min_value`, `min_rel_sat`, `min_area_frac`, `min_px_floor` |
+| `observe.gates` | which pixels are colour at all — `min_value`, `min_rel_sat`, `min_area_frac`, `min_px_floor`, `chroma_reject` |
 | `observe.geometry` | which blobs are a top face — `up_dot_min`, `min_visible`, `min_visible_color`, `big_max`, `slab_frac`, `z_min_m`. All in cube edges or unit normals, so none of it is range- or resolution-dependent |
+| `observe.mask` | `mask` read only — `top_pct`, `band_m`, `erode` |
 | `belief` | `window`, `min_votes`, `omega_still` |
 | `loop` | the ladder and the stills |
 | `seam` | lead-in, blend, the v7.1 ramp |
+
+Two files ship, and the launch picks between them with `env:=sim|real`
+(**sim by default**): `g1_sim.yaml` is the untuned base, `g1_real.yaml` carries a
+measured palette and the `mask` read. They differ ONLY in `observe:`.
 
 Two rules the loader enforces, both by throwing:
 
@@ -256,6 +262,37 @@ Two rules the loader enforces, both by throwing:
 
 The pre-split flat `knobs:` block is refused by name, with the migration in the
 message.
+
+## 5.6 Two reads, and why hardware needed the second
+
+`observe.read` picks the ORDER of the same gates. Nothing else differs — same
+thresholds, same meanings, same units.
+
+| | `blobs` (shipping) | `mask` |
+|---|---|---|
+| first | colour: six independent blob extractions | geometry: one cube-top plane off every coloured pixel |
+| then | gate each on geometry, **highest z wins** | modal colour over the one mask |
+| fails when | one face straddles two chromaticity cells and its own fragment out-heights it | the cube is not the highest coloured thing in frame |
+
+Measured on `bags/sys1_observe` — 180 labelled hardware frames, 60 no-cube —
+scored by the production `CubeSight` through `repose_planner_selftest --replay`:
+
+| config | accuracy | false positives |
+|---|---|---|
+| `blobs`, sim palette (**shipping**) | 53.9% | 0/60 |
+| `blobs`, measured palette | 61.7% | 4/60 |
+| `mask`, sim palette | 48.9% | 0/60 |
+| **`mask`, measured palette, `chroma_reject` 0.06, `min_rel_sat` 0.15** | **83.3%** | **0/60** |
+
+**Neither half works alone.** The palette alone moves `blobs` by 8 points because
+54 of its 83 errors are the true blob passing every gate and then losing the
+height contest; the read alone is worse than shipping because the sim palette
+mislabels the pixels it is now voting over. The gain is the pair.
+
+`chroma_reject` is what makes the pair safe: with a "none" class, `min_rel_sat`
+can drop to 0.15 to catch a pale face — the deployment's green sits at 0.28
+median relative saturation, right on the old 0.22 gate — without the floor
+walking into the vote. All 60 no-cube frames still answer "none".
 
 ## 6. Running it
 

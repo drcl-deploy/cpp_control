@@ -1,0 +1,152 @@
+# the planner — the retrieval planner above the repose SONIC policy.
+#
+# THIS FILE IS THE TRUTH. `version` names a preset in
+# include/cpp_control/planners/repose/cfg.hpp — a measured point in the ablation
+# ledger — and every key below overrides it. Nothing the observe or plan stack
+# reads is reachable any other way, and an unknown key is a hard error: a knob
+# that is silently ignored reads as tuned and behaves as stock.
+#
+# THE THREE KNOBS THE PRESETS DISAGREE ON ARE DELIBERATELY ABSENT:
+# `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Writing
+# them here would pin them, and `version:` would stop switching the ablations it
+# exists to switch. Write one only to override a preset on purpose — and expect
+# `repose_planner_selftest --config` to tell you that you did.
+
+version: v7        # each version is ONE knob over the last: v6 has no NOMINAL
+                   # STAND (62.5% -> 95%), v7.1 adds the ENTER ramp (§7.1).
+                   # Both ablations run from this one line.
+target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
+                   # goal_color overrides it, so the controller and the planner boot agreeing
+
+rate_hz: 20.0      # planner tick: OBSERVE + PLAN every tick, ACT only when the controller
+                   # says it finished. Soft real-time; ~2 ms of work per tick.
+stale_s: 1.0       # lowstate silence that parks the planner. NOT the camera —
+                   # losing that starves the belief, which plans the stance
+
+# The 78-row alphabet (bench-produced, offline — the bake stays Python).
+clips: /home/loki/drcl_projects/vibe/data/sys1_clips.npz
+
+frames:
+  # retargeted: slice the spans out of the dataset at boot (~6.6 MB resident)
+  # baked:      one bundle written by `repose_planner_selftest --bake`, for the Orin
+  source: retargeted
+  path: /home/loki/drcl_projects/vibe/data/retargeted_motions
+  # Which npz each clip came from — `library` is only read for `retargeted`,
+  # and only for its `motion_files` list.
+  library: /home/loki/drcl_projects/vibe/data/sys1_library.npz
+
+# D435i colour stream, head-mounted. Intrinsics ride per-plane on the wire, so
+# there is nothing to calibrate here — only where to connect.
+#
+# `host` is the STANDALONE fallback: under g1_repose_planner.launch.py the same
+# `camera_ip` reaches the encoder and the planner (from VIBE_CAMERA_ADDRESS),
+# so the two halves of a run cannot end up watching different cameras. Same for
+# `target_color` above, which the launch feeds from its `goal_color`.
+camera:
+  host: 127.0.0.1
+  port: 5555
+
+# Camera in torso_link, verbatim from unitree_robots/g1/g1_29dof.xml. The waist
+# chain (yaw/roll/pitch) is the only kinematics between it and the pelvis —
+# which is exactly why v7 works: a nominal stance has waist = 0, so the torso is
+# vertical and the camera reads back the 45 deg below-horizontal it is bolted at.
+# The node logs the achieved gaze at boot and warns if it is not the mount angle.
+mount:
+  xyz: [0.05, 0.0, 0.4318]
+  quat: [0.6533, 0.2706, -0.2706, -0.6533]   # wxyz, 45 deg down-forward
+
+# ── OBSERVE ──────────────────────────────────────────────────────────────────
+# RGB + depth -> the cube's top colour and pose. Depth is unprojected into the
+# gravity-aligned base frame first, so every geometry test below is metres, not
+# an image statistic.
+# ── TUNED, not designed ──────────────────────────────────────────
+#
+# repose_tune_observe.py, 240 reads (180 labelled, 60 negative)
+# reads: /tmp/claude-1000/-home-loki-unitree-ros2/9ee93bf6-d3a4-47cc-a912-b3d4fbb1a4b6/scratchpad/reads
+# score: 83.3% colour accuracy, 0 false positives on the no-cube frames,
+#        against 61.7% for the shipping blobs read on the same frames.
+#        Measured by the PRODUCTION CubeSight — repose_planner_selftest
+#        --replay <reads> --config <this file> reproduces it.
+#
+# The palette is bound to the camera state that recorded those frames.
+# The D435i's auto exposure and auto white balance were both ON, and the
+# blue face reads cyan because of it. Lock either one, or relight the
+# room, and these twelve numbers are stale — re-record and re-run.
+
+observe:
+  read: mask
+  proc_width: 0
+
+  # MEASURED, not designed: medians over the geometry-only cube-top
+  # masks of the labelled bag this file was tuned from. lit/shaded is
+  # that pool split at its own median value.
+  palette:
+    red:    {lit: [255, 120, 80], shaded: [255, 131, 114]}   # 26 frames, 85995 px
+    orange: {lit: [255, 168, 9], shaded: [255, 189, 57]}   # 30 frames, 88945 px
+    green:  {lit: [195, 255, 223], shaded: [224, 255, 240]}   # 30 frames, 78491 px
+    yellow: {lit: [255, 252, 85], shaded: [255, 164, 94]}   # 30 frames, 42850 px
+    blue:   {lit: [0, 190, 255], shaded: [32, 196, 255]}   # 28 frames, 107932 px
+    pink:   {lit: [255, 159, 250], shaded: [253, 136, 255]}   # 30 frames, 125121 px
+
+  gates:
+    min_value: 30
+    min_rel_sat: 0.15
+    min_area_frac: 0.002
+    min_px_floor: 8
+    chroma_reject: 0.06   # 0 = every lit pixel votes
+
+  geometry:
+    up_dot_min: 0.90
+    min_visible: 0.60
+    min_visible_color: 0.0
+    big_max: 1.4
+    slab_frac: 0.25
+    z_min_m: 0.05
+
+  mask:
+    top_pct: 97.0
+    band_m: 0.12
+    erode: 1
+
+belief:
+  window: 8        # reads kept; at 20 Hz this is the last 0.4 s
+  min_votes: 3     # agreeing reads before the belief may be acted on. Raise it if
+                   # the palette is noisy — it buys recall back without touching
+                   # a single perception threshold
+  omega_still: 0.15  # rad/s of CAMERA motion above which a frame is blur, not
+                     # evidence. A held stance sits near 0.05, a 90 deg sweep at
+                     # 0.96 — read `omega_cam` and `accept_rate` off
+                     # /vibe/planner/status to place it between the two
+
+# ── THE LOOP ─────────────────────────────────────────────────────────────────
+loop:
+  # nominal_stand      OWNED BY `version`. true is v7, false is v6: the library's
+  #                    stand frame, whose waist aims the head at the near ground.
+  #                    The single largest win in the algorithm's history, and a
+  #                    GAZE fix, not a perception one — 62.5% -> 95% (n=120, z=6.15)
+  pattern: RRF          # a Hamiltonian cycle on the cube's 6 faces; FBLR only
+  retry_limit: 3        # commits at a rung before swapping the axis
+  arm_radius: 0.30      # m/rad: heading residual -> one distance
+  horizon_gain: 0.3     # penalise a clip's exit range
+  stance_band_m: 0.70
+  scan_sweep_deg: 90.0  # swept over one SCAN, signed by the hint
+  settle_steps: 40      # hold for one SETTLE (yaw = 0 throughout, so all of it reads)
+  scan_steps: 110       # hold for one SCAN; with scan_sweep_deg this sets the RATE
+  hold_tail: 15         # quiescent frames a SCAN ends on — the only thing that
+                        # makes a SCAN observable at all, since every frame of the
+                        # sweep itself fails omega_still. Sized in EVIDENCE: 15
+                        # frames at 50 fps is 0.6 s, ~12 reads at a 20 Hz tick
+
+# ── THE SEAM ─────────────────────────────────────────────────────────────────
+# Live pose -> a clip's entry pose. No sim twin: hardware has no teleport.
+seam:
+  blend_frames: 12      # live->reference offset decay; only if there is no lead-in
+  lead_in_rate: 1.5     # rad/s MEAN ramp onto a clip's entry; 0 = blend only
+  lead_in_min_s: 0.2
+  # lead_in_max_s       OWNED BY `version`. 0.6 under v7, 1.2 under v7.1, which
+  #                     needs the room: 0.6 truncates even the MEDIAN heading ask
+  # enter_yaw_rate_deg  OWNED BY `version`. 0 is v7; v7.1 is 50, putting the
+  #                     HEADING in the ramp instead of stepping it at engage.
+  #                     A PEAK rate — raising it shortens the ramp
+  enter_joint_rate: 2.0  # the same PEAK bound on the largest single joint the
+                         # ramp moves, rad/s. Whichever term needs longer wins

@@ -30,7 +30,6 @@ def generate_launch_description():
     cpp = get_package_share_directory('cpp_control')
     bridge = get_package_share_directory('cdr_tcp_bridge')
     common = os.path.join(cpp, 'launch', 'g1_vibe_sonic.launch.py')
-    planner_config = os.path.join(cpp, 'config', 'repose_planner', 'g1.yaml')
     bridge_config = os.path.join(bridge, 'config', 'repose_calibration.yaml')
 
     return LaunchDescription([
@@ -38,7 +37,13 @@ def generate_launch_description():
             'artifact_dir',
             description='Absolute Repose checkpoint/export directory'),
         DeclareLaunchArgument('checkpoint', default_value=''),
-        DeclareLaunchArgument('planner_config', default_value=planner_config),
+        DeclareLaunchArgument('env', default_value='sim',
+                              choices=['sim', 'real'],
+                              description='which observe block to load'),
+        DeclareLaunchArgument(
+            'planner_config',
+            default_value=[os.path.join(cpp, 'config', 'repose_planner', 'g1_'),
+                           LaunchConfiguration('env'), '.yaml']),
         DeclareLaunchArgument(
             'camera_ip',
             default_value=os.environ.get('VIBE_CAMERA_ADDRESS', '127.0.0.1')),

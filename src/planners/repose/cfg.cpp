@@ -105,18 +105,36 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   Cfg c = Cfg::preset(root["version"] ? root["version"].as<std::string>() : "v7");
 
   const YAML::Node obs = root["observe"];
-  reject_unknown(obs, "observe", {"proc_width", "palette", "gates", "geometry"});
+  reject_unknown(obs, "observe",
+                 {"read", "proc_width", "palette", "gates", "geometry", "mask"});
   Reader{obs}("proc_width", c.proc_width);
+  if (obs && obs["read"]) {
+    const std::string r = obs["read"].as<std::string>();
+    if (r == "blobs") c.read = Cfg::Read::BLOBS;
+    else if (r == "mask") c.read = Cfg::Read::MASK;
+    else
+      throw std::runtime_error("repose planner: observe.read must be blobs | mask, got '" +
+                               r + "'");
+  }
   read_palette(obs ? obs["palette"] : YAML::Node(), c.palette);
+
+  const YAML::Node mk = obs ? obs["mask"] : YAML::Node();
+  reject_unknown(mk, "observe.mask", {"top_pct", "band_m", "erode"});
+  Reader r_mk{mk};
+  r_mk("top_pct", c.mask_top_pct);
+  r_mk("band_m", c.mask_band_m);
+  r_mk("erode", c.mask_erode);
 
   const YAML::Node g = obs ? obs["gates"] : YAML::Node();
   reject_unknown(g, "observe.gates",
-                 {"min_value", "min_rel_sat", "min_area_frac", "min_px_floor"});
+                 {"min_value", "min_rel_sat", "min_area_frac", "min_px_floor",
+                  "chroma_reject"});
   Reader r_g{g};
   r_g("min_value", c.min_value);
   r_g("min_rel_sat", c.min_rel_sat);
   r_g("min_area_frac", c.min_area_frac);
   r_g("min_px_floor", c.min_px_floor);
+  r_g("chroma_reject", c.chroma_reject);
 
   const YAML::Node geo = obs ? obs["geometry"] : YAML::Node();
   reject_unknown(geo, "observe.geometry",
@@ -171,7 +189,10 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
 }
 
 bool Cfg::operator==(const Cfg& o) const {
-  return proc_width == o.proc_width && min_area_frac == o.min_area_frac &&
+  return read == o.read && mask_top_pct == o.mask_top_pct &&
+         mask_band_m == o.mask_band_m && mask_erode == o.mask_erode &&
+         chroma_reject == o.chroma_reject &&
+         proc_width == o.proc_width && min_area_frac == o.min_area_frac &&
          min_px_floor == o.min_px_floor && min_visible == o.min_visible &&
          min_visible_color == o.min_visible_color && min_value == o.min_value &&
          min_rel_sat == o.min_rel_sat && up_dot_min == o.up_dot_min &&
@@ -245,6 +266,15 @@ void Cfg::validate() const {
         "repose planner: slab_frac is a depth in cube edges and must be in (0, 1]");
   if (z_min_m <= 0.0f)
     throw std::runtime_error("repose planner: z_min_m must be > 0");
+  if (chroma_reject < 0.0f)
+    throw std::runtime_error(
+        "repose planner: chroma_reject must be >= 0 (0 is off, and is the shipping read)");
+  if (mask_top_pct <= 0.0f || mask_top_pct > 100.0f)
+    throw std::runtime_error("repose planner: observe.mask.top_pct must be in (0, 100]");
+  if (mask_band_m <= 0.0f)
+    throw std::runtime_error("repose planner: observe.mask.band_m must be > 0");
+  if (mask_erode < 0)
+    throw std::runtime_error("repose planner: observe.mask.erode must be >= 0");
   for (float v : palette)
     if (!(v >= 0.0f && v <= 255.0f))
       throw std::runtime_error(

@@ -46,6 +46,38 @@ struct Cfg {
   float slab_frac = 0.25f;
   Palette palette = PALETTE_SIM;
 
+  /// How a frame becomes ONE answer. Two orders of the same gates.
+  ///
+  ///   BLOBS  colour first: six independent blob extractions, each gated on
+  ///          geometry, and the HIGHEST surviving one wins. The shipping read.
+  ///   MASK   geometry first: one cube-top mask off every coloured pixel, then
+  ///          the modal colour over it.
+  ///
+  /// Measured on bags/sys1_observe (180 labelled hardware frames, 60 negatives):
+  /// BLOBS 55%, and no palette or gate setting moves it — 54 of 83 errors are
+  /// the true blob passing every gate and losing the height contest to a
+  /// spurious one. MASK with a re-measured palette, `chroma_reject` and a
+  /// loosened `min_rel_sat` reaches 84% at the same 0/60 false positives.
+  /// Neither half works alone: MASK on the sim palette is 49%.
+  enum class Read { BLOBS, MASK };
+  Read read = Read::BLOBS;
+
+  /// MASK only. The top face is a horizontal plane `mask_band_m` thick, found at
+  /// the `mask_top_pct`-th percentile of live height — a percentile, not the max,
+  /// because stray pixels put the max above the robot's root. Then the largest
+  /// connected component, eroded by `mask_erode` to drop the mixed pixels a
+  /// JPEG leaves on every edge.
+  float mask_top_pct = 97.0f;
+  float mask_band_m = 0.08f;
+  int mask_erode = 1;
+
+  /// Chromaticity distance beyond which a pixel is NO colour rather than the
+  /// nearest of six. 0 disables it, which is the shipping behaviour: the
+  /// classifier has no "none" class, so every lit pixel in the frame votes.
+  /// Applies to both reads; it is what lets MASK loosen `min_rel_sat` without
+  /// letting the floor in.
+  float chroma_reject = 0.0f;
+
   /// v7: hold the robot's NOMINAL STANCE in a still mode, not the library's
   /// stand frame. The planner's own vocabulary — the borrowed pose was picked for
   /// quietness and carries a waist that aims the head at the near ground.
