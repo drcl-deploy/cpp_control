@@ -19,6 +19,11 @@ hardware workflows.
 | who commits references | you, `publish-motion` then `A` | `A` arms the planner; it then commits every ~2 s |
 | controls | `RB` stand, `L1` prep, `A` run | `RB` stand + disarm, `A` arm + run — no L1 prep |
 | extra terminal | — | the console, to set the target colour and re-arm |
+| observe block | — | `env:=sim` or `env:=real` (§2.5) |
+
+The planner also **observes whenever lowstate is alive**, armed or not. The
+console shows the belief before you press `A`, which is the cheapest way to find
+out the palette is wrong — no arming, no commit, robot standing still.
 
 ## 2. Camera: depth is mandatory
 
@@ -35,6 +40,59 @@ camera_depth: 1
 
 The encoder and the planner both connect to that one server on port `5555`;
 it serves multiple clients and the launch hands both halves the same address.
+
+## 2.5 Which observe block: `env:=sim` or `env:=real`
+
+Two configs ship. They differ **only** in the `observe:` block — same clips, same
+ladder, same seam, same `version: v7` — so switching them changes what the
+planner SEES and nothing about what it does with it.
+
+| | `config/repose_planner/g1_sim.yaml` | `config/repose_planner/g1_real.yaml` |
+|---|---|---|
+| `env:=` | `sim` (**default**) | `real` |
+| `observe.read` | `blobs` — colour first, six candidates, highest wins | `mask` — geometry first, one cube-top plane, modal colour |
+| palette | measured off the SIM renderer | measured off `bags/sys1_observe`, 180 labelled hardware frames |
+| `chroma_reject` | 0 — every lit pixel votes | 0.06 — a real "none" class |
+| `min_rel_sat` | 0.22 | 0.15 (safe only because geometry gates first) |
+
+On the hardware bag, scored by the production `CubeSight`:
+
+| config | colour accuracy | false positives on 60 no-cube frames |
+|---|---|---|
+| `g1_sim.yaml` | 53.9% | 0/60 |
+| `g1_real.yaml` | **83.3%** | 0/60 |
+
+```bash
+ros2 launch cpp_control g1_repose_planner.launch.py artifact_dir:=<export>              # sim
+ros2 launch cpp_control g1_repose_planner.launch.py artifact_dir:=<export> env:=real     # hardware
+```
+
+`env` works the same on `g1_repose_planner_calibration.launch.py`. `planner_config:=`
+still takes an explicit path and overrides `env` entirely.
+
+**A/B them without a robot.** Both are scored offline against a labelled bag, so
+the comparison costs seconds and needs no hardware:
+
+```bash
+ros2 run cpp_control repose_export_observe_bag.py bags/sys1_observe/<run> /tmp/reads
+for env in sim real; do
+  ros2 run cpp_control repose_planner_selftest \
+    --replay /tmp/reads --summary \
+    --table /path/to/sys1_clips.npz \
+    --config config/repose_planner/g1_${env}.yaml | grep SCORE
+done
+```
+
+**A/B them live.** `repose_check_observe.sh` (§6) shows the verdict frame by
+frame with the controller locked in nominal stand — relaunch with the other
+`env:` and watch the same cube. Nothing commits a reference in that rig, so it is
+the safe half of a hardware session.
+
+**`sim` is the default on purpose.** `g1_real.yaml`'s palette is bound to the
+camera state that recorded its bag — the D435i's auto exposure and auto white
+balance were both ON, which is why the deployment's blue face reads cyan. Lock
+either, or relight the room, and those twelve numbers are stale: re-record and
+re-run the tuner ([color_calibration.md §9](color_calibration.md)).
 
 ## 3. Launch
 
@@ -136,6 +194,17 @@ telemetry, not the selected calibration frames. Both deployment workflows and
 the 30-per-color/60-negative protocol are in
 [color_calibration.md](color_calibration.md).
 
+To just LOOK at what the observe block decides — no staging, no clicks, no bag —
+use the check rig instead. Same onboard launch, different offboard half:
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_check_observe.sh
+```
+
+It shows the frame, the classifier's label plane, the verdict, and every
+candidate the gates threw away. Fitting a palette from a bag and scoring a
+config are [color_calibration.md §9](color_calibration.md).
+
 ## 7. Reading a run
 
 | symptom | look at | likely |
@@ -143,6 +212,8 @@ the 30-per-color/60-negative protocol are in
 | never leaves `settle`, `belief` says `blind` | `gate` row | **`omega_still` too tight.** `read 0% of frames` means no frame ever passed the quiescence gate, so the planner stands still gathering nothing. Raise it toward the `ω` the row reports while settled |
 | never leaves `settle`, `belief` says `3/12` but never carries | `belief` reason column | no read: palette, or depth missing |
 | `scan` forever | `belief` reason column | `side_face` — check the boot gaze line |
+| the belief names the **wrong colour**, confidently, every frame | `repose_check_observe.sh` candidates row | the palette, not the belief. A systematic misread agrees with itself, so `belief.min_votes` cannot filter it — raising it only makes the planner slower to be wrong. Try `env:=real`; if it is already `real`, the lighting has moved and the palette needs re-fitting |
+| one face shows up as **two** candidates | same | it straddles two chromaticity cells. Under `read: blobs` the fragments compete on height and the wrong one can win — this is what `read: mask` exists for |
 | commits but the cube leaves view | `plan cost`, `frames` | wrong pool; confirm `version: v7` |
 | planner parked | the controller row `idle` | the human owns the robot; press `A` |
 | camera dies mid-run | robot returns to the nominal stance and holds | by design — a starved belief plans the stance. `Ctrl-C` when done |

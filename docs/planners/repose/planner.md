@@ -257,8 +257,9 @@ Two rules the loader enforces, both by throwing:
 2. **The three knobs the presets disagree on are absent from the shipped file** —
    `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Pinning
    them in yaml would make `version:` stop switching the ablations it exists to
-   switch. `repose_planner_selftest --config <file>` asserts all three presets
-   still round-trip through it, so the day someone pins one, the test says so.
+   switch. `ros2 run cpp_control repose_planner_selftest --config <file>
+   --check-preset-parity` asserts all three presets still round-trip through it,
+   so the day someone pins one, the test says so.
 
 The pre-split flat `knobs:` block is refused by name, with the migration in the
 message.

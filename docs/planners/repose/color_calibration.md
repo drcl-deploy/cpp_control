@@ -169,7 +169,10 @@ tune against a second implementation of the read.
 
 ```bash
 ros2 run cpp_control repose_export_observe_bag.py /path/to/bag /tmp/reads
-ros2 run cpp_control repose_tune_observe.py   --reads /tmp/reads --table /path/to/sys1_clips.npz   --base   cyclonedds_ws/src/cpp_control/config/repose_planner/g1_sim.yaml   --write  cyclonedds_ws/src/cpp_control/config/repose_planner/g1_real.yaml
+ros2 run cpp_control repose_tune_observe.py \
+  --reads /tmp/reads --table /path/to/sys1_clips.npz \
+  --base  config/repose_planner/g1_sim.yaml \
+  --write config/repose_planner/g1_real.yaml
 ```
 
 The exporter reads the bag's sqlite directly and accepts both the current
@@ -179,7 +182,9 @@ older bag still replays.
 Score any config, any time — this is the number, not an estimate of it:
 
 ```bash
-repose_planner_selftest --replay /tmp/reads --table sys1_clips.npz   --config config/repose_planner/g1_real.yaml --summary
+ros2 run cpp_control repose_planner_selftest \
+  --replay /tmp/reads --table sys1_clips.npz \
+  --config config/repose_planner/g1_real.yaml --summary
 ```
 
 | flag | why |
@@ -202,7 +207,8 @@ same `g1_repose_planner_calibration.launch.py` (controller locked in its nominal
 SONIC stand, no reference motion, no planner reference):
 
 ```bash
-ros2 launch cpp_control g1_repose_planner_calibration.launch.py   artifact_dir:=<export> env:=real          # env:=sim in sim2sim
+ros2 launch cpp_control g1_repose_planner_calibration.launch.py \
+  artifact_dir:=<export> env:=real          # env:=sim in sim2sim
 bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_check_observe.sh
 ```
 
