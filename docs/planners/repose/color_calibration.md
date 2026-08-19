@@ -1,5 +1,8 @@
 # The planner color calibration
 
+What the observe block actually does with these frames, and why there are two
+reads to tune: [observe_calibration.md](observe_calibration.md).
+
 Collect independent RGB-D snapshots for the six-color palette, `min_value`,
 and `min_rel_sat`. This workflow does not tune geometry or kinematics.
 

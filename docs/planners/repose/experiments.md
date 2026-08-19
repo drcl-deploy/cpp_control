@@ -47,6 +47,9 @@ Two configs ship. They differ **only** in the `observe:` block — same clips, s
 ladder, same seam, same `version: v7` — so switching them changes what the
 planner SEES and nothing about what it does with it.
 
+What the two reads mean, and why the palette alone does not fix either:
+[observe_calibration.md](observe_calibration.md).
+
 | | `config/repose_planner/g1_sim.yaml` | `config/repose_planner/g1_real.yaml` |
 |---|---|---|
 | `env:=` | `sim` (**default**) | `real` |

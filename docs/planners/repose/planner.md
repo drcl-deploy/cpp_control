@@ -267,7 +267,8 @@ message.
 ## 5.6 Two reads, and why hardware needed the second
 
 `observe.read` picks the ORDER of the same gates. Nothing else differs — same
-thresholds, same meanings, same units.
+thresholds, same meanings, same units. Full theory, with the diagrams:
+[observe_calibration.md](observe_calibration.md).
 
 | | `blobs` (shipping) | `mask` |
 |---|---|---|
