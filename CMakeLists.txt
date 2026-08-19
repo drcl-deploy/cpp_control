@@ -22,6 +22,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionReference.msg"
   "msg/Sys0Status.msg"
   "msg/Sys1Status.msg"
+  "msg/Sys1Observation.msg"
+  "msg/Sys1CalibrationState.msg"
+  DEPENDENCIES std_msgs
 )
 
 # Optional robot-specific message packages
@@ -244,6 +247,17 @@ if(OpenCV_FOUND)
     rosidl_target_interfaces(g1_sys1_repose_node
       ${PROJECT_NAME} "rosidl_typesupport_cpp")
     list(APPEND INSTALL_TARGETS g1_sys1_repose_node)
+
+    add_executable(g1_sys1_observe_node src/sys1/observe_node.cpp)
+    target_include_directories(g1_sys1_observe_node
+      PRIVATE ${vision_encoders_INCLUDE_DIRS})
+    target_link_libraries(g1_sys1_observe_node
+      cpp_control_sys1 yaml-cpp)
+    ament_target_dependencies(g1_sys1_observe_node
+      rclcpp sensor_msgs std_msgs unitree_hg vision_encoders)
+    rosidl_target_interfaces(g1_sys1_observe_node
+      ${PROJECT_NAME} "rosidl_typesupport_cpp")
+    list(APPEND INSTALL_TARGETS g1_sys1_observe_node)
   else()
     message(STATUS "sys1 node disabled -- needs unitree_hg + vision_encoders")
   endif()
@@ -293,6 +307,10 @@ install(PROGRAMS
   scripts/vibe/stream_vibes.sh
   scripts/sys1/run_sys1.sh
   scripts/sys1/sys1_console.py
+  scripts/sys1/sys1_observe_viewer.py
+  scripts/sys1/record_sys1_observe.sh
+  scripts/sys1/stream_sys1_observe.sh
+  scripts/sys1/validate_sys1_observe_bag.py
   DESTINATION lib/${PROJECT_NAME}/
 )
 

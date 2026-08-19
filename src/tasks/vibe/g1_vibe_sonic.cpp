@@ -308,6 +308,11 @@ bool G1VibeSonicNode::allow_policy_entry() {
 }
 
 void G1VibeSonicNode::enter_prep() {
+  if (calibration_lock_) {
+    RCLCPP_INFO(this->get_logger(),
+                "calibration lock: L1 ignored; nominal stand stays active");
+    return;
+  }
   if (!task_profile_.requires_prep) {
     RCLCPP_INFO(this->get_logger(), "L1 ignored — %s is stand-reactive",
                 task_profile_.family.c_str());
@@ -393,6 +398,12 @@ void G1VibeSonicNode::restore_stand_reference() {
 }
 
 void G1VibeSonicNode::on_button_a() {
+  if (calibration_lock_) {
+    enter_stand();
+    RCLCPP_INFO(this->get_logger(),
+                "calibration lock: A keeps the nominal stand reference");
+    return;
+  }
   if (task_profile_.stand_reactive) {
     if (pend_ready_) {
       RCLCPP_WARN(

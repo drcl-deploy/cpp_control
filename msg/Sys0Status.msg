@@ -1,6 +1,6 @@
 # What sys0 is ACTUALLY playing. sys1 has no clock of its own: it times every
 # mode off this, so a human pressing B mid-clip cannot leave the planner
-# talking to itself. Published only when the node runs with sys1:=true.
+# talking to itself. Published when sys1 or observation calibration is active.
 
 uint8 ZEROING=0
 uint8 DAMPING=1
@@ -12,6 +12,7 @@ uint8 POLICY=5
 uint8 control_mode
 bool stand              # tracking the stand reference rather than a clip
 bool accepting          # in POLICY and able to take a new reference
+bool calibration_lock   # launch-time guard is refusing every motion source
 
 string reference_id     # the reference currently engaged ('' = none)
 uint32 frame            # playback position within it

@@ -53,6 +53,8 @@ struct Sight {
 /// Per-candidate stats, kept for palette calibration (§8.1) — not the loop.
 struct Candidate {
   int color;
+  int n_px;
+  float up_dot;
   float vis, big, cx, cy;
 };
 

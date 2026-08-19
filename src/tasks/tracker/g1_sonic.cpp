@@ -36,6 +36,7 @@ void G1SonicNode::construct(bool bind_now) {
   const std::string reference_topic =
       this->declare_parameter("reference_topic", "/tracker/reference");
   sys1_ = this->declare_parameter("sys1", false);
+  calibration_lock_ = this->declare_parameter("calibration_lock", false);
 
   if (onnx_path.empty())
     throw std::runtime_error("g1_sonic: onnx_path is required");
@@ -47,6 +48,9 @@ void G1SonicNode::construct(bool bind_now) {
   }
 
   manifest_ = deploy::DeployManifest::load(manifest_path);
+  if (calibration_lock_ && !motion_path.empty())
+    throw std::runtime_error(
+        "g1_sonic: calibration_lock requires an empty motion_path");
   if (!motion_path.empty()) {
     motion_ = std::make_unique<g1::Motion>(g1::Motion::from_npz(
         motion_path, il_ordered ? g1::MJ2IL : std::vector<int>{}));
@@ -65,7 +69,7 @@ void G1SonicNode::construct(bool bind_now) {
       [this](cpp_control::msg::MotionReference::SharedPtr msg) {
         on_reference(msg);
       });
-  if (sys1_) {
+  if (sys1_ || calibration_lock_) {
     status_pub_ = this->create_publisher<cpp_control::msg::Sys0Status>(
         this->declare_parameter("status_topic", "/vibe/sys0/status"),
         rclcpp::QoS(1).best_effort().durability_volatile());
@@ -121,6 +125,11 @@ void G1SonicNode::construct(bool bind_now) {
 // ── Streamed motion (textop wire: [jp29 | jv29 | apos3 | aquat4], IL order) ──
 
 void G1SonicNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+  if (calibration_lock_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "calibration lock: ignoring streamed motion");
+    return;
+  }
   if (typed_reference_seen_) {
     if (!legacy_ignore_logged_) {
       RCLCPP_INFO(this->get_logger(),
@@ -152,6 +161,12 @@ void G1SonicNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg) {
 
 void G1SonicNode::on_reference(
     cpp_control::msg::MotionReference::SharedPtr msg) {
+  if (calibration_lock_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "calibration lock: ignoring MotionReference '%s'",
+                         msg->reference_id.c_str());
+    return;
+  }
   using Msg = cpp_control::msg::MotionReference;
   if (msg->schema_version > Msg::SCHEMA_VERSION || msg->frames == 0 ||
       msg->cols != static_cast<uint32_t>(g1::WIRE_COLS_FULL) ||
@@ -251,6 +266,12 @@ void G1SonicNode::commit_pending_motion() {
 }
 
 void G1SonicNode::on_button_a() {
+  if (calibration_lock_) {
+    enter_stand();
+    RCLCPP_INFO(this->get_logger(),
+                "calibration lock: A keeps the nominal stand reference");
+    return;
+  }
   if (pend_ready_) commit_pending_motion();
   if (!motion_) {
     RCLCPP_WARN_THROTTLE(
@@ -483,6 +504,7 @@ void G1SonicNode::publish_sys0_status() {
   s.control_mode = static_cast<uint8_t>(control_mode_);
   s.stand = stand_mode_;
   s.accepting = control_mode_ == ControlMode::POLICY;
+  s.calibration_lock = calibration_lock_;
   s.reference_id = stand_mode_ ? "" : reference_id_;
   s.frame = static_cast<uint32_t>(std::max(0, active_clock_->frame()));
   s.frames = static_cast<uint32_t>(std::max(0, active_motion_->num_frames));

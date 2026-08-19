@@ -228,13 +228,6 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
     }
     if (n_top < min_px) continue;
 
-    // Pose-invariant: a fitted plane normal in the gravity-aligned base frame
-    // survives any camera pitch, which a depth-slope threshold did not.
-    if (std::fabs(plane_normal(pts_.data(), n_top)[2]) < cfg_.up_dot_min) {
-      why = "side_face";
-      continue;
-    }
-
     // The face is a SQUARE, so fit one: min-area rect gives centre, edge
     // direction and size together. A centroid is foreshortening-biased and PCA
     // is degenerate on a square — both measured, neither fixable by a threshold.
@@ -247,7 +240,17 @@ Sight CubeSight::operator()(const cv::Mat& bgr, const cv::Mat& depth_m,
     const cv::RotatedRect rect = cv::minAreaRect(xy);
     const float vis = std::min(rect.size.width, rect.size.height) / edge;
     const float big = std::max(rect.size.width, rect.size.height) / edge;
-    last_.push_back({col, vis, big, rect.center.x, rect.center.y});
+    // Pose-invariant: a fitted plane normal in the gravity-aligned base frame
+    // survives any camera pitch, which a depth-slope threshold did not. Keep
+    // the rejected candidate's scalar too: calibration bags need to show how
+    // far hardware reads sit from the gate, not only that they failed it.
+    const float up_dot = std::fabs(plane_normal(pts_.data(), n_top)[2]);
+    last_.push_back(
+        {col, n_top, up_dot, vis, big, rect.center.x, rect.center.y});
+    if (up_dot < cfg_.up_dot_min) {
+      why = "side_face";
+      continue;
+    }
     if (big > 1.4f) {  // wider than a cube: this is the floor
       why = "too_big";
       continue;

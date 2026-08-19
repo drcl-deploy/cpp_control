@@ -103,6 +103,10 @@ class G1SonicNode : public G1Node {
 
   // sys1: planner-driven references (all inert when sys1_ is false)
   bool sys1_ = false;
+  /// Acquisition guard: keep the nominal stand reference active and refuse
+  /// every motion source. It never overrides ZEROING/DAMPING or the operator's
+  /// mode buttons; it only prevents POLICY from leaving stand.
+  bool calibration_lock_ = false;
   float pend_entry_yaw_ = 0.0f;  ///< staged reference's chosen heading residual
   float entry_yaw_ = 0.0f;       ///< ...and the committed one's
   std::string pend_reference_id_, reference_id_;

@@ -135,6 +135,8 @@ def _launch_runtime(context, encoder_pkg):
             'prep_min_s': LaunchConfiguration('prep_min_s'),
             'prep_max_s': LaunchConfiguration('prep_max_s'),
             'sys1': LaunchConfiguration('sys1'),
+            'calibration_lock': LaunchConfiguration('calibration_lock'),
+            'status_rate_hz': LaunchConfiguration('status_rate_hz'),
         }],
         on_exit=Shutdown(reason='Vibe controller exited'),
     )
@@ -148,6 +150,7 @@ def _launch_runtime(context, encoder_pkg):
         parameters=[{
             'role': 'server',
             'bind_address': LaunchConfiguration('bridge_address'),
+            'config_path': LaunchConfiguration('bridge_config'),
         }],
         on_exit=Shutdown(reason='Vibe telemetry bridge exited'),
     )
@@ -194,6 +197,12 @@ def generate_launch_description():
             default_value=os.environ.get('VIBE_BRIDGE_ADDRESS', 'gilfoyle-rth'),
             description='CDR/TCP bind address selected by setup.sh/setup_local.sh'),
         DeclareLaunchArgument(
+            'bridge_config',
+            default_value=os.path.join(
+                get_package_share_directory('cdr_tcp_bridge'),
+                'config', 'full.yaml'),
+            description='CDR/TCP channel profile used by server and client'),
+        DeclareLaunchArgument(
             'enable_bridge', default_value='true',
             description='start telemetry server (disable only for no-telemetry benchmarks)'),
         DeclareLaunchArgument('expected_task_family', default_value=''),
@@ -208,6 +217,12 @@ def generate_launch_description():
         DeclareLaunchArgument('sys1', default_value='false',
                               description='planner drives the reference: auto-commit, '
                                           'soft re-engage, prep gate off, status published'),
+        DeclareLaunchArgument(
+            'calibration_lock', default_value='false',
+            description='hold nominal SONIC stand and refuse every motion source'),
+        DeclareLaunchArgument(
+            'status_rate_hz', default_value='20.0',
+            description='Sys0Status publication rate when sys1 or calibration is active'),
 
         OpaqueFunction(function=_launch_runtime, args=[encoder_pkg]),
     ])
