@@ -54,13 +54,13 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
   if (task_profile_.goal == vibe::GoalKind::COLOR &&
       (goal_color_ < 0 || goal_color_ >= vibe::NUM_CUBE_COLORS))
     throw std::runtime_error("g1_vibe: goal_color must be in [0, 5]");
-  // Under a planner the reference stream never steps: sys1 rate-limits its own
+  // Under a planner the reference stream never steps: the planner rate-limits its own
   // lead-in onto every clip, which is the same mechanism the L1 prep provides
   // for a human. Gating on a button here would just deadlock the loop.
-  if (sys1_ && task_profile_.requires_prep) {
+  if (planner_ && task_profile_.requires_prep) {
     task_profile_.requires_prep = false;
     RCLCPP_INFO(this->get_logger(),
-                "sys1 mode: prep gate OFF — the planner ramps onto each clip");
+                "the planner mode: prep gate OFF — the planner ramps onto each clip");
   }
   stale_ticks_ =
       static_cast<int>(this->declare_parameter("token_stale_ticks", 5));
@@ -154,9 +154,9 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
               token_rows_, token_dim_, tokens_topic.c_str(),
               encoder_tag_.c_str(), queries.str().c_str(),
               attn_name_.empty() ? "(absent)" : attn_topic.c_str());
-  if (sys1_) {
+  if (planner_) {
     RCLCPP_INFO(this->get_logger(),
-                "sys1 safety gate: RB locks nominal stand; A arms rollout");
+                "the planner safety gate: RB locks nominal stand; A arms rollout");
   } else if (task_profile_.requires_prep) {
     RCLCPP_INFO(this->get_logger(),
                 "prep gate ON: RB stand -> L1 ramp onto the clip's first frame "
@@ -235,7 +235,7 @@ G1SonicNode::Binding G1VibeSonicNode::make_binding(
                         motion_->object_goal_pos.end(), v);
             }};
 
-  // augmentation: sys1 command stream (orcs robot_motion_cmd_terms)
+  // augmentation: the planner command stream (orcs robot_motion_cmd_terms)
   if (has_group(port, "augmentation")) {
     if (spec.name == "bodywise_contact_cmd")
       return {dst, &spec, [this](float* v) {
@@ -408,9 +408,9 @@ void G1VibeSonicNode::on_button_a() {
                 "calibration lock: A keeps the nominal stand reference");
     return;
   }
-  // Sys1 supplies its own rate-limited lead-in. Here A is the explicit rollout
+  // The planner supplies its own rate-limited lead-in. Here A is the explicit rollout
   // arm, not the open-loop Repose prep/track transition below.
-  if (sys1_) {
+  if (planner_) {
     if (!allow_policy_entry()) return;
     G1SonicNode::on_button_a();
     return;

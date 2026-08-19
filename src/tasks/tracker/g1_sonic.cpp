@@ -35,7 +35,7 @@ void G1SonicNode::construct(bool bind_now) {
       this->declare_parameter("motion_topic", "/tracker/motion");
   const std::string reference_topic =
       this->declare_parameter("reference_topic", "/tracker/reference");
-  sys1_ = this->declare_parameter("sys1", false);
+  planner_ = this->declare_parameter("planner", false);
   calibration_lock_ = this->declare_parameter("calibration_lock", false);
 
   if (onnx_path.empty())
@@ -69,9 +69,9 @@ void G1SonicNode::construct(bool bind_now) {
       [this](cpp_control::msg::MotionReference::SharedPtr msg) {
         on_reference(msg);
       });
-  if (sys1_ || calibration_lock_) {
-    status_pub_ = this->create_publisher<cpp_control::msg::Sys0Status>(
-        this->declare_parameter("status_topic", "/vibe/sys0/status"),
+  if (planner_ || calibration_lock_) {
+    status_pub_ = this->create_publisher<cpp_control::msg::ControllerStatus>(
+        this->declare_parameter("status_topic", "/vibe/controller/status"),
         rclcpp::QoS(1).best_effort().durability_volatile());
     // Its own timer, not the control tick: the planner has to hear "not
     // accepting" too, and that is exactly when policy_control is not running.
@@ -79,7 +79,7 @@ void G1SonicNode::construct(bool bind_now) {
     status_timer_ = this->create_wall_timer(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::duration<double>(1.0 / hz)),
-        [this]() { publish_sys0_status(); });
+        [this]() { publish_controller_status(); });
   }
 
   init();
@@ -225,10 +225,10 @@ void G1SonicNode::on_reference(
   pend_entry_yaw_ = msg->entry_yaw_offset;
   pend_reference_id_ = msg->reference_id;
 
-  // Once A has armed sys1, the reference IS the command: staging every update
+  // Once A has armed the planner, the reference IS the command: staging every update
   // behind another button would stall the closed loop. RB clears the latch, so
   // a reference racing with the operator's stop request can only be staged.
-  if (sys1_ && sys1_active_ && control_mode_ == ControlMode::POLICY) {
+  if (planner_ && planner_active_ && control_mode_ == ControlMode::POLICY) {
     stand_mode_ = false;  // before the commit, so it rebinds active_* to the clip
     commit_pending_motion();
     pending_engage_ = true;
@@ -260,7 +260,7 @@ void G1SonicNode::commit_pending_motion() {
   entry_yaw_ = pend_entry_yaw_;
   reference_id_ = pend_reference_id_;
   pend_entry_yaw_ = 0.0f;
-  if (sys1_) return;  // a planner commits every couple of seconds; stay quiet
+  if (planner_) return;  // a planner commits every couple of seconds; stay quiet
   RCLCPP_INFO(this->get_logger(), "motion committed: %d frames @ %.0f fps",
               motion_->num_frames, static_cast<double>(motion_->fps));
 }
@@ -272,17 +272,17 @@ void G1SonicNode::on_button_a() {
                 "calibration lock: A keeps the nominal stand reference");
     return;
   }
-  if (sys1_) {
-    if (!sys1_active_) {
+  if (planner_) {
+    if (!planner_active_) {
       // Never commit a reference staged before this arm edge. The planner sees
       // accepting=true next and publishes a fresh episode from nominal stand.
       pend_motion_.reset();
       pend_ready_ = false;
       pend_reference_id_.clear();
       pend_entry_yaw_ = 0.0f;
-      sys1_active_ = true;
+      planner_active_ = true;
       RCLCPP_INFO(this->get_logger(),
-                  "sys1 rollout ARMED — holding stand for first fresh plan");
+                  "the planner rollout ARMED — holding stand for first fresh plan");
     }
     return;
   }
@@ -307,11 +307,11 @@ void G1SonicNode::make_stand_motion() {
 }
 
 void G1SonicNode::enter_stand() {
-  if (sys1_ && sys1_active_) {
+  if (planner_ && planner_active_) {
     RCLCPP_INFO(this->get_logger(),
-                "sys1 rollout DISARMED — nominal stand locked");
+                "the planner rollout DISARMED — nominal stand locked");
   }
-  sys1_active_ = false;
+  planner_active_ = false;
   stand_mode_ = true;
   pending_engage_ = true;
   control_mode_ = ControlMode::POLICY;
@@ -487,7 +487,7 @@ void G1SonicNode::fill_tokenizer(float* dst) {
 
 // Two owning pairs, one pair of raw views. A mode switch only changes WHICH
 // pair is read and is safe to defer to the next policy tick; replacing an owner
-// is not, because it frees the object a view may still name — and the sys1
+// is not, because it frees the object a view may still name — and the planner
 // status timer runs outside that tick. So every replacement calls this.
 void G1SonicNode::rebind_active() {
   active_motion_ = stand_mode_ ? stand_motion_.get() : motion_.get();
@@ -517,22 +517,22 @@ void G1SonicNode::engage_reset(bool reset_history) {
                 entry_yaw_ != 0.0f ? " + planner yaw" : "");
 }
 
-void G1SonicNode::publish_sys0_status() {
+void G1SonicNode::publish_controller_status() {
   if (!status_pub_ || !active_motion_ || !active_clock_) return;
-  cpp_control::msg::Sys0Status s;
+  cpp_control::msg::ControllerStatus s;
   s.control_mode = static_cast<uint8_t>(control_mode_);
   s.stand = stand_mode_;
-  // For sys1, accepting means the operator explicitly armed autonomous
+  // For the planner, accepting means the operator explicitly armed autonomous
   // references with A. RB remains in POLICY to run SONIC stand, but is inert
   // from the planner's point of view.
   s.accepting =
-      control_mode_ == ControlMode::POLICY && (!sys1_ || sys1_active_);
+      control_mode_ == ControlMode::POLICY && (!planner_ || planner_active_);
   s.calibration_lock = calibration_lock_;
   s.reference_id = stand_mode_ ? "" : reference_id_;
   s.frame = static_cast<uint32_t>(std::max(0, active_clock_->frame()));
   s.frames = static_cast<uint32_t>(std::max(0, active_motion_->num_frames));
   s.finished = active_clock_->finished();
-  s.default_joint_pos = default_angles_;  // manifest-sourced; sys1's v7 stand
+  s.default_joint_pos = default_angles_;  // manifest-sourced; the planner's v7 stand
   status_pub_->publish(s);
 }
 
@@ -548,8 +548,8 @@ RobotCommand G1SonicNode::policy_control() {
   const bool from_elsewhere = (now - last_policy_tick_).seconds() > 5.0 * dt;
   if (pending_engage_ || from_elsewhere) {
     // Arriving from another control mode is a cold start; a reference swap
-    // inside POLICY is not — under sys1 that happens every couple of seconds.
-    engage_reset(/*reset_history=*/from_elsewhere || !sys1_);
+    // inside POLICY is not — under the planner that happens every couple of seconds.
+    engage_reset(/*reset_history=*/from_elsewhere || !planner_);
     pending_engage_ = false;
   }
   last_policy_tick_ = now;

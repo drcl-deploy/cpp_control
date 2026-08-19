@@ -34,8 +34,8 @@ TOKENS_TOPIC = '/enc/tokens'
 ATTENTION_TOPIC = '/vibe/sonic/attention_mask'
 LOWSTATE_TOPIC = '/lowstate'
 LOWCMD_TOPIC = '/lowcmd'
-SYS1_TOPIC = '/vibe/sys1/status'
-SYS0_TOPIC = '/vibe/sys0/status'
+PLANNER_TOPIC = '/vibe/planner/status'
+CONTROLLER_TOPIC = '/vibe/controller/status'
 VIEW_TOPICS = (
     FRAME_TOPIC,
     TOKENS_TOPIC,
@@ -45,9 +45,9 @@ VIEW_TOPICS = (
 )
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
-# sys1 vocabulary, mirrored from msg/Sys1Status.msg and scripts/sys1/sys1_console.py.
-SYS1_MODES = ('init', 'settle', 'scan', 'clip')
-SYS0_MODES = ('zeroing', 'damping', 'nominal', 'standing', 'stand', 'POLICY')
+# The planner vocabulary, mirrored from msg/PlannerStatus.msg and scripts/planners/repose/repose_console.py.
+PLANNER_MODES = ('init', 'settle', 'scan', 'clip')
+CONTROLLER_MODES = ('zeroing', 'damping', 'nominal', 'standing', 'stand', 'POLICY')
 CUBE_COLORS = ('red', 'orange', 'green', 'yellow', 'blue', 'pink')
 CUBE_RGB = ((230, 51, 51), (242, 115, 26), (51, 230, 51),
             (230, 230, 51), (51, 51, 230), (204, 51, 166))
@@ -313,7 +313,7 @@ class StateTrack:
     """Every sample of one sparse topic, resolved as last-at-or-before a time.
 
     The image seekers pick the *nearest* sample, which is right for a 50 Hz
-    stream. sys1 publishes once per decision, so nearest would show a plan up
+    stream. The planner publishes once per decision, so nearest would show a plan up
     to a second before it was made. State holds until it is replaced; these
     topics are tens of bytes, so the whole track is loaded once and bisected.
     """
@@ -366,18 +366,18 @@ def _chip(index):
             f"&nbsp;&nbsp;&nbsp;&nbsp;</span>")
 
 
-class Sys1Panel(QtWidgets.QGroupBox):
-    """The sys1 console pane, held at the replay cursor.
+class PlannerPanel(QtWidgets.QGroupBox):
+    """The planner console pane, held at the replay cursor.
 
-    Same fields and same order as scripts/sys1/sys1_console.py, so a recorded run
+    Same fields and same order as scripts/planners/repose/repose_console.py, so a recorded run
     reads like the terminal it was flown from — which is the point when the
     frames end up in a paper video.
     """
 
-    def __init__(self, sys1_track, sys0_track):
-        super().__init__('sys1 — planner state')
-        self.sys1 = sys1_track
-        self.sys0 = sys0_track
+    def __init__(self, planner_track, controller_track):
+        super().__init__('planner — repose')
+        self.planner = planner_track
+        self.controller = controller_track
         self.body = QtWidgets.QLabel('')
         self.body.setTextFormat(QtCore.Qt.RichText)
         self.body.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
@@ -392,22 +392,22 @@ class Sys1Panel(QtWidgets.QGroupBox):
         layout.addWidget(scroll, 1)
 
     def set_time(self, target_ns):
-        state, state_ns = self.sys1.at(target_ns)
-        sys0, _ = self.sys0.at(target_ns)
-        self.body.setText(self._render(state, state_ns, sys0, target_ns))
+        state, state_ns = self.planner.at(target_ns)
+        ctrl, _ = self.controller.at(target_ns)
+        self.body.setText(self._render(state, state_ns, ctrl, target_ns))
 
     @staticmethod
-    def _render(state, state_ns, sys0, target_ns):
+    def _render(state, state_ns, ctrl, target_ns):
         if state is None:
             return ("<p style='color:#888'>no planner decision yet at this "
                     "time</p>")
         # The planner publishes on commit and goes quiet when it parks, so the
         # held decision outlives the episode it belonged to. Without this a
         # frame grabbed during a damping stop reads as a live clip.
-        idle = sys0 is not None and not sys0.accepting
+        idle = ctrl is not None and not ctrl.accepting
         delta = chr(state.delta) if 32 <= state.delta < 127 else '?'
         rows = [
-            f"<b>{SYS1_MODES[state.mode] if state.mode < len(SYS1_MODES) else '?'}"
+            f"<b>{PLANNER_MODES[state.mode] if state.mode < len(PLANNER_MODES) else '?'}"
             f"</b>&nbsp; {state.label}"
             f"&nbsp;&nbsp;<span style='color:#888'>{state.version}"
             f" | {_time_delta(state_ns, target_ns)}</span>"
@@ -428,14 +428,14 @@ class Sys1Panel(QtWidgets.QGroupBox):
             + (f" (+{state.lead_in_frames} ramp)" if state.lead_in_frames else '')
             + f"&nbsp; {state.observe_ms:.1f} ms",
         ]
-        if sys0 is not None:
-            mode = (SYS0_MODES[sys0.control_mode]
-                    if sys0.control_mode < len(SYS0_MODES) else '?')
-            playing = 'stand' if sys0.stand else (sys0.reference_id or '—')
+        if ctrl is not None:
+            mode = (CONTROLLER_MODES[ctrl.control_mode]
+                    if ctrl.control_mode < len(CONTROLLER_MODES) else '?')
+            playing = 'stand' if ctrl.stand else (ctrl.reference_id or '—')
             rows.append(
-                f"<span style='color:#888'>sys0</span> <b>{mode}</b>&nbsp; "
-                f"{playing}&nbsp; frame {sys0.frame}/{sys0.frames}&nbsp; "
-                + ('engaged' if sys0.accepting else 'idle'))
+                f"<span style='color:#888'>ctrl</span> <b>{mode}</b>&nbsp; "
+                f"{playing}&nbsp; frame {ctrl.frame}/{ctrl.frames}&nbsp; "
+                + ('engaged' if ctrl.accepting else 'idle'))
         body = '<br>'.join(rows)
         if idle:
             body = (f"<span style='color:#888'>{body}</span><br>"
@@ -657,8 +657,8 @@ class ReplayWindow(QtWidgets.QMainWindow):
         self.frame_seeker = TopicSeeker(bag, FRAME_TOPIC)
         self.attention_seeker = TopicSeeker(bag, ATTENTION_TOPIC)
         self.token_seeker = TopicSeeker(bag, TOKENS_TOPIC)
-        self.sys1_track = StateTrack(bag, SYS1_TOPIC)
-        self.sys0_track = StateTrack(bag, SYS0_TOPIC)
+        self.planner_track = StateTrack(bag, PLANNER_TOPIC)
+        self.controller_track = StateTrack(bag, CONTROLLER_TOPIC)
         self.grid = self._read_grid()
         self.latest_frame = None
         self.latest_attention = None
@@ -704,11 +704,11 @@ class ReplayWindow(QtWidgets.QMainWindow):
         content.setColumnStretch(1, 1)
         # A bag is self-describing, so an open-loop run simply has no planner
         # pane rather than an empty one asking why.
-        self.sys1_panel = None
-        if self.sys1_track.available:
-            self.sys1_panel = Sys1Panel(self.sys1_track, self.sys0_track)
-            self.sys1_panel.setMinimumHeight(150)
-            content.addWidget(self.sys1_panel, 2, 0, 1, 2)
+        self.planner_panel = None
+        if self.planner_track.available:
+            self.planner_panel = PlannerPanel(self.planner_track, self.controller_track)
+            self.planner_panel.setMinimumHeight(150)
+            content.addWidget(self.planner_panel, 2, 0, 1, 2)
             content.setRowStretch(2, 0)
         outer.addLayout(content, 1)
 
@@ -736,8 +736,8 @@ class ReplayWindow(QtWidgets.QMainWindow):
         )
         self.lowstate_panel.set_time(seconds)
         self.lowcmd_panel.set_time(seconds)
-        if self.sys1_panel is not None:
-            self.sys1_panel.set_time(self.bag.start_ns + milliseconds * 1_000_000)
+        if self.planner_panel is not None:
+            self.planner_panel.set_time(self.bag.start_ns + milliseconds * 1_000_000)
         # Throttle expensive bag seeks instead of debouncing them. Restarting
         # this timer for every mouse event made images wait until dragging
         # stopped; leaving an active timer alone renders the newest cursor

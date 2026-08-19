@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cpp_control/msg/motion_reference.hpp>
-#include <cpp_control/msg/sys0_status.hpp>
+#include <cpp_control/msg/controller_status.hpp>
 #include <functional>
 #include <memory>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -37,11 +37,11 @@ namespace cpp_control {
  * pose, identity anchor at the robot's heading. A (re)starts the loaded clip
  * (committing any staged one first).
  *
- * `sys1:=true` hands the reference stream to a planner instead of a human. A
+ * `planner:=true` hands the reference stream to a planner instead of a human. A
  * arms planner execution; RB returns to stand and disarms it. While armed,
  * references auto-commit on arrival and swaps keep observation histories (a
  * planner commits every couple of seconds, and resetting them that often would
- * starve every history term). Sys0Status tells the planner what is ACTUALLY
+ * starve every history term). ControllerStatus tells the planner what is ACTUALLY
  * playing. Default false — open-loop rollouts are bit-for-bit unchanged.
  */
 class G1SonicNode : public G1Node {
@@ -71,7 +71,7 @@ class G1SonicNode : public G1Node {
   void make_stand_motion();
   void enter_stand();
   /// `reset_history` false = soft re-engage: re-point and re-align the clock
-  /// but keep observation histories and the last action (sys1 reference swaps).
+  /// but keep observation histories and the last action (the planner reference swaps).
   virtual void engage_reset(bool reset_history = true);
   void fill_tokenizer(float* dst);
   void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
@@ -79,9 +79,9 @@ class G1SonicNode : public G1Node {
   void commit_pending_motion();
   /// Point `active_*` at the live pair. Call after replacing ANY of the four
   /// owning pointers: replacing one frees what `active_*` may still name, and
-  /// the sys1 status timer reads them outside the policy tick that re-engages.
+  /// the planner status timer reads them outside the policy tick that re-engages.
   void rebind_active();
-  void publish_sys0_status();
+  void publish_controller_status();
   virtual void on_button_a();  ///< commit staged motion (if any) + track
 
   // deploy artifacts
@@ -101,11 +101,11 @@ class G1SonicNode : public G1Node {
   bool typed_reference_seen_ = false;
   bool legacy_ignore_logged_ = false;
 
-  // sys1: planner-driven references (all inert when sys1_ is false)
-  bool sys1_ = false;
+  // The planner: planner-driven references (all inert when planner_ is false)
+  bool planner_ = false;
   /// Explicit hardware safety latch: A arms autonomous reference execution;
   /// RB clears it and holds the nominal stand even if a reference races in.
-  bool sys1_active_ = false;
+  bool planner_active_ = false;
   /// Acquisition guard: keep the nominal stand reference active and refuse
   /// every motion source. It never overrides ZEROING/DAMPING or the operator's
   /// mode buttons; it only prevents POLICY from leaving stand.
@@ -113,7 +113,7 @@ class G1SonicNode : public G1Node {
   float pend_entry_yaw_ = 0.0f;  ///< staged reference's chosen heading residual
   float entry_yaw_ = 0.0f;       ///< ...and the committed one's
   std::string pend_reference_id_, reference_id_;
-  rclcpp::Publisher<cpp_control::msg::Sys0Status>::SharedPtr status_pub_;
+  rclcpp::Publisher<cpp_control::msg::ControllerStatus>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr status_timer_;
 
   // stand mode: synthetic 1-frame reference (nominal pose, identity anchor)

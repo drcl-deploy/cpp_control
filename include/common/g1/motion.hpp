@@ -32,7 +32,7 @@ inline const std::vector<std::string> CONTACT_GRAPH_BODIES = {
 
 /// Motion-topic row widths (IL-ordered, scripts/npz_motion_publisher.py):
 ///   MIN   jp29 | jv29 | anchor_pos3 | anchor_quat4                  (textop
-///   era) FULL  ... | anchor_lin_vel3 | anchor_ang_vel3 | contact12       (sys1
+///   era) FULL  ... | anchor_lin_vel3 | anchor_ang_vel3 | contact12       (the planner
 ///   cmds)
 /// A MIN clip streams with zero twist AND zero contact — the whole adapter
 /// augmentation port goes dead, so publish FULL for anything adapter-driven.
@@ -51,10 +51,10 @@ constexpr int WIRE_COLS_FULL = WIRE_COLS_MIN + 3 + 3 + NUM_CONTACT_BODIES;
 ///   lead_in()    T-frame joint ramp between two poses, otherwise a stand
 ///                reference — walks the tracker onto a clip's first frame
 ///
-/// root_*_vel_b are the sys1 command twists (orcs
+/// root_*_vel_b are the planner command twists (orcs
 /// robot_root_{lin,ang}_vel_cmd): reference-anchor-frame, pure clip functions —
 /// heading-rebase invariant, so they never touch live robot state.
-/// `bodywise_contact` is the third sys1 command channel (orcs
+/// `bodywise_contact` is the third the planner command channel (orcs
 /// bodywise_contact_cmd) — per-body robot<->OBJECT contact, so zeros is the
 /// truthful value wherever there is no object (stand).
 struct Motion {

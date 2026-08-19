@@ -43,7 +43,7 @@ graph LR
 backends compile in conditionally (`HAS_UNITREE_HG`, `HAS_MESSAGES`); the yaml
 `workflow:` field picks one at runtime.
 
-## three levels
+## four levels
 
 ```mermaid
 graph TD
@@ -53,13 +53,21 @@ graph TD
 
     C["<b>level 2 — RobotTaskNode</b><br/><i>robot and task-specific</i><br/>(observation building, policy inference , action mapping , etc )"]
 
+    D["<b>level 3 — Planner</b><br/><i>own process, own clock-free tick</i><br/>(perception, retrieval, reference commit)"]
+
     A --> B
     B --> C
+    C -. "MotionReference ▼<br/>ControllerStatus ▲" .-> D
 
     style A fill:#4a6fa5,color:#fff,stroke:none
     style B fill:#6b8f71,color:#fff,stroke:none
     style C fill:#c4a35a,color:#fff,stroke:none
+    style D fill:#8b5e3c,color:#fff,stroke:none
 ```
+
+levels 0-2 are **inheritance**; level 3 is a **topic wire**. a planner is a
+separate process at a separate rate, so the controller stays runnable — and
+shippable — with no planner attached.
 
 | level | class | owns |
 |---|---|---|
@@ -67,6 +75,7 @@ graph TD
 | 1 | `G1Node`, `MiniPiNode` | joint config, message backends, gamepad, robot-level stand engine |
 | 1.5 | `G1TextopTrackerNode` | motion streaming + WBC obs, shared by trackers that ride the topic wire |
 | 2 | task nodes | obs building, inference, action mapping |
+| 3 | planners (`planners/<task>/`) | perception, retrieval, which reference to commit next |
 
 ## control modes
 
@@ -103,11 +112,12 @@ cpp_control/
 │   └── cpp_control/
 │       ├── base.hpp                # level 0
 │       ├── robots/<robot>.hpp      # level 1
-│       └── tasks/<task>/<robot>.hpp# level 2
+│       ├── tasks/<task>/<robot>.hpp# level 2
+│       └── planners/<task>/         # level 3 — g1-only, so flat (no <robot>)
 ├── src/                            # mirrors include/
 ├── launch/<robot>_<task>.launch.py
 ├── models/<task>/                  # dropped-in artifacts (untracked)
-├── scripts/                        # viewers + publishers (python)
+├── scripts/<family>/               # viewers + publishers (python), flat install names
 ├── tests/deploy_selftest.cpp       # infra unit checks, no gtest
 └── docs/                           # this folder
 ```
@@ -121,3 +131,9 @@ cpp_control/
    executable in CMakeLists.
 3. prefer the manifest stack for new policies
    ([docs/onnx_policies.md](onnx_policies.md)) — zero hand-counted dims.
+4. planner: it does **not** inherit anything. `planners/<task>/` + a ROS-free
+   algorithm lib + one thin node + `config/<task>_planner/<robot>.yaml` +
+   `launch/<robot>_<task>_planner.launch.py`. Talk to the controller only over
+   `MotionReference` / `ControllerStatus`, and keep the algorithm ROS-free so a
+   selftest can replay it with no robot — see
+   [docs/planners/repose/](planners/repose/planner.md).

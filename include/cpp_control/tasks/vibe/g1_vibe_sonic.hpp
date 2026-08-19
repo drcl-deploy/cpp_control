@@ -25,7 +25,7 @@ namespace cpp_control {
  * patches) augmentation    bodywise_contact_cmd                   (motion
  * contact) | robot_root_{lin,ang}_vel_cmd         (motion twist)
  *
- * The whole augmentation port is the clip's sys1 command stream (orcs
+ * The whole augmentation port is the clip's the planner command stream (orcs
  * robot_motion_cmd_terms) — hardwired to the reference, no overrides. A clip
  * without a contact schedule commands zeros; engage_reset() says so out loud.
  *

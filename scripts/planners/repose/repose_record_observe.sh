@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This helper runs inside the isolated offboard domain prepared by
-# stream_vibes.sh. Override the destination without editing the script:
-#   VIBE_BAG_DIR=/data/vibe_bags ros2 run cpp_control record_vibes.sh
-
-bag_root="${VIBE_BAG_DIR:-${PWD}/bags}"
+# Runs in the isolated offboard domain prepared by repose_stream_observe.sh.
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cpp_control_root="$(cd -- "${script_dir}/../../.." && pwd)"
+repository_root="$(cd -- "${cpp_control_root}/../../.." && pwd)"
+bag_root="${REPOSE_OBSERVE_BAG_DIR:-${repository_root}/bags/repose_observe}"
 mkdir -p "${bag_root}"
 
 stamp="$(LC_TIME=C date '+%d%b%Y_%H_%M')"
@@ -18,18 +18,14 @@ done
 
 bridge_share="$(ros2 pkg prefix cdr_tcp_bridge)/share/cdr_tcp_bridge"
 qos_path="${bridge_share}/config/record_qos.yaml"
-# The last three are the planner's; they stay silent on an open-loop run, and a bag is
-# self-describing, so the replay viewer shows the planner pane only when they
-# actually carried something.
 topics=(
-  /enc/frame
-  /enc/tokens
-  /vibe/sonic/attention_mask
-  /lowstate
-  /lowcmd
-  /vibe/planner/status
-  /vibe/controller/status
-  /vibe/sonic/goal_color
+  /vibe/planner/calibration/color/compressed
+  /vibe/planner/calibration/depth
+  /vibe/planner/calibration/camera_info
+  /vibe/planner/calibration/labels
+  /vibe/planner/calibration/observation
+  /vibe/planner/calibration/state
+  /vibe/planner/calibration/click
 )
 
 storage_args=(-s sqlite3)
@@ -38,11 +34,9 @@ if ros2 pkg prefix rosbag2_storage_mcap >/dev/null 2>&1; then
     -s mcap
     --storage-config-file "${bridge_share}/config/mcap_writer.yaml"
   )
-else
-  echo "record_vibes: MCAP plugin not found; using sqlite3"
 fi
 
-echo "record_vibes: ${bag_path}"
+echo "record_observe: ${bag_path}"
 exec ros2 bag record \
   "${storage_args[@]}" \
   --qos-profile-overrides-path "${qos_path}" \

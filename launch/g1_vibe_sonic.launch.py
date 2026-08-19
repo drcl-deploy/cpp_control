@@ -134,7 +134,7 @@ def _launch_runtime(context, encoder_pkg):
             'prep_rate': LaunchConfiguration('prep_rate'),
             'prep_min_s': LaunchConfiguration('prep_min_s'),
             'prep_max_s': LaunchConfiguration('prep_max_s'),
-            'sys1': LaunchConfiguration('sys1'),
+            'planner': LaunchConfiguration('planner'),
             'calibration_lock': LaunchConfiguration('calibration_lock'),
             'status_rate_hz': LaunchConfiguration('status_rate_hz'),
         }],
@@ -214,7 +214,7 @@ def generate_launch_description():
                               description='L1 lead-in speed, rad/s (max|dq| sets duration)'),
         DeclareLaunchArgument('prep_min_s', default_value='0.5'),
         DeclareLaunchArgument('prep_max_s', default_value='2.0'),
-        DeclareLaunchArgument('sys1', default_value='false',
+        DeclareLaunchArgument('planner', default_value='false',
                               description='A arms planner auto-commit; RB disarms to '
                                           'stand; prep gate off, status published'),
         DeclareLaunchArgument(
@@ -222,7 +222,7 @@ def generate_launch_description():
             description='hold nominal SONIC stand and refuse every motion source'),
         DeclareLaunchArgument(
             'status_rate_hz', default_value='20.0',
-            description='Sys0Status publication rate when sys1 or calibration is active'),
+            description='ControllerStatus publication rate when the planner or calibration is active'),
 
         OpaqueFunction(function=_launch_runtime, args=[encoder_pkg]),
     ])

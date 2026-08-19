@@ -20,10 +20,10 @@ find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionReference.msg"
-  "msg/Sys0Status.msg"
-  "msg/Sys1Status.msg"
-  "msg/Sys1Observation.msg"
-  "msg/Sys1CalibrationState.msg"
+  "msg/ControllerStatus.msg"
+  "msg/PlannerStatus.msg"
+  "msg/CubeObservation.msg"
+  "msg/CalibrationState.msg"
   DEPENDENCIES std_msgs
 )
 
@@ -32,7 +32,7 @@ find_package(unitree_hg QUIET)
 find_package(unitree_go QUIET)
 find_package(messages QUIET)
 find_package(vision_encoders QUIET)  # ImageTokens (vibe-sonic) + frame_wire.hpp
-find_package(OpenCV QUIET)           # sys1 perception only
+find_package(OpenCV QUIET)           # the planner perception only
 
 if(unitree_hg_FOUND)
   message(STATUS "Found unitree_hg -- Unitree HG backend enabled")
@@ -213,56 +213,56 @@ if(unitree_hg_FOUND OR messages_FOUND)
   list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_sonic_node)
 endif()
 
-# ── sys1: the planner above sys0 (own process, soft real-time) ──
+# ── level 3: planners — repose (own process, soft real-time) ──
 # ROS-free algorithm + one thin node. OpenCV is the only new dependency and
 # covers resize, minAreaRect and the 3x3 symmetric eigen-solve alike.
 if(OpenCV_FOUND)
-  add_library(cpp_control_sys1 STATIC
-    src/sys1/cfg.cpp
-    src/sys1/sight.cpp
-    src/sys1/clips.cpp
-    src/sys1/table.cpp
-    src/sys1/writer.cpp)
-  target_include_directories(cpp_control_sys1 PUBLIC ${OpenCV_INCLUDE_DIRS})
-  target_link_libraries(cpp_control_sys1 cpp_control_deploy ${OpenCV_LIBS})
+  add_library(cpp_control_repose_planner STATIC
+    src/planners/repose/cfg.cpp
+    src/planners/repose/sight.cpp
+    src/planners/repose/clips.cpp
+    src/planners/repose/table.cpp
+    src/planners/repose/writer.cpp)
+  target_include_directories(cpp_control_repose_planner PUBLIC ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(cpp_control_repose_planner cpp_control_deploy ${OpenCV_LIBS})
 
-  # Replay rig + bake: no robot, no ROS, no risk (docs/vibe/sys1/planner.md §8 P0).
-  add_executable(sys1_selftest tests/sys1_selftest.cpp)
-  target_link_libraries(sys1_selftest cpp_control_sys1 cpp_control_vibe_contract)
+  # Replay rig + bake: no robot, no ROS, no risk (docs/planners/repose/planner.md §8 P0).
+  add_executable(repose_planner_selftest tests/repose_planner_selftest.cpp)
+  target_link_libraries(repose_planner_selftest cpp_control_repose_planner cpp_control_vibe_contract)
   if(BUILD_TESTING)
-    add_test(NAME sys1_selftest COMMAND sys1_selftest)
+    add_test(NAME repose_planner_selftest COMMAND repose_planner_selftest)
   endif()
-  list(APPEND INSTALL_TARGETS sys1_selftest)
+  list(APPEND INSTALL_TARGETS repose_planner_selftest)
 
   if(unitree_hg_FOUND AND vision_encoders_FOUND)
-    add_executable(g1_sys1_repose_node src/sys1/node.cpp)
+    add_executable(g1_repose_planner_node src/planners/repose/node.cpp)
     # frame_wire.hpp is a plain header, not a rosidl artifact, so it rides the
     # package's exported include dirs rather than its typesupport target.
-    target_include_directories(g1_sys1_repose_node
+    target_include_directories(g1_repose_planner_node
       PRIVATE ${vision_encoders_INCLUDE_DIRS})
-    target_link_libraries(g1_sys1_repose_node
-      cpp_control_sys1 cpp_control_vibe_contract yaml-cpp)
-    ament_target_dependencies(g1_sys1_repose_node
+    target_link_libraries(g1_repose_planner_node
+      cpp_control_repose_planner cpp_control_vibe_contract yaml-cpp)
+    ament_target_dependencies(g1_repose_planner_node
       rclcpp std_msgs unitree_hg vision_encoders)
-    rosidl_target_interfaces(g1_sys1_repose_node
+    rosidl_target_interfaces(g1_repose_planner_node
       ${PROJECT_NAME} "rosidl_typesupport_cpp")
-    list(APPEND INSTALL_TARGETS g1_sys1_repose_node)
+    list(APPEND INSTALL_TARGETS g1_repose_planner_node)
 
-    add_executable(g1_sys1_observe_node src/sys1/observe_node.cpp)
-    target_include_directories(g1_sys1_observe_node
+    add_executable(g1_repose_planner_observe_node src/planners/repose/observe_node.cpp)
+    target_include_directories(g1_repose_planner_observe_node
       PRIVATE ${vision_encoders_INCLUDE_DIRS})
-    target_link_libraries(g1_sys1_observe_node
-      cpp_control_sys1 yaml-cpp)
-    ament_target_dependencies(g1_sys1_observe_node
+    target_link_libraries(g1_repose_planner_observe_node
+      cpp_control_repose_planner yaml-cpp)
+    ament_target_dependencies(g1_repose_planner_observe_node
       rclcpp sensor_msgs std_msgs unitree_hg vision_encoders)
-    rosidl_target_interfaces(g1_sys1_observe_node
+    rosidl_target_interfaces(g1_repose_planner_observe_node
       ${PROJECT_NAME} "rosidl_typesupport_cpp")
-    list(APPEND INSTALL_TARGETS g1_sys1_observe_node)
+    list(APPEND INSTALL_TARGETS g1_repose_planner_observe_node)
   else()
-    message(STATUS "sys1 node disabled -- needs unitree_hg + vision_encoders")
+    message(STATUS "repose planner disabled -- needs unitree_hg + vision_encoders")
   endif()
 else()
-  message(STATUS "OpenCV NOT found -- sys1 disabled")
+  message(STATUS "OpenCV NOT found -- planners disabled")
 endif()
 
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────
@@ -305,14 +305,14 @@ install(PROGRAMS
   scripts/vibe/replay_vibes.py
   scripts/vibe/replay_vibes.sh
   scripts/vibe/stream_vibes.sh
-  scripts/sys1/run_sys1.sh
-  scripts/sys1/sys1_console.py
-  scripts/sys1/sys1_observe_viewer.py
-  scripts/sys1/record_sys1_observe.sh
-  scripts/sys1/replay_sys1_observe.py
-  scripts/sys1/replay_sys1_observe.sh
-  scripts/sys1/stream_sys1_observe.sh
-  scripts/sys1/validate_sys1_observe_bag.py
+  scripts/planners/repose/repose_run_console.sh
+  scripts/planners/repose/repose_console.py
+  scripts/planners/repose/repose_observe_viewer.py
+  scripts/planners/repose/repose_record_observe.sh
+  scripts/planners/repose/repose_replay_observe.py
+  scripts/planners/repose/repose_replay_observe.sh
+  scripts/planners/repose/repose_stream_observe.sh
+  scripts/planners/repose/repose_validate_observe_bag.py
   DESTINATION lib/${PROJECT_NAME}/
 )
 

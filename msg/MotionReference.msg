@@ -9,7 +9,7 @@
 # v2 adds entry_yaw_offset. MotionClock heading-aligns frame 0 onto the robot,
 # which forces the reference's relative heading there to ZERO — and no amount of
 # pre-rotating the rows survives that, because the alignment cancels it exactly.
-# A planner that CHOSE a heading residual (sys1's cube-anchored warp) therefore
+# A planner that CHOSE a heading residual (the planner's cube-anchored warp) therefore
 # needs one scalar of its own. 0.0 is the pre-v2 behaviour.
 
 uint8 SCHEMA_VERSION=2
@@ -28,7 +28,7 @@ float32[4] object_goal_quat_wxyz
 
 # Extra yaw applied on top of the heading alignment at engage, radians.
 float32 entry_yaw_offset
-# Free-form producer tag for telemetry (sys1: settle | scan | clip).
+# Free-form producer tag for telemetry (the planner: settle | scan | clip).
 uint8 mode
 
 float32[] data

@@ -1,0 +1,67 @@
+# the planner — the retrieval planner above the repose SONIC policy.
+#
+# Knobs are documented where they were measured: vibe planner/clips.py::ClipCfg.
+# `version` picks the preset; anything under `knobs` overrides it, so an A/B is
+# a one-line edit and cannot silently drift from the numbers it baselines.
+
+version: v7        # each version is ONE knob over the last: v6 has no NOMINAL
+                   # STAND (62.5% -> 95%), v7.1 adds the ENTER ramp (§7.1).
+                   # Both ablations run from this one line.
+target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
+                   # goal_color overrides it, so the controller and the planner boot agreeing
+
+rate_hz: 20.0      # planner tick: OBSERVE + PLAN every tick, ACT only when the controller
+                   # says it finished. Soft real-time; ~2 ms of work per tick.
+stale_s: 1.0       # lowstate silence that parks the planner. NOT the camera —
+                   # losing that starves the belief, which plans the stance
+
+# The 78-row alphabet (bench-produced, offline — the bake stays Python).
+clips: /home/loki/drcl_projects/vibe/data/sys1_clips.npz
+
+frames:
+  # retargeted: slice the spans out of the dataset at boot (~6.6 MB resident)
+  # baked:      one bundle written by `repose_planner_selftest --bake`, for the Orin
+  source: retargeted
+  path: /home/loki/drcl_projects/vibe/data/retargeted_motions
+  # Which npz each clip came from — `library` is only read for `retargeted`,
+  # and only for its `motion_files` list.
+  library: /home/loki/drcl_projects/vibe/data/sys1_library.npz
+
+# D435i colour stream, head-mounted. Intrinsics ride per-plane on the wire, so
+# there is nothing to calibrate here — only where to connect.
+#
+# `host` is the STANDALONE fallback: under g1_repose_planner.launch.py the same
+# `camera_ip` reaches the encoder and the planner (from VIBE_CAMERA_ADDRESS),
+# so the two halves of a run cannot end up watching different cameras. Same for
+# `target_color` below, which the launch feeds from its `goal_color`.
+camera:
+  host: 127.0.0.1
+  port: 5555
+
+# Camera in torso_link, verbatim from unitree_robots/g1/g1_29dof.xml. The waist
+# chain (yaw/roll/pitch) is the only kinematics between it and the pelvis —
+# which is exactly why v7 works: a nominal stance has waist = 0, so the torso is
+# vertical and the camera reads back the 45 deg below-horizontal it is bolted at.
+# The node logs the achieved gaze at boot and warns if it is not the mount angle.
+mount:
+  xyz: [0.05, 0.0, 0.4318]
+  quat: [0.6533, 0.2706, -0.2706, -0.6533]   # wxyz, 45 deg down-forward
+
+# Overrides on top of `version`. Every default is in include/cpp_control/planners/repose/cfg.hpp; these
+# are the three the hardware bring-up actually turns.
+#
+#   omega_still       rad/s of camera motion above which a frame is blur, not
+#                     evidence. A held stance sits near 0.05, a 90 deg sweep at
+#                     0.96 — read `omega_cam` and `accept_rate` off
+#                     /vibe/planner/status to place it between the two.
+#   belief_min_votes  agreeing reads before the planner may act. Raise it if the
+#                     palette is noisy; it buys recall back without touching a
+#                     single perception threshold.
+#   scan_steps        a SCAN sweeps for `scan_steps - 2*hold_tail` frames and
+#                     then holds still for the rest. Only the held part is
+#                     readable, so `hold_tail` is sized in EVIDENCE: 15 frames
+#                     at 50 fps is 0.6 s, or ~12 reads at a 20 Hz tick.
+#   enter_yaw_rate_deg  0 is v7. Non-zero (v7.1 preset: 50) ramps the heading
+#                     residual across the lead-in instead of stepping it at
+#                     engage. A PEAK rate: raising it shortens the ramp.
+knobs: {}

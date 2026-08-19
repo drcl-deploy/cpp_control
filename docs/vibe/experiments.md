@@ -74,15 +74,15 @@ files. Most export directories contain one pair and need no other argument. If
 a directory contains several pairs, launch fails instead of guessing; add
 `checkpoint:=<training_step>` to select one explicitly.
 
-Closed-loop Repose runs the same way through `g1_sys1_repose.launch.py`, which
+Closed-loop Repose runs the same way through `g1_repose_planner.launch.py`, which
 adds the planner process to this same runtime — see
-[docs/vibe/sys1/experiments.md](sys1/experiments.md) for the two things that
+[docs/planners/repose/experiments.md](../planners/repose/experiments.md) for the two things that
 differ (depth on the camera wire, and the console terminal).
 
 To collect labeled RGB-D snapshots while the robot remains locked in nominal
 stand, use the separate sim2sim or hardware workflow in
-[Sys1 color calibration](sys1/color_calibration.md). It has its own
-`stream_sys1_observe.sh`/`replay_sys1_observe.sh` pair and bag directory.
+[Repose color calibration](../planners/repose/color_calibration.md). It has its own
+`repose_stream_observe.sh`/`repose_replay_observe.sh` pair and bag directory.
 
 For Repose, UOLM, or PerLoco, stage the motion after the task is running:
 
@@ -111,7 +111,7 @@ bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/vibe/stream_vibes.sh r
 
 Bags are written under `~/unitree_ros2/bags/` with names such as
 `15Aug2026_16_34`. They contain `/enc/frame`, `/enc/tokens`, the attention
-mask, `/lowstate`, and `/lowcmd` — plus sys1's three state topics, which are
+mask, `/lowstate`, and `/lowcmd` — plus the planner's three state topics, which are
 silent on an open-loop run and need no profile or flag to enable.
 
 Replay the newest completed bag from another fresh terminal:
@@ -131,7 +131,7 @@ The replay viewer is read-only and does not join a DDS domain. Its one time
 slider synchronizes the raw encoder frame, query-selectable attention overlay,
 and selectable scalar traces from `/lowstate` and `/lowcmd`. The image and
 attention panels show their offset from the selected bag timestamp so dropped
-or delayed samples remain visible. A bag recorded under sys1 also gets a
+or delayed samples remain visible. A bag recorded under the planner also gets a
 planner pane, held at the cursor rather than interpolated; an open-loop bag
 simply has none.
 
@@ -139,13 +139,13 @@ Calibration bags are intentionally separate from experiment bags. Record and
 review them with:
 
 ```bash
-bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/stream_sys1_observe.sh record
-bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/replay_sys1_observe.sh
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_stream_observe.sh record
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_replay_observe.sh
 ```
 
-They default to `~/unitree_ros2/bags/sys1_observe/`; the complete hardware and
+They default to `~/unitree_ros2/bags/repose_observe/`; the complete hardware and
 sim2sim procedure is in
-[Sys1 color calibration](sys1/color_calibration.md).
+[Repose color calibration](../planners/repose/color_calibration.md).
 
 ## Controls and shutdown
 

@@ -24,7 +24,7 @@ npz / wire / stand  ──>  g1::Motion  ──views──>  jp/jv (MJ), jp_il/j
 
 ```
  65  jp29 | jv29 | anchor_pos3 | anchor_quat4                          (textop era)
- 83  ...  | anchor_lin_vel3 | anchor_ang_vel3 | contact12              (+ sys1 cmds)
+ 83  ...  | anchor_lin_vel3 | anchor_ang_vel3 | contact12              (+ the planner cmds)
 ```
 
 The publisher emits 83 iff the clip has body twist **and** a
@@ -46,12 +46,12 @@ at static init: `v_mj[i] = v_il[MJ2IL[i]]`.
 | `root_lin_vel_b(f)` / `root_ang_vel_b(f)` | anchor twist | **ref-anchor frame** |
 | `contact(f)` | `const float*` 12 flags | `CONTACT_GRAPH_BODIES` order |
 
-The `_b` twists are the sys1 command stream
+The `_b` twists are the planner command stream
 (orcs `robot_root_{lin,ang}_vel_cmd`): `R(q_ref_anchor)ᵀ · v_world`, a pure
 clip function. Rotating quat and vel together under a heading rebase cancels —
 so they never touch live robot state and need no alignment.
 
-`contact(f)` is the third sys1 channel (orcs `bodywise_contact_cmd`): per-body
+`contact(f)` is the third the planner channel (orcs `bodywise_contact_cmd`): per-body
 robot↔**object** contact, mirroring `ContactSchedule.body_object_contacts`.
 
 | | |
