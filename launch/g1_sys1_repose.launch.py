@@ -12,6 +12,9 @@ differ. Open-loop Repose stays exactly what it was.
 Prereq beyond the open-loop rig: the camera wire must carry DEPTH —
 `camera_streamer.py --depth` on the Orin, or `camera_depth: 1` in the sim
 config. sys1 refuses to plan without it and says so.
+
+Operator gate: RB enters and locks the nominal stand with sys1 idle. A arms the
+closed-loop rollout; RB disarms it and returns to stand at any time.
 """
 
 import os

@@ -154,17 +154,21 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
               token_rows_, token_dim_, tokens_topic.c_str(),
               encoder_tag_.c_str(), queries.str().c_str(),
               attn_name_.empty() ? "(absent)" : attn_topic.c_str());
-  if (task_profile_.requires_prep)
+  if (sys1_) {
+    RCLCPP_INFO(this->get_logger(),
+                "sys1 safety gate: RB locks nominal stand; A arms rollout");
+  } else if (task_profile_.requires_prep) {
     RCLCPP_INFO(this->get_logger(),
                 "prep gate ON: RB stand -> L1 ramp onto the clip's first frame "
                 "(%s, %zu joints, %.1f rad/s, %.1f-%.1f s) -> A.",
                 prep_joints_name_.c_str(), prep_joints_.size(), prep_rate_,
                 prep_min_s_, prep_max_s_);
-  else
+  } else {
     RCLCPP_INFO(
         this->get_logger(),
         "stand-reactive task: A or RB engages the nominal SONIC reference; "
         "no motion/prep stream is used");
+  }
 }
 
 // ── Extractor-era port writers ───────────────────────────────────
@@ -402,6 +406,13 @@ void G1VibeSonicNode::on_button_a() {
     enter_stand();
     RCLCPP_INFO(this->get_logger(),
                 "calibration lock: A keeps the nominal stand reference");
+    return;
+  }
+  // Sys1 supplies its own rate-limited lead-in. Here A is the explicit rollout
+  // arm, not the open-loop Repose prep/track transition below.
+  if (sys1_) {
+    if (!allow_policy_entry()) return;
+    G1SonicNode::on_button_a();
     return;
   }
   if (task_profile_.stand_reactive) {

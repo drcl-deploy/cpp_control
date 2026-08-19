@@ -37,12 +37,12 @@ namespace cpp_control {
  * pose, identity anchor at the robot's heading. A (re)starts the loaded clip
  * (committing any staged one first).
  *
- * `sys1:=true` hands the reference stream to a planner instead of a human:
- * references auto-commit on arrival, the swap keeps the observation histories
- * (a planner commits every couple of seconds, and resetting them that often
- * would starve every history term), and Sys0Status is published so the planner
- * times its modes on what is ACTUALLY playing. Default false — open-loop
- * rollouts are bit-for-bit unchanged.
+ * `sys1:=true` hands the reference stream to a planner instead of a human. A
+ * arms planner execution; RB returns to stand and disarms it. While armed,
+ * references auto-commit on arrival and swaps keep observation histories (a
+ * planner commits every couple of seconds, and resetting them that often would
+ * starve every history term). Sys0Status tells the planner what is ACTUALLY
+ * playing. Default false — open-loop rollouts are bit-for-bit unchanged.
  */
 class G1SonicNode : public G1Node {
  public:
@@ -103,6 +103,9 @@ class G1SonicNode : public G1Node {
 
   // sys1: planner-driven references (all inert when sys1_ is false)
   bool sys1_ = false;
+  /// Explicit hardware safety latch: A arms autonomous reference execution;
+  /// RB clears it and holds the nominal stand even if a reference races in.
+  bool sys1_active_ = false;
   /// Acquisition guard: keep the nominal stand reference active and refuse
   /// every motion source. It never overrides ZEROING/DAMPING or the operator's
   /// mode buttons; it only prevents POLICY from leaving stand.

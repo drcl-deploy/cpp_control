@@ -215,8 +215,8 @@ def generate_launch_description():
         DeclareLaunchArgument('prep_min_s', default_value='0.5'),
         DeclareLaunchArgument('prep_max_s', default_value='2.0'),
         DeclareLaunchArgument('sys1', default_value='false',
-                              description='planner drives the reference: auto-commit, '
-                                          'soft re-engage, prep gate off, status published'),
+                              description='A arms planner auto-commit; RB disarms to '
+                                          'stand; prep gate off, status published'),
         DeclareLaunchArgument(
             'calibration_lock', default_value='false',
             description='hold nominal SONIC stand and refuse every motion source'),

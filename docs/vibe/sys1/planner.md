@@ -265,7 +265,7 @@ when a bag has one.
 
 | | false (default) | true |
 |---|---|---|
-| references | staged, `A` commits | auto-commit on arrival |
+| references | staged, `A` commits | `A` arms; auto-commit on arrival until `RB` disarms |
 | re-engage | resets observation histories | keeps them (a swap every ~2 s would starve every history term) |
 | L1 prep gate | on | off — the lead-in replaces it |
 | `Sys0Status` | not published | 20 Hz, its own timer |

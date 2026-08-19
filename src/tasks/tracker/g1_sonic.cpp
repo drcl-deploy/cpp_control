@@ -225,10 +225,10 @@ void G1SonicNode::on_reference(
   pend_entry_yaw_ = msg->entry_yaw_offset;
   pend_reference_id_ = msg->reference_id;
 
-  // Under a planner the reference IS the command: staging it behind a button
-  // would stall the loop it closes. The FSM still owns entry into POLICY, so a
-  // reference arriving anywhere else waits exactly as it does for a human.
-  if (sys1_ && control_mode_ == ControlMode::POLICY) {
+  // Once A has armed sys1, the reference IS the command: staging every update
+  // behind another button would stall the closed loop. RB clears the latch, so
+  // a reference racing with the operator's stop request can only be staged.
+  if (sys1_ && sys1_active_ && control_mode_ == ControlMode::POLICY) {
     stand_mode_ = false;  // before the commit, so it rebinds active_* to the clip
     commit_pending_motion();
     pending_engage_ = true;
@@ -272,6 +272,20 @@ void G1SonicNode::on_button_a() {
                 "calibration lock: A keeps the nominal stand reference");
     return;
   }
+  if (sys1_) {
+    if (!sys1_active_) {
+      // Never commit a reference staged before this arm edge. The planner sees
+      // accepting=true next and publishes a fresh episode from nominal stand.
+      pend_motion_.reset();
+      pend_ready_ = false;
+      pend_reference_id_.clear();
+      pend_entry_yaw_ = 0.0f;
+      sys1_active_ = true;
+      RCLCPP_INFO(this->get_logger(),
+                  "sys1 rollout ARMED — holding stand for first fresh plan");
+    }
+    return;
+  }
   if (pend_ready_) commit_pending_motion();
   if (!motion_) {
     RCLCPP_WARN_THROTTLE(
@@ -293,6 +307,11 @@ void G1SonicNode::make_stand_motion() {
 }
 
 void G1SonicNode::enter_stand() {
+  if (sys1_ && sys1_active_) {
+    RCLCPP_INFO(this->get_logger(),
+                "sys1 rollout DISARMED — nominal stand locked");
+  }
+  sys1_active_ = false;
   stand_mode_ = true;
   pending_engage_ = true;
   control_mode_ = ControlMode::POLICY;
@@ -503,7 +522,11 @@ void G1SonicNode::publish_sys0_status() {
   cpp_control::msg::Sys0Status s;
   s.control_mode = static_cast<uint8_t>(control_mode_);
   s.stand = stand_mode_;
-  s.accepting = control_mode_ == ControlMode::POLICY;
+  // For sys1, accepting means the operator explicitly armed autonomous
+  // references with A. RB remains in POLICY to run SONIC stand, but is inert
+  // from the planner's point of view.
+  s.accepting =
+      control_mode_ == ControlMode::POLICY && (!sys1_ || sys1_active_);
   s.calibration_lock = calibration_lock_;
   s.reference_id = stand_mode_ ? "" : reference_id_;
   s.frame = static_cast<uint32_t>(std::max(0, active_clock_->frame()));

@@ -13,8 +13,8 @@ bags. This page is only the delta. Algorithm and design:
 | launch | `g1_vibe_repose.launch.py` | `g1_sys1_repose.launch.py` |
 | processes | bridge, encoder, controller | + `g1_sys1_repose_node` |
 | camera wire | colour | colour **and depth** |
-| who commits references | you, `publish-motion` then `A` | the planner, every ~2 s |
-| controls | `RB` stand, `L1` prep, `A` run | `RB` stand, `A` run — the lead-in replaces prep |
+| who commits references | you, `publish-motion` then `A` | `A` arms the planner; it then commits every ~2 s |
+| controls | `RB` stand, `L1` prep, `A` run | `RB` stand + disarm, `A` arm + run — no L1 prep |
 | extra terminal | — | the console, to set the target colour and re-arm |
 
 ## 2. Camera: depth is mandatory
@@ -46,6 +46,10 @@ Same artifact discovery as every other task wrapper, same `enable_bridge`,
 same `Ctrl-C` tears down all four processes. `checkpoint:=<step>` is only needed
 when the directory holds more than one `.onnx`/`.manifest.json` pair.
 `goal_color:=` sets the starting target; the console changes it live.
+
+After launch, press `RB` to enter the nominal SONIC stand. Sys1 remains idle
+and cannot replace that reference. Press `A` once to arm the closed loop. Press
+`RB` at any time to disarm Sys1 immediately and return to nominal stand.
 
 Two lines to read in the boot log, in this order:
 
