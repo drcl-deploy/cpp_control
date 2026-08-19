@@ -2,7 +2,10 @@
 set -euo pipefail
 
 # Runs in the isolated offboard domain prepared by stream_sys1_observe.sh.
-bag_root="${SYS1_OBSERVE_BAG_DIR:-${PWD}/sys1_observe_bags}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cpp_control_root="$(cd -- "${script_dir}/../.." && pwd)"
+repository_root="$(cd -- "${cpp_control_root}/../../.." && pwd)"
+bag_root="${SYS1_OBSERVE_BAG_DIR:-${repository_root}/bags/sys1_observe}"
 mkdir -p "${bag_root}"
 
 stamp="$(LC_TIME=C date '+%d%b%Y_%H_%M')"

@@ -10,7 +10,7 @@ Add `record` to save clicked RGB-D snapshots and their labels as a rosbag.
 The onboard side must run g1_sys1_observe_calibration.launch.py.
 
 Environment:
-  SYS1_OBSERVE_BAG_DIR   bag root (default: ./sys1_observe_bags)
+  SYS1_OBSERVE_BAG_DIR   bag root (default: ~/unitree_ros2/bags/sys1_observe)
   VIBE_BRIDGE_ADDRESS   onboard bridge host
 EOF
 }
@@ -84,6 +84,7 @@ unset CYCLONEDDS_URI
 export ROS_LOCALHOST_ONLY=1
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 export VIBE_BRIDGE_ADDRESS="${VIBE_BRIDGE_ADDRESS:-gilfoyle-rth}"
+export SYS1_OBSERVE_BAG_DIR="${SYS1_OBSERVE_BAG_DIR:-${repository_root}/bags/sys1_observe}"
 
 bridge_share="$(ros2 pkg prefix cdr_tcp_bridge)/share/cdr_tcp_bridge"
 bridge_config="${bridge_share}/config/sys1_observe.yaml"
@@ -112,7 +113,7 @@ ros2 run cpp_control sys1_observe_viewer.py \
 children+=("$!")
 
 if [[ "${record}" == true ]]; then
-  echo "stream_sys1_observe: recording enabled"
+  echo "stream_sys1_observe: recording to ${SYS1_OBSERVE_BAG_DIR}"
   ros2 run cpp_control record_sys1_observe.sh &
   children+=("$!")
 fi

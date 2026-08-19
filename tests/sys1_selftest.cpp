@@ -380,7 +380,7 @@ void check_enter_ramp(const ClipTable& t) {
 
   // 2. the heading is swept, not stepped. Only yaw RELATIVE to frame 0 is a
   // command — engage() aligns frame 0 onto the robot, cancelling the rest.
-  const int aq = 2 * J + 3, aang = g1::WIRE_COLS_MIN + 3;
+  const int aq = 2 * J + 3, alin = g1::WIRE_COLS_MIN, aang = alin + 3;
   auto yaw_at = [&](int f) {
     const float* q = &rows[static_cast<size_t>(f) * cols + aq];
     return std::atan2(2.0f * (q[0] * q[3] + q[1] * q[2]),
@@ -443,9 +443,46 @@ void check_enter_ramp(const ClipTable& t) {
   check(dv < 0.95f * step_v7,
         "and arrives moving, where v7 arrived from rest");
   check(std::fabs(rows[J]) < 1e-5f, "the ramp starts from rest, as a still is");
-  check(std::fabs(rows[static_cast<size_t>(lead - 1) * cols + aang + 2] -
-                  span[aang + 2]) < 1e-3f,
-        "the commanded turn rate hands off to the clip's own");
+
+  // The ramp's root POSITION is pinned at the entry anchor, so the only twist
+  // it may command is its own yaw sweep — and that returns to zero at both ends.
+  float twist = 0.0f, yend = 0.0f;
+  for (int f = 0; f < lead; ++f) {
+    const float* row = &rows[static_cast<size_t>(f) * cols];
+    for (int k = alin; k < aang + 3; ++k)
+      if (k != aang + 2) twist = std::max(twist, std::fabs(row[k]));
+    if (f == 0 || f == lead - 1) yend = std::max(yend, std::fabs(row[aang + 2]));
+  }
+  check(twist < 1e-6f, "the ramp commands no root twist but its own turn");
+  check(yend < 1e-5f, "and that turn rate is zero at both ends of the sweep");
+
+  // The split (v7.1): the ramp is one act, the clip is another, so the clip
+  // re-engages on the pose the ramp reached instead of dead reckoning from the
+  // pose it started at. That is the whole fix — an anchor stamped 1.2 s late.
+  ReferenceWriter we(t, cfg), wc(t, cfg);
+  const auto& er = we.build(p, live, ReferenceWriter::Stage::ENTER);
+  check(we.ramped() && we.frames() == lead &&
+            er.size() == static_cast<size_t>(lead) * cols,
+        "the ENTER stage is the ramp and nothing else");
+  check(std::memcmp(er.data(), rows.data(),
+                    static_cast<size_t>(lead) * cols * sizeof(float)) == 0,
+        "and is the same ramp the one-shot build lays down");
+  const auto& cr = wc.build(p, live, ReferenceWriter::Stage::CLIP);
+  check(!wc.ramped() && wc.frames() == p.frames &&
+            std::memcmp(cr.data(), span,
+                        static_cast<size_t>(p.frames) * cols * sizeof(float)) == 0,
+        "the CLIP stage is the raw span — no lead-in, no blend");
+
+  // The ramp starts from what sys0 was TOLD, not from where it is: C0 with the
+  // still it leaves, whatever tracking error that still was carrying.
+  LiveState held = live;
+  held.held_row.assign(t.stand_row(), t.stand_row() + cols);
+  ReferenceWriter wh(t, cfg);
+  const auto& hr = wh.build(p, held, ReferenceWriter::Stage::ENTER);
+  float d0 = 0.0f;
+  for (int j = 0; j < J; ++j)
+    d0 = std::max(d0, std::fabs(hr[j] - t.stand_row()[j]));
+  check(d0 < 1e-5f, "a held row, when given, is where the ramp starts");
 
   // 5. a still is untouched by the ramp: v7.1 is a clip-entry change only.
   Plan q = p;

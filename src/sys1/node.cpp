@@ -69,6 +69,13 @@ std::array<float, 3> yaml_vec3(const YAML::Node& n,
   return {n[0].as<float>(), n[1].as<float>(), n[2].as<float>()};
 }
 
+float wrap(float a) {
+  constexpr float kPi = 3.14159265358979323846f;
+  while (a > kPi) a -= 2.0f * kPi;
+  while (a < -kPi) a += 2.0f * kPi;
+  return a;
+}
+
 }  // namespace
 
 class Sys1Node : public rclcpp::Node {
@@ -447,6 +454,7 @@ class Sys1Node : public rclcpp::Node {
     if (!sys0_seen_ || !sys0_.accepting) {
       if (armed_) RCLCPP_INFO(this->get_logger(), "sys1: sys0 left POLICY — idle");
       armed_ = false;
+      in_enter_ = false;  // a ramp is only valid against the yaw it was frozen at
       return;
     }
     // The camera is deliberately NOT a gate. Losing it starves the belief, and
@@ -468,6 +476,7 @@ class Sys1Node : public rclcpp::Node {
 
     if (!armed_) {  // fresh episode: never plan the new one from the old cube
       armed_ = true;
+      in_enter_ = false;
       clips_->reset();
       belief_->clear();
       RCLCPP_INFO(this->get_logger(), "sys1: armed, target %s, episode %d",
@@ -493,7 +502,10 @@ class Sys1Node : public rclcpp::Node {
       }
     } else {
       waiting_ = 0;
-      if (sys0_.finished) commit(candidate_);
+      // The ramp landed: its clip goes out next, not whatever the planner would
+      // pick now. `candidate_` is a preview between acts, and the belief has
+      // been cleared since the read that chose this clip.
+      if (sys0_.finished) in_enter_ ? commit_clip(pending_) : commit(candidate_);
     }
     publish_status();
   }
@@ -502,13 +514,39 @@ class Sys1Node : public rclcpp::Node {
     return t.nanoseconds() > 0 && (this->now() - t).seconds() < stale_s_;
   }
 
+  /// The robot's heading off the pelvis IMU. Yaw is the only channel of it the
+  /// seam ever needs, and the only one the hardware gives without odometry.
+  float robot_yaw() const {
+    return std::atan2(2.0f * (imu_quat_[0] * imu_quat_[3] +
+                              imu_quat_[1] * imu_quat_[2]),
+                      1.0f - 2.0f * (imu_quat_[2] * imu_quat_[2] +
+                                     imu_quat_[3] * imu_quat_[3]));
+  }
+
   bool camera_fresh() const {
     const int64_t ns = last_frame_ns_.load(std::memory_order_relaxed);
     return ns > 0 &&
            (this->now() - rclcpp::Time(ns, RCL_ROS_TIME)).seconds() < stale_s_;
   }
 
+  /// v7.1 only. A clip is entered through a ramp, and the ramp is its OWN act:
+  /// sys0 engages it, plays it, reports finished, and only THEN does the clip
+  /// go out — re-engaged on the pose the ramp actually reached.
+  ///
+  /// This is not cosmetic. `MotionClock::engage` stamps the reference's world
+  /// anchor from row 0 and never re-measures it, so every frame between that
+  /// stamp and the clip's first frame is dead reckoning. v7's lead-in was ~0.5 s
+  /// of it; a 1.2 s ramp is 5x, and the drift lands as a cube miss. Python does
+  /// not have this problem because its warp is cube-absolute and re-solved at
+  /// the clip's own commit (vibe docs/sys1_v7.md §7.1, `_maybe_enter`); here the
+  /// equivalent is to re-engage, and to carry the heading across the seam as an
+  /// absolute target rather than a residual that goes stale.
+  bool ramping() const { return cfg_.enter_yaw_rate_deg > 0.0f; }
+
   void commit(const Plan& plan) {
+    if (ramping() && plan.mode == Mode::CLIP) return commit_enter(plan);
+    stage_ = ReferenceWriter::Stage::FULL;
+    live_.held_row.clear();
     plan_ = plan;
     clips_->commit(plan_);  // burn the clip, count the roll
     reference_id_ = "sys1-" + std::to_string(++seq_);
@@ -517,10 +555,51 @@ class Sys1Node : public rclcpp::Node {
     // A new act invalidates the evidence gathered under the old one: the next
     // decision must be made from reads taken while THIS reference was playing.
     belief_->clear();
-    publish_reference(writer_->build(plan_, live_));
+    publish_reference(writer_->build(plan_, live_, stage_));
   }
 
-  void republish() { publish_reference(writer_->build(plan_, live_)); }
+  void commit_enter(const Plan& clip) {
+    // Freeze the heading the ramp is paying toward while the robot is still
+    // quiescent — the ONE number that must survive the ramp. `entry_yaw` is a
+    // base-frame residual, so it goes stale the instant the robot turns; the
+    // absolute target it implies does not.
+    enter_target_yaw_ = wrap(robot_yaw() + clip.entry_yaw);
+    // Start the ramp from what sys0 is being TOLD, not from where it is.
+    if (const float* held = writer_->final_row())
+      live_.held_row.assign(held, held + writer_->cols());
+    else
+      live_.held_row.clear();
+
+    pending_ = clip;
+    plan_ = clip;  // same row and sym; the writer emits the ramp, not the clip
+    plan_.label = "->" + clip.label;
+    stage_ = ReferenceWriter::Stage::ENTER;
+    in_enter_ = true;
+    reference_id_ = "sys1-" + std::to_string(++seq_);
+    waiting_ = 0;
+    committed_ = true;
+    belief_->clear();  // the ramp decides nothing, and reads nothing
+    publish_reference(writer_->build(plan_, live_, stage_));
+  }
+
+  void commit_clip(Plan clip) {
+    // What the ramp FAILED to pay, measured. sys0 tracks a swept heading with a
+    // lag, so this is small but never zero, and assuming zero is exactly the
+    // error the split exists to remove.
+    clip.entry_yaw = wrap(enter_target_yaw_ - robot_yaw());
+    stage_ = ReferenceWriter::Stage::CLIP;
+    in_enter_ = false;
+    live_.held_row.clear();
+    plan_ = clip;
+    clips_->commit(plan_);  // the clip burns here, once — the ramp burned none
+    reference_id_ = "sys1-" + std::to_string(++seq_);
+    waiting_ = 0;
+    committed_ = true;
+    belief_->clear();
+    publish_reference(writer_->build(plan_, live_, stage_));
+  }
+
+  void republish() { publish_reference(writer_->build(plan_, live_, stage_)); }
 
   void publish_reference(const std::vector<float>& rows) {
     msg::MotionReference m;
@@ -630,6 +709,10 @@ class Sys1Node : public rclcpp::Node {
 
   // plan state
   Plan plan_, candidate_;
+  Plan pending_;  ///< v7.1: the clip the running ENTER ramp leads into
+  ReferenceWriter::Stage stage_ = ReferenceWriter::Stage::FULL;
+  bool in_enter_ = false;
+  float enter_target_yaw_ = 0.f;  ///< absolute heading, frozen at the ramp
   std::string reference_id_;
   uint64_t seq_ = 0;
   int waiting_ = 0;

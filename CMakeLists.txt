@@ -301,7 +301,7 @@ install(PROGRAMS
   scripts/npz_motion_publisher.py
   # scripts/viser_ghost_g1_residual.py   # LEGACY (vibe v1) — reference only
   scripts/vibe/attention_overlay_viewer.py
-  scripts/vibe/record_topics.sh
+  scripts/vibe/record_vibes.sh
   scripts/vibe/replay_vibes.py
   scripts/vibe/replay_vibes.sh
   scripts/vibe/stream_vibes.sh
@@ -309,6 +309,8 @@ install(PROGRAMS
   scripts/sys1/sys1_console.py
   scripts/sys1/sys1_observe_viewer.py
   scripts/sys1/record_sys1_observe.sh
+  scripts/sys1/replay_sys1_observe.py
+  scripts/sys1/replay_sys1_observe.sh
   scripts/sys1/stream_sys1_observe.sh
   scripts/sys1/validate_sys1_observe_bag.py
   DESTINATION lib/${PROJECT_NAME}/

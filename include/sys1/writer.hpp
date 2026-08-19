@@ -18,16 +18,34 @@ namespace sys1 {
 struct LiveState {
   std::vector<float> joint_pos_il;  ///< (29,) IL-ordered, radians
   std::vector<float> joint_vel_il;
+  /// v7.1 only, and empty otherwise: the last row of the reference sys0 is
+  /// CURRENTLY playing. A ramp that starts from what sys0 was actually told is
+  /// C0 by construction, whatever wrote it — where the live pose re-opens the
+  /// tracking error as a step at row 0.
+  std::vector<float> held_row;
 };
 
 class ReferenceWriter {
  public:
+  /// Which half of a v7.1 clip act to emit. FULL is v7 and every still: one
+  /// reference, lead-in and clip together. v7.1 splits a clip in two so the
+  /// clip RE-ENGAGES on the pose the ramp actually reached instead of dead
+  /// reckoning from the pose it started at (docs/vibe/sys1/planner.md §7.1).
+  enum class Stage { FULL, ENTER, CLIP };
+
   ReferenceWriter(const ClipTable& table, const Cfg& cfg);
 
   /// Build the reference for `plan`. Returns rows [frames, cols] IL-ordered.
   /// Under v7 `entry_yaw` goes on the message and MotionClock applies it at
   /// engage; under v7.1 the ramp carries it and `ramped()` says so.
-  const std::vector<float>& build(const Plan& plan, const LiveState& live);
+  const std::vector<float>& build(const Plan& plan, const LiveState& live,
+                                  Stage stage = Stage::FULL);
+
+  /// The last row of the reference just built — what sys0 will be holding when
+  /// it reports finished, and therefore where the next ramp starts.
+  const float* final_row() const {
+    return rows_.empty() ? nullptr : &rows_[rows_.size() - cols_];
+  }
 
   int frames() const { return frames_; }
   int cols() const { return cols_; }

@@ -86,7 +86,7 @@ children+=("$!")
 
 if [[ "${record}" == true ]]; then
   echo "stream_vibes: recording to ${VIBE_BAG_DIR}"
-  ros2 run cpp_control record_topics.sh &
+  ros2 run cpp_control record_vibes.sh &
   children+=("$!")
 fi
 

@@ -4,7 +4,10 @@ A closed-loop Repose run is a Vibe run with one extra process and one extra
 terminal. Everything in [docs/vibe/experiments.md](../experiments.md)
 applies unchanged — same setup files, same camera source, same viewers, same
 bags. This page is only the delta. Algorithm and design:
-[planner.md](planner.md).
+[planner.md](planner.md). For observation-only RGB-D collection with Sys0
+locked in nominal stand, use
+[color_calibration.md](color_calibration.md), which has complete sim2sim and
+hardware workflows.
 
 ## 1. What is different
 
@@ -117,7 +120,23 @@ A sys1 bag carries `/vibe/sys1/status`, `/vibe/sys0/status` and
 planner pane when they are present — the console's own fields, held at the time
 cursor rather than interpolated, because one sample is one decision.
 
-## 6. Reading a run
+## 6. Observation calibration
+
+Calibration is not a closed-loop Sys1 run. It launches the same Repose policy
+with Sys0 locked in nominal stand, starts only the observation node, and stores
+one labeled RGB-D snapshot per `LT` press. Use its separate pair:
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/stream_sys1_observe.sh record
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/replay_sys1_observe.sh
+```
+
+Do not use `stream_vibes.sh` for this dataset: it records continuous experiment
+telemetry, not the selected calibration frames. Both deployment workflows and
+the 30-per-color/60-negative protocol are in
+[color_calibration.md](color_calibration.md).
+
+## 7. Reading a run
 
 | symptom | look at | likely |
 |---|---|---|

@@ -72,9 +72,14 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
   if (cfg_.lead_in_rate <= 0.0f) return;
   ramp_ = cfg_.enter_yaw_rate_deg > 0.0f && plan.mode == Mode::CLIP;
 
+  // v7.1 starts from what sys0 was ACTUALLY commanded, so the ramp is C0 with
+  // the still it leaves; v7 keeps the live pose it was measured with.
+  const bool held = ramp_ && live.held_row.size() == static_cast<size_t>(cols_);
+  const float* from = held ? live.held_row.data() : live.joint_pos_il.data();
+
   float max_dq = 0.0f;
   for (int j = 0; j < J; ++j)
-    max_dq = std::max(max_dq, std::fabs(target[j] - live.joint_pos_il[j]));
+    max_dq = std::max(max_dq, std::fabs(target[j] - from[j]));
 
   if (!ramp_) {
     const float secs = std::clamp(max_dq / cfg_.lead_in_rate,
@@ -109,7 +114,7 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
     const float s = a * a * (3.0f - 2.0f * a);  // smoothstep, as Motion::lead_in
     if (!ramp_) {
       for (int j = 0; j < J; ++j)
-        row[j] = (1.0f - s) * live.joint_pos_il[j] + s * target[j];
+        row[j] = (1.0f - s) * from[j] + s * target[j];
       continue;
     }
     // Cubic Hermite. v0 is ZERO because a clip is only ever committed out of a
@@ -125,7 +130,7 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
     const float h01 = -2.0f * a3 + 3.0f * a2, h11 = a3 - a2;
     const float g01 = 6.0f * a - 6.0f * a2, g11 = 3.0f * a2 - 2.0f * a;
     for (int j = 0; j < J; ++j) {
-      const float p0 = live.joint_pos_il[j], d = target[j] - p0;
+      const float p0 = from[j], d = target[j] - p0;
       // Fritsch-Carlson: keep the cubic MONOTONE between its endpoints. A clip
       // span is sliced mid-motion, so its entry frame is already moving fast —
       // med 4.8, p90 7.1 rad/s over this alphabet. Matched unclamped, the
@@ -138,8 +143,11 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
       row[j] = p0 + h01 * d + h11 * m1;
       row[J + j] = (g01 * d + g11 * m1) / T;
     }
-    // The twist ramps onto the clip's own; contact flags are binary, stay hard.
-    for (int k = ALIN; k < ALIN + 6; ++k) row[k] = s * target[k];
+    // Root twist stays ZERO, as v7's lead-in has it. The ramp's root POSITION
+    // is pinned at the entry anchor for every one of its frames, so a velocity
+    // that ramps onto the clip's entry twist is a lie the robot acts on — and
+    // over a ramp 5x longer than v7's lead-in it walks the clip off the anchor
+    // sys0 stamped at engage and never re-measures.
     rotate_row(row, -plan.entry_yaw * (1.0f - s));
     // ...and say so, as the sweep does: this is the smoothstep's derivative,
     // added to the clip's own yaw rate so both endpoints stay continuous.
@@ -168,13 +176,29 @@ void ReferenceWriter::blend_head(const LiveState& live, int count) {
 }
 
 const std::vector<float>& ReferenceWriter::build(const Plan& plan,
-                                                 const LiveState& live) {
+                                                 const LiveState& live,
+                                                 Stage stage) {
   if (live.joint_pos_il.size() != static_cast<size_t>(J) ||
       live.joint_vel_il.size() != static_cast<size_t>(J))
     throw std::runtime_error("sys1 writer: live state is not 29 IL joints");
   rows_.clear();
   lead_ = 0;
   ramp_ = false;
+
+  // v7.1's second half: the ramp already walked the joints onto the entry pose
+  // and paid most of the heading, so the clip is its own bare reference. No
+  // lead-in (there is nothing left to lead in from) and no blend (that pins the
+  // reference back to the live pose and re-opens what the ramp just closed —
+  // the `_blend_entry` suppression, vibe docs/sys1_v7.md §7.1). What the ramp
+  // did NOT pay rides `entry_yaw` on the message, as v7 always did, on an angle
+  // the node has re-measured instead of assumed.
+  if (stage == Stage::CLIP) {
+    const ClipRow& r = t_.rows()[plan.row];
+    const float* span = t_.span(plan.row);
+    rows_.assign(span, span + static_cast<size_t>(r.span_len) * cols_);
+    frames_ = r.span_len;
+    return rows_;
+  }
 
   if (plan.mode != Mode::CLIP) {
     // A still mode is a clip whose frames happen to be identical — except for
@@ -205,6 +229,11 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
   const ClipRow& r = t_.rows()[plan.row];
   const float* span = t_.span(plan.row);
   push_lead_in(plan, span, live);
+
+  if (stage == Stage::ENTER) {  // v7.1: the ramp is its own act, and ends here
+    frames_ = static_cast<int>(rows_.size() / cols_);
+    return rows_;
+  }
 
   const size_t at = rows_.size();
   rows_.resize(at + static_cast<size_t>(r.span_len) * cols_);

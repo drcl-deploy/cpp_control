@@ -11,7 +11,8 @@ Sim/hardware:
         artifact_dir:=/path/to/repose/export [checkpoint:=STEP]
 
 Offboard:
-    ros2 run cpp_control stream_sys1_observe.sh [record]
+    bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/stream_sys1_observe.sh \
+        [record]
 """
 
 import os

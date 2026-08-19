@@ -79,6 +79,11 @@ adds the planner process to this same runtime — see
 [docs/vibe/sys1/experiments.md](sys1/experiments.md) for the two things that
 differ (depth on the camera wire, and the console terminal).
 
+To collect labeled RGB-D snapshots while the robot remains locked in nominal
+stand, use the separate sim2sim or hardware workflow in
+[Sys1 color calibration](sys1/color_calibration.md). It has its own
+`stream_sys1_observe.sh`/`replay_sys1_observe.sh` pair and bag directory.
+
 For Repose, UOLM, or PerLoco, stage the motion after the task is running:
 
 ```bash
@@ -129,6 +134,18 @@ attention panels show their offset from the selected bag timestamp so dropped
 or delayed samples remain visible. A bag recorded under sys1 also gets a
 planner pane, held at the cursor rather than interpolated; an open-loop bag
 simply has none.
+
+Calibration bags are intentionally separate from experiment bags. Record and
+review them with:
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/stream_sys1_observe.sh record
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/replay_sys1_observe.sh
+```
+
+They default to `~/unitree_ros2/bags/sys1_observe/`; the complete hardware and
+sim2sim procedure is in
+[Sys1 color calibration](sys1/color_calibration.md).
 
 ## Controls and shutdown
 

@@ -308,19 +308,46 @@ can follow. `T = 1.5·max(Δθ/ω_max, Δq/q̇_max)` — the 1.5 is the smoothst
 peak slope over its mean — clamped to `[lead_in_min_s, lead_in_max_s]`. The
 ceiling moves to 1.2 s with the preset: 0.6 s truncates even the median ask.
 
-### What the port does NOT need
+### The split — and why prepending the ramp does not work
 
-The sim's v7.1 carries five mechanisms this seam makes free. It rewrites a
-shared buffer in place every step; the C++ precomputes one array and publishes
-it atomically.
+The first build prepended the ramp to the clip's own reference: one message, one
+`engage`. It read worse in sim2sim than v7 did, and the reason is the one thing
+this seam does NOT share with the sim.
+
+**`MotionClock::engage` stamps the reference's world anchor from row 0 and never
+re-measures it.** Everything after that frame is dead reckoning. Under v7 that
+window is the ~0.5 s lead-in; a 1.2 s ramp is 5x, and drift over it lands
+directly as a cube miss. The sim never sees this because its warp is
+*cube-absolute* and re-solved at the clip's own commit (`_maybe_enter` →
+`_warp_to_cube`), so the ramp costs it nothing in accuracy.
+
+So the port takes the sim's mode boundary after all — **the ramp is its own act**:
+
+    still --commit--> ENTER (own reference, own engage) --finished--> CLIP (re-engaged)
+
+| | carries |
+|---|---|
+| ENTER reference | the ramp rows only. `entry_yaw_offset = 0` — the rows carry the heading. Burns no clip |
+| at the ENTER commit | `enter_target_yaw = wrap(robot_yaw + entry_yaw)` — the ABSOLUTE heading, frozen while the robot is still quiescent. `entry_yaw` is base-frame and goes stale the instant it turns |
+| CLIP reference | the raw span. No lead-in (nothing left to lead in from), no blend (it would re-open what the ramp closed). `entry_yaw = wrap(enter_target_yaw − robot_yaw)` — what the ramp *failed* to pay, measured |
+
+Both halves are rebuilt from frozen inputs, so a resend is byte-identical.
+
+Two smaller fixes rode along, both ramp-gated:
+
+| | was | is |
+|---|---|---|
+| root twist across the ramp | ramped to the clip's entry twist | **zero**. The ramp's root position is pinned at the entry anchor, so a nonzero velocity is a lie the robot walks on |
+| where the ramp starts | the LIVE pose — a reference step of one tracking error at row 0 | the last row of the reference sys0 is actually playing (`LiveState::held_row`), Python's `_held_pose` |
+
+### What the port still does not need
 
 | sim needed | here |
 |---|---|
-| `enter` as its own mode, plan and commit | the ramp is prepended to the same reference. `mode` stays CLIP, `lead_in_frames` reports it, `finished` fires once |
 | a previewed horizon (`_write_enter` at 10 phases) | sys0's future window reads the published rows |
-| a frozen warp anchor | `entry_yaw` is computed once at commit and baked; nothing is re-derived mid-ramp |
+| a frozen warp *anchor* (psi + cube xy) | no odometry, so no xy to freeze; the heading half is `enter_target_yaw` above |
 | `_pick_still_slot` (3-frame headroom) | stills are synthesized, 40 rows |
-| suppressing `_blend_entry` after a ramp | already `if (lead_ == 0 && blend_frames > 0)` |
+| suppressing `_blend_entry` after a ramp | `Stage::CLIP` emits the bare span |
 
 ### The joint seam, measured — and why it stays open
 

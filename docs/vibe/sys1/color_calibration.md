@@ -3,21 +3,37 @@
 Collect independent RGB-D snapshots for the six-color palette, `min_value`,
 and `min_rel_sat`. This workflow does not tune geometry or kinematics.
 
-## Build
+## 1. Build
+
+Build on the simulator/offboard workspace and on the robot workspace after
+syncing this package:
 
 ```bash
 cd ~/unitree_ros2/cyclonedds_ws
-source /opt/ros/humble/setup.bash
+source ~/unitree_ros2/setup.sh          # real robot/offboard
+# OR: source ~/unitree_ros2/setup_local.sh  # sim2sim
 colcon build --symlink-install --packages-select cdr_tcp_bridge cpp_control
 ```
 
-## Sim2sim: three terminals
+## 2. Select the environment
+
+| Workflow | Terminals 1–2 | Terminal 3 | Camera source |
+|---|---|---|---|
+| Sim2sim | simulator machine, `setup_local.sh` | same machine, `setup_local.sh` | MuJoCo |
+| Hardware | onboard, `setup.sh` | offboard, `setup.sh` | onboard D435i with `--depth` |
+
+The streamer creates the isolated offboard bridge domain itself. Do not export
+a separate ROS domain manually. Commands assume the checkout is
+`~/unitree_ros2`; substitute the robot's checkout prefix if it differs.
+
+## 3. Sim2sim: three terminals
 
 The simulator config must have `use_joystick: 1` and `camera_depth: 1`.
 
 Terminal 1 — simulator:
 
 ```bash
+source ~/unitree_ros2/setup_local.sh
 cd ~/unitree_ros2/unitree_mujoco/simulate/build
 ./unitree_mujoco
 ```
@@ -35,14 +51,41 @@ Terminal 3 — offboard viewer and snapshot bag:
 
 ```bash
 source ~/unitree_ros2/setup_local.sh
-ros2 run cpp_control stream_sys1_observe.sh record \
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/stream_sys1_observe.sh record \
   --samples 30 --negative-samples 60
 ```
 
-For hardware, run Terminal 2 with `setup.sh`; run Terminal 3 on the offboard
-machine with its normal bridge environment.
+## 4. Hardware: three terminals
 
-## Gamepad and viewer
+Terminal 1 — onboard D435i RGB-D source:
+
+```bash
+source ~/unitree_ros2/setup.sh
+python3 ~/unitree_ros2/cyclonedds_ws/src/vision_encoders/scripts/camera_streamer.py --depth
+```
+
+Terminal 2 — onboard locked nominal stand and observation stream:
+
+```bash
+source ~/unitree_ros2/setup.sh
+ros2 launch cpp_control g1_sys1_observe_calibration.launch.py \
+  artifact_dir:=/home/unitree/lkrajan/vibe_models/g1_repose_adapt_sonic/wandb_checkpoints/011pgzbh \
+  checkpoint:=58000 \
+  sys1_config:=/home/unitree/lkrajan/vibe_data/g1_repose.yaml
+```
+
+Terminal 3 — offboard viewer and snapshot bag:
+
+```bash
+source ~/unitree_ros2/setup.sh
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/stream_sys1_observe.sh record \
+  --samples 30 --negative-samples 60
+```
+
+Terminal 3 never connects to the camera directly. The onboard observation node
+publishes paired RGB, depth, labels, and results through the calibration bridge.
+
+## 5. Gamepad and viewer
 
 - `RB`: enter and retain the nominal SONIC stand.
 - `LT`: save the next complete paired RGB-D frame as one calibration snapshot.
@@ -56,7 +99,7 @@ machine with its normal bridge environment.
 The RGB-D stream stays live for the viewer. With `record`, the bag stores only
 clicked snapshots and their exact labels, not the continuous video stream.
 
-## Positive collection: 30 clicks per color
+## 6. Positive collection: 30 clicks per color
 
 Order: red, orange, green, yellow, blue, pink.
 
@@ -79,7 +122,7 @@ For every click:
 Avoid 30 nearly identical placements. Do not click through hand occlusion,
 motion blur, or a face transition.
 
-## Negative collection: 60 clicks
+## 7. Negative collection: 60 clicks
 
 Use no visible cube:
 
@@ -90,14 +133,31 @@ Use no visible cube:
 Negatives tune rejection behavior for the visual gates. A hand covering a cube
 is an occlusion test, not a positive color sample.
 
-## Output and validation
+## 8. Output, validation, and replay
 
-Bags are written below `${SYS1_OBSERVE_BAG_DIR}` or
-`./sys1_observe_bags`.
+Bags are written below `${SYS1_OBSERVE_BAG_DIR}` or, by default,
+`~/unitree_ros2/bags/sys1_observe/`.
 
 ```bash
 ros2 run cpp_control validate_sys1_observe_bag.py /path/to/bag
 ```
+
+Review the newest completed bag in the read-only RGB-D replayer:
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/replay_sys1_observe.sh
+```
+
+Or open a specific bag directory (passing its `.db3`/`.mcap` file also works):
+
+```bash
+bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/sys1/replay_sys1_observe.sh \
+  /path/to/bag
+```
+
+Use `Left`/`Right` for individual frames, `PageUp`/`PageDown` for stages,
+and `Space` for play/pause. The label-overlay checkbox toggles production
+classification pixels without changing the bag.
 
 A complete run contains 30 snapshots for each of six colors and 60 negative
 snapshots: 240 selected RGB-D frames total.
