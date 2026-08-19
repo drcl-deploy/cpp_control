@@ -23,8 +23,10 @@
 #include "cnpy/cnpy.h"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
+#include "sys1/belief.hpp"
 #include "sys1/clips.hpp"
 #include "sys1/kinematics.hpp"
+#include "sys1/sight.hpp"
 #include "sys1/table.hpp"
 #include "sys1/writer.hpp"
 
@@ -44,20 +46,132 @@ void check(bool ok, const std::string& what) {
 
 void check_cfg() {
   std::puts("cfg");
-  const Cfg v5 = Cfg::v5(), v6 = Cfg::v6();
-  check(v5.pattern == "RRB" && v6.pattern == "RRF", "v5/v6 differ by pattern");
-  check(v6.horizon_gain == 0.3f && v5.horizon_gain == 0.0f, "v6 has a horizon");
-  check(v5.color_gate() == v5.min_visible, "v5 is one gate for both channels");
-  check(v6.color_gate() == 0.0f, "v6 splits the colour channel");
-  bool threw = false;
-  try {
-    Cfg bad = Cfg::v5();
-    bad.pattern = "RRU";
-    bad.validate();
-  } catch (const std::exception&) {
-    threw = true;
-  }
-  check(threw, "a pattern outside FBLR is refused");
+  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7();
+  check(!v6.nominal_stand && v7.nominal_stand,
+        "v6 and v7 differ by the gaze fix and nothing else");
+  check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
+        "everything the old versions used to split is now one default");
+  check(v7.scan_steps > 2 * v7.hold_tail,
+        "a SCAN outlasts twice its hold tail, so the sweep ends while quiet");
+  auto refuses = [](void (*mangle)(Cfg&)) {
+    Cfg bad;
+    mangle(bad);
+    try {
+      bad.validate();
+    } catch (const std::exception&) {
+      return true;
+    }
+    return false;
+  };
+  check(refuses([](Cfg& c) { c.pattern = "RRU"; }),
+        "a pattern outside FBLR is refused");
+  check(refuses([](Cfg& c) { c.hold_tail = c.scan_steps; }),
+        "a SCAN that never goes quiet is refused");
+  check(refuses([](Cfg& c) { c.belief_min_votes = c.belief_window + 1; }),
+        "a vote that can never carry is refused");
+  check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
+        "a quiescence gate that never opens is refused");
+}
+
+/// The belief is what makes the ladder safe, so assert the two properties the
+/// planner leans on: a minority read cannot carry, and the pose that comes back
+/// is the FRESHEST one that agrees with the vote, not merely the first.
+void check_belief() {
+  std::puts("belief");
+  Cfg cfg;
+  cfg.belief_window = 4;
+  cfg.belief_min_votes = 3;
+  Belief b(cfg);
+  check(b.n_reads() == 0 && !b.valid(),
+        "an empty belief is BLIND, not 'saw nothing'");
+
+  auto read = [](int color, bool ok, float x) {
+    Sight s;
+    s.color = color;
+    s.color_ok = color >= 0;
+    s.ok = ok;
+    s.pos = {x, 0.f, 0.f};
+    return s;
+  };
+
+  b.push(read(4, true, 1.0f));
+  b.push(read(4, false, 0.f));
+  check(b.n_reads() == 2 && !b.valid(), "two agreeing reads do not carry");
+  b.push(read(1, false, 0.f));
+  check(!b.valid(), "and a flicker in the middle does not help");
+  b.push(read(4, true, 2.0f));
+  check(b.valid() && b.color() == 4, "three of four carries the vote");
+  check(b.pose_ok() && b.pose().pos[0] == 2.0f,
+        "the pose is the freshest agreeing read");
+
+  // Roll the window past every blue read; the vote must follow the evidence.
+  for (int i = 0; i < 4; ++i) b.push(read(2, true, 3.0f));
+  check(b.color() == 2 && b.n_reads() == 8, "the window forgets, the count does not");
+  b.clear();
+  check(b.n_reads() == 0 && !b.valid(), "a commit clears the evidence");
+}
+
+/// decide() must be PURE — the node calls it every tick and commits the answer
+/// only when sys0 finishes, so a decision that burned a clip on the way out
+/// would empty the pool twenty times a second.
+void check_decide_is_pure(const ClipTable& t) {
+  std::puts("decide");
+  Cfg cfg;
+  Sys1Clips clips(t, cfg, 4);
+  Belief b(cfg);
+
+  check(clips.decide(b).mode == Mode::SETTLE,
+        "a blind planner stands in the nominal stance, it does not turn");
+
+  Sight seen;  // a cube, seen, but no pose: only a turn can fix that
+  seen.color = 2;
+  seen.color_ok = true;
+  seen.hint = 0.4f;
+  for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(seen);
+  check(clips.decide(b).mode == Mode::SCAN, "colour without a pose scans");
+
+  Sight placed = seen;
+  placed.ok = true;
+  placed.pos = {0.6f, 0.1f, 0.05f};
+  b.clear();
+  for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(placed);
+  const Plan a = clips.decide(b);
+  const Plan c = clips.decide(b);
+  check(a.mode == Mode::CLIP, "a placed cube retrieves a clip");
+  check(a.row == c.row && a.sym == c.sym && a.cost == c.cost &&
+            clips.burned() == 0,
+        "and twenty calls burn nothing and answer the same");
+  clips.commit(a);
+  check(clips.burned() == 1 && clips.rolls() == 1,
+        "the commit is what burns the row and counts the roll");
+
+  // The target's colour ends the episode, and stays ended: a solved cube must
+  // survive the next read that flickers.
+  Sight target = placed;
+  target.color = 4;
+  b.clear();
+  for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(target);
+  clips.observe(b);
+  check(clips.done() && clips.decide(b).mode == Mode::SETTLE, "the target ends it");
+  b.clear();
+  for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(placed);
+  clips.observe(b);
+  check(clips.done() && clips.decide(b).mode == Mode::SETTLE,
+        "and done is LATCHED — one bad read cannot roll a solved cube away");
+
+  // The ladder steps on the voted colour, once per change however often it runs.
+  Sys1Clips fresh(t, cfg, 5);
+  Belief b2(cfg);
+  for (int i = 0; i < cfg.belief_min_votes; ++i) b2.push(placed);
+  for (int i = 0; i < 10; ++i) fresh.observe(b2);
+  check(fresh.rung() == 0 && fresh.tips() == 0, "the first colour is not a tip");
+  Sight other = placed;
+  other.color = 3;
+  b2.clear();
+  for (int i = 0; i < cfg.belief_min_votes; ++i) b2.push(other);
+  for (int i = 0; i < 10; ++i) fresh.observe(b2);
+  check(fresh.tips() == 1 && fresh.rung() == 1,
+        "a colour change steps exactly one rung, however often observe() runs");
 }
 
 /// THE v7 RESULT, asserted offline: a nominal stance has waist = 0, so the torso
@@ -169,7 +283,7 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
     return std::atan2(std::sin(yaw_of(f) - yaw_of(0)),
                       std::cos(yaw_of(f) - yaw_of(0)));
   };
-  const int ramp = cfg.scan_steps - 2 * cfg.read_tail;
+  const int ramp = cfg.scan_steps - 2 * cfg.hold_tail;
   check(std::fabs(swept(0)) < 1e-5f, "frame 0 is the zero of the sweep");
   check(std::fabs(swept(ramp) - p.yaw_offset) < 1e-3f, "the sweep completes");
   check(std::fabs(swept(cfg.scan_steps - 1) - p.yaw_offset) < 1e-3f,
@@ -254,6 +368,8 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
     return 1;
   }
   Sys1Clips clips(t, cfg, 4);
+  CubeSight eye(cfg, PALETTE_SIM, t.half_extent());
+  Belief belief(cfg);
   std::printf("replay: %zu reads\n", files.size());
   for (const auto& f : files) {
     cnpy::npz_t z = cnpy::npz_load(f);
@@ -271,13 +387,18 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
     CameraPose cam;
     std::copy(R, R + 9, cam.R.begin());
     std::copy(tr, tr + 3, cam.t.begin());
-    const Sight& s = clips.look(bgr, depth, {k[0], k[1], k[2], k[3]}, cam);
-    const Plan p = clips.decide();
-    std::printf("%-24s %-10s c%d pos %+.4f %+.4f %+.4f phi %+.5f | %s cost %.3f "
-                "yaw %+.4f row %d sym %d\n",
+    // Every recorded read is a standing robot, so all of them are quiescent by
+    // construction — the rig feeds the belief the way the node's gate would.
+    const Sight s = eye(bgr, depth, {k[0], k[1], k[2], k[3]}, cam);
+    belief.push(s);
+    clips.observe(belief);
+    const Plan p = clips.decide(belief);
+    std::printf("%-24s %-10s c%d pos %+.4f %+.4f %+.4f phi %+.5f | vote %d/%d "
+                "c%d | %s cost %.3f yaw %+.4f row %d sym %d\n",
                 f.substr(f.find_last_of('/') + 1).c_str(), s.reason.c_str(),
-                s.color, s.pos[0], s.pos[1], s.pos[2], s.phi, p.label.c_str(),
-                p.cost, p.entry_yaw, p.row, p.sym);
+                s.color, s.pos[0], s.pos[1], s.pos[2], s.phi, belief.n_votes(),
+                belief.n_reads(), belief.color(), p.label.c_str(), p.cost,
+                p.entry_yaw, p.row, p.sym);
   }
   return 0;
 }
@@ -286,7 +407,7 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg) {
 
 int main(int argc, char** argv) {
   std::string table_path, frames_path, library_path, bake_path, replay_dir,
-      version = "v7";
+      version = "v7";  // v6 is the gaze ablation
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() { return i + 1 < argc ? argv[++i] : ""; };
@@ -304,6 +425,7 @@ int main(int argc, char** argv) {
 
   const Cfg cfg = Cfg::preset(version);
   check_cfg();
+  check_belief();
   check_gaze();
   check_warp_identity();
 
@@ -340,6 +462,7 @@ int main(int argc, char** argv) {
     if (cfg.nominal_stand) check_nominal_stand(table);
     check_still_rows(table, cfg);
     check_lead_in(table, cfg);
+    check_decide_is_pure(table);
   }
   if (!replay_dir.empty() && replay(replay_dir, table, cfg) != 0) ++failures;
 

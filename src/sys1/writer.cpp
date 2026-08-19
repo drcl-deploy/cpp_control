@@ -52,7 +52,7 @@ void ReferenceWriter::push_stand(int count) {
 /// Rate-limited ramp from the live pose onto `target`. The sim pays this as a
 /// 12-frame blend; on hardware a reference that STEPS is a step input to a
 /// balancing policy, so walk there instead — the same mechanism the human-driven
-/// L1 prep provides, just automatic (docs/sys1/planner.md §1 F4).
+/// L1 prep provides, just automatic (docs/vibe/sys1/planner.md §1 F4).
 ///
 /// Under v7 this matters for STILL modes too, not only clips: the nominal stance
 /// is sys1's own vocabulary and therefore sits further from a clip's exit pose
@@ -120,7 +120,7 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     push_lead_in(t_.stand_row(), live);
     const size_t at = rows_.size();  // the sweep is over the HELD frames only
     push_stand(hold);
-    const int ramp = std::max(hold - 2 * cfg_.read_tail, 1);
+    const int ramp = std::max(hold - 2 * cfg_.hold_tail, 1);
     const float rate = plan.yaw_offset / ramp;  // rad per frame
     for (int f = 0; f < hold; ++f) {
       const float frac = std::min(static_cast<float>(f) / ramp, 1.0f);

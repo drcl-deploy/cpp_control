@@ -90,8 +90,9 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/vibe/tasks.md](docs/vibe/tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
 | [docs/vibe/background.md](docs/vibe/background.md) | deployment constraints, reference lessons, and design decisions |
 | [docs/vibe/roadmap.md](docs/vibe/roadmap.md) | measured hardening priorities and explicitly deferred work |
-| [docs/sys1/planner.md](docs/sys1/planner.md) | the retrieval planner above SONIC — closed-loop Repose, `sys1:=true` |
-| [docs/sys1/experiments.md](docs/sys1/experiments.md) | the closed-loop run: depth, launch, console, what a bag carries |
+| [docs/vibe/sys1/planner.md](docs/vibe/sys1/planner.md) | the retrieval planner above SONIC — closed-loop Repose, `sys1:=true` |
+| [docs/vibe/sys1/experiments.md](docs/vibe/sys1/experiments.md) | the closed-loop run: depth, launch, console, what a bag carries |
+| [docs/vibe/sys1/v7_simplified.md](docs/vibe/sys1/v7_simplified.md) | the OBSERVE/PLAN/ACT split — parity matrix, what was deleted, block diagram |
 
 ## acknowledgements
 

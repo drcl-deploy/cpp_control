@@ -76,7 +76,7 @@ a directory contains several pairs, launch fails instead of guessing; add
 
 Closed-loop Repose runs the same way through `g1_sys1_repose.launch.py`, which
 adds the planner process to this same runtime — see
-[docs/sys1/experiments.md](../sys1/experiments.md) for the two things that
+[docs/vibe/sys1/experiments.md](sys1/experiments.md) for the two things that
 differ (depth on the camera wire, and the console terminal).
 
 For Repose, UOLM, or PerLoco, stage the motion after the task is running:

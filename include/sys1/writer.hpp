@@ -3,8 +3,9 @@
 /// Plan -> the reference rows sys0 plays. The whole seam, and it is small:
 /// the tokenizer reads joint_pos, joint_vel and root ORIENTATION only, so the
 /// sim's cube-exact translation is unobservable on hardware and the warp
-/// collapses to one scalar (docs/sys1/planner.md §1). Rows come straight out of the
-/// table in wire layout; this class only ramps, blends and rate-limits them.
+/// collapses to one scalar (docs/vibe/sys1/planner.md §1). Rows come straight
+/// out of the table in wire layout; this class only ramps, blends and
+/// rate-limits them.
 
 #include <vector>
 

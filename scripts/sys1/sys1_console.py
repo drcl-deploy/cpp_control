@@ -3,7 +3,8 @@
 
     ros2 run cpp_control sys1_console.py
 
-Keys: 0-5 or r/o/g/y/b/p to pick a colour, R to reset the ladder, q to quit.
+Keys: 0-5 or r/o/g/y/b/p to pick a colour, R to re-arm on the same one, q to
+quit. `done` LATCHES, so R is how a solved cube starts the next trial.
 The colour goes out on /vibe/sonic/goal_color, which BOTH the planner and the
 policy's object_goal_color one-hot read — one topic, so they cannot disagree
 about what "4" means.
@@ -89,19 +90,34 @@ class Console(Node):
         else:
             d = chr(s1.delta) if 32 <= s1.delta < 127 else "?"
             stall = f"{s1.stall}" if s1.stall else f"{DIM}0{OFF}"
+            # The belief is a vote, so show the tally: a decision standing on
+            # 3 of 3 reads and one standing on 3 of 12 are not the same claim.
+            # Pad before colouring — escape codes are width 0 but len() > 0.
+            vote = ("blind" if s1.n_reads == 0
+                    else f"{s1.n_votes}/{s1.n_reads} reads").ljust(12)
+            if s1.n_reads == 0:
+                vote = f"{DIM}{vote}{OFF}"
+            # Range/bearing/spin belong to the pose, so blank them without one:
+            # a stale row that looks live is worse than an empty one.
+            where = (f"r {s1.range_m:.2f} m   bearing {s1.bearing_rad * 57.3:+.0f}°"
+                     f"   spin {s1.phi_rad * 57.3:+.0f}°   {s1.n_px} px"
+                     if s1.pose_ok else f"{DIM}no pose{OFF}")
             lines += [
                 f"  mode    {BOLD}{MODES[s1.mode]:<7}{OFF}{s1.label:<10}"
                 f"rung {s1.rung}  d={d}  tips {s1.tips}  stall {stall}  "
-                f"burned {s1.burned}"
+                f"burned {s1.burned}   {DIM}roll{OFF} {s1.rolls}  "
+                f"{DIM}ep{OFF} {s1.episode}"
                 + (f"  {BOLD}DONE{OFF}" if s1.done else ""),
-                f"  sees    {chip(s1.color) if s1.sees else f'{DIM}--{OFF}'}  "
-                f"{s1.reason:<10}"
-                f"r {s1.range_m:.2f} m   bearing {s1.bearing_rad * 57.3:+.0f}°   "
-                f"spin {s1.phi_rad * 57.3:+.0f}°   {s1.n_px} px",
-                f"  plan    cost {s1.cost:.2f} m   yaw {s1.entry_yaw:+.2f} rad   "
-                f"frames {s1.frames}"
-                + (f" (+{s1.lead_in_frames} ramp)" if s1.lead_in_frames else "")
-                + f"   {s1.observe_ms:.1f} ms",
+                f"  belief  {chip(s1.color) if s1.sees else f'{DIM}--{OFF}'}  "
+                f"{vote}{s1.reason:<10}{where}",
+                f"  gate    ω {s1.omega_cam:.2f} rad/s"
+                f"   read {s1.accept_rate * 100:.0f}% of frames"
+                f"   {s1.observe_ms:.1f} ms/read",
+                f"  plan    {s1.label:<10}cost {s1.cost:.2f} m   "
+                f"yaw {s1.entry_yaw:+.2f} rad   frames {s1.frames}"
+                + (f" (+{s1.lead_in_frames} ramp)" if s1.lead_in_frames else ""),
+                f"  {DIM}next{OFF}    {s1.cand_label:<10}cost {s1.cand_cost:.2f} m"
+                f"   {DIM}(what a finished reference would commit to){OFF}",
             ]
 
         lines.append(rule)
@@ -115,7 +131,7 @@ class Console(Node):
                 f"frame {s0.frame}/{s0.frames}"
                 f"   {'● engaged' if s0.accepting else f'{DIM}○ idle{OFF}'}")
         lines += [rule,
-                  f"  {DIM}0-5 / {'/'.join(KEYS)}  set target     R  reset ladder"
+                  f"  {DIM}0-5 / {'/'.join(KEYS)}  set target     R  re-arm (next trial)"
                   f"     q  quit{OFF}"]
         return "\n".join(lines)
 
@@ -146,7 +162,9 @@ def main() -> None:
                     break
                 if key.isdigit() and 0 <= int(key) < 6:
                     node.set_color(int(key))
-                elif key.lower() in KEYS and key != "R":
+                elif key == "R":
+                    node.set_color(node.selected)   # same colour = next episode
+                elif key.lower() in KEYS:
                     node.set_color(KEYS.index(key.lower()))
             frame = node.render()
             if height:

@@ -223,7 +223,7 @@ if(OpenCV_FOUND)
   target_include_directories(cpp_control_sys1 PUBLIC ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(cpp_control_sys1 cpp_control_deploy ${OpenCV_LIBS})
 
-  # Replay rig + bake: no robot, no ROS, no risk (docs/sys1/planner.md §8 P0).
+  # Replay rig + bake: no robot, no ROS, no risk (docs/vibe/sys1/planner.md §8 P0).
   add_executable(sys1_selftest tests/sys1_selftest.cpp)
   target_link_libraries(sys1_selftest cpp_control_sys1 cpp_control_vibe_contract)
   if(BUILD_TESTING)

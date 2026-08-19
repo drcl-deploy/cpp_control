@@ -2,29 +2,34 @@
 
 Given a target colour, sys1 looks at the cube, picks a recorded quarter-turn clip
 that reaches it from where the robot actually stands, and writes it into sys0's
-reference. Three modes, one state integer, one ranking scalar.
+reference. Two modes, one state integer, one ranking scalar.
 
 Reference implementation: vibe `src/vibe/repose/planner/clips.py` (algorithm) and
 `command.py` (the sim seam). Behaviour spec: vibe `docs/sys1_v5.md`. Migration
 spec: vibe `docs/sys1_cpp.md` — **read §1 below before that one**, four of its
-structural requirements do not apply to this stack.
+structural requirements do not apply to this stack. This port has since diverged
+from the Python by design: the planner is split OBSERVE / PLAN / ACT (§3), and
+the versions it carried are down to one ablation (§0). Build record for that
+split, with the parity matrix: [v7_simplified.md](v7_simplified.md).
 
 **Off by default.** `sys1:=false` is bit-for-bit the open-loop rig.
 
 ---
 
-## 0. Three versions, one binary
+## 0. One shipping config, one ablation
 
-They differ by five config values and nothing else, so `version:` in the yaml
-A/B/Cs them on the robot. **v7 is what ships.**
+v5 and its knobs are gone: the A/B is finished, the numbers are below, and a
+binary carrying two dead configurations is not a minimal planner. What survives
+is `nominal_stand`, because that ablation is the result.
 
-| knob | v5 | v6 | v7 | what it does |
-|---|---|---|---|---|
-| `nominal_stand` | false | false | **true** | hold the robot's own nominal stance in a still mode, not the library's stand frame |
-| `pattern` | RRB | **RRF** | RRF | which ladder |
-| `horizon_gain` | 0.0 | **0.3** | 0.3 | penalise a clip's exit range by \|r_exit − 0.70\| |
-| `min_visible_color` | =`min_visible` | **0.0** | 0.0 | split the colour channel from the pose channel |
-| `retry_limit` | 3 | 3 | 3 | commits before swapping the roll axis |
+| knob | v6 | v7 | what it does |
+|---|---|---|---|
+| `nominal_stand` | false | **true** | hold the robot's own nominal stance in a still mode, not the library's stand frame |
+
+Everything the versions used to split — `pattern: RRF`, `horizon_gain: 0.3`,
+`min_visible_color: 0.0` — is now simply the default. `stall_limit` and
+`scan_peek_every` were built, measured, shipped OFF, and are now deleted;
+`clips.py`'s docstrings remain the post-mortems.
 
 `nominal_stand` is one boolean and it is the largest win in the algorithm's
 history: sim solve 62.5% → **95%** (n=120, z=6.15), usable reads 35% → 82–89%,
@@ -39,14 +44,26 @@ its own baked stand row, and asserted every run by `sys1_selftest`:
 | **nominal stance** | 0 / 0 / 0 | **45.0° down, 0.0°** | 0.26 – 1.35 m, 100% of clip exits in view |
 
 45.0° is the camera's **mount angle**, recovered exactly because a nominal pose
-has waist = 0 and the torso is therefore vertical. No search, no tuning. The
-−27.2° head yaw is ours to add — the sim spec never noticed it — and it means
-v5/v6 also swept their scan window from 27° off the robot's heading.
-
-`stall_limit` and `scan_peek_every` were built, measured and ship **OFF** in all
-three; `clips.py`'s docstrings are the post-mortems.
+has waist = 0 and the torso is therefore vertical. No search, no tuning. It is
+also why a CLIP is never read from: a clip ends in an arbitrary exit pose whose
+waist aims the head wherever the recording left it, which is the v6 gaze again.
 
 ---
+
+## 0.5 sys1 is deliberately stupid
+
+sys1 exists to make sys0's *implicit* competence measurable — object
+localisation, contact correction, whole-body recovery — none of which sys0 was
+told to have. A planner that compensated for any of it would hide the result.
+So three things that look like omissions are load-bearing:
+
+| looks like a gap | why it stays |
+|---|---|
+| the ladder is a blind roll pattern, ~3 rolls to a target where a map-aware solver needs 1.2 | a solver would be doing the demo's work for it |
+| retrieval has **no cost ceiling** — a clip commits at any stance residual | that residual is the experiment. `cost` is published so a bag can price it: **P(tip \| cost)** is sys0's implicit-localisation curve |
+| there is no approach primitive — 78 quarter-turns and nothing that walks | whatever closes the gap is sys0's |
+
+Instrument, never guard.
 
 ## 1. Four things this stack does not need
 
@@ -73,9 +90,10 @@ one thing, command another, and the planner is lying to itself.
 
 ## 2. Two rates, no clock
 
-sys1 owns no clock. Every mode is timed off `Sys0Status`, so what the robot is
+sys1 owns no clock. The ACT is timed off `Sys0Status`, so what the robot is
 ACTUALLY playing is the only thing that advances the plan — and a human pressing
-`B` mid-clip parks the planner instead of leaving it talking to itself.
+`B` mid-clip parks the planner instead of leaving it talking to itself. Only the
+act waits: observing and planning run every tick (§3).
 
 ```
 [50 Hz HARD RT]  /lowstate -> g1_vibe_sonic_node -> /lowcmd
@@ -91,33 +109,86 @@ Budget: `classify` is the only hot spot (12 squared distances per live pixel at
 160×120, <1 ms), everything else <0.3 ms, the warp is ~50 µs. **~2% of one core.**
 Clip spans resident: 3.5 MB.
 
-## 3. The loop
+## 3. The loop — OBSERVE / PLAN / ACT
+
+The three used to be fused at the `finished` edge, and every special case in the
+planner existed to patch that fusion. Split apart, they collapse into four lines
+and one mechanism.
 
 ```
-tick():                                       # 20 Hz
-    if !sys0.accepting:            park, disarm        # the human owns the robot
-    if !armed:                     arm, reset, commit(SETTLE)
-    if sys0.reference_id != mine:  resend after 3 ticks
-    if mode == CLIP:               if sys0.finished -> commit(SETTLE)
-    else:
-        if frame >= frames - 2·read_tail:  look()      # camera stationary
-        if sys0.finished:                  commit(decide())
+tick():                                                       # 20 Hz
+    GUARD    sys0 accepting? · lowstate fresh? · nominal stance known?
+    OBSERVE  not in a CLIP, new frame, |omega_cam| < omega_still
+                 -> belief << look()
+    PLAN     clips.observe(belief)        # ladder steps, done latches
+             candidate = clips.decide(belief)      # PURE, ~50 us, every tick
+    ACT      sys0.finished        -> commit(candidate); belief.clear()
+             id never echoed      -> resend, once per 4 ticks
 
-decide():                                     # consumes the LATEST look
-    tip:   colour changed since the last consumed read -> ladder advances
-    done:  colour == target                   -> SETTLE
-    !ok:   no pose                            -> SCAN, yaw = clamp(hint, ±sweep)
-    else:                                     -> CLIP = argmin over pool × 4 syms
+decide(belief):                           # a pure function, four branches
+    done (LATCHED)                        -> STILL(0)
+    belief.n_reads < min_votes            -> STILL(0)     # BLIND, do not guess
+    !belief.valid or !belief.pose_ok      -> STILL(±psi)  # scan
+    else                                  -> CLIP = argmin over pool × 4 syms
 ```
 
-Two deliberate departures from the Python:
+Structurally there are **two** modes, not three: a CLIP, and a STILL whose yaw is
+either zero (SETTLE) or swept (SCAN). They share one builder and one writer
+branch; the message keeps them apart only because a bag reads better for it.
 
-1. **The tip is counted on the read `decide()` consumes**, not on every read.
-   The sim reads five times per still mode and each call could increment; a
-   flickering read advanced three rungs from one still mode (`sys1_cpp.md` §8.5).
-   Never fires in sim, will fire on hardware.
-2. **A SCAN commands a turn rate.** `robot_root_ang_vel_cmd` carries the sweep
-   rate while the ramp runs; zero would lie to the adapter for the whole turn.
+### The belief
+
+One vote over the last `belief_window` reads taken while the camera was quiet.
+It replaces four rules outright:
+
+| was | now |
+|---|---|
+| read only in the last `2·read_tail` frames | read whenever `omega_cam < omega_still` — the physical condition the window was a proxy for |
+| the tip counts only on the read `decide()` consumed, or a flicker walks three rungs | the rung steps off the **voted** colour, which changes at most once per real tip *by construction* |
+| a stale camera **parks** the planner | a stale camera **starves the belief**, and a starved belief plans the nominal stance. A camera lost mid-clip now puts the robot back on its feet instead of freezing it in a half-turned exit pose |
+| `done` re-litigated every cycle, so one flickered read rolled a solved cube away | `done` LATCHES; the operator clears it by re-picking a colour (console `R`), which is also the trial loop |
+
+`decide()` being pure is what lets it run at 20 Hz and commit at 1 Hz: the clip
+is burned and the roll counted in `clips.commit()`, at the moment a reference is
+actually published. `sys1_selftest` asserts twenty calls answer identically and
+burn nothing.
+
+**A CLIP is never read from.** It has quiet moments, but it spends them in an
+arbitrary exit pose whose waist aims the head wherever the recording left it —
+the v6 gaze, §0. So a clip ends with an empty belief, and an empty belief plans
+the stance: the mandatory settle after every clip is now a *consequence* of the
+mechanism rather than a branch in the loop.
+
+### Sizing the evidence
+
+Only the quiet part of a still is readable, so `hold_tail` is sized in **reads**,
+not in camera timing. At 50 fps reference and a 20 Hz tick:
+
+| still | frames | ψ | sweep | quiet | reads |
+|---|---|---|---|---|---|
+| SETTLE | 40 / 0.80 s | 0 | — | the whole hold | ~12 |
+| SCAN | 110 / 2.20 s | ±90° | 1.60 s @ 0.98 rad/s | 0.60 s | ~12 |
+
+The sweep rate is unchanged from the 90-frame SCAN it replaces; the extra 0.4 s
+is all quiet time. Too few reads is self-correcting and never wanders — the
+planner settles again, which is exactly the state that produces reads.
+
+A deliberate departure from the Python survives: **a SCAN commands a turn rate.**
+`robot_root_ang_vel_cmd` carries the sweep rate while the ramp runs; zero would
+lie to the adapter for the whole turn.
+
+### What to read off `/vibe/sys1/status`
+
+Published **every tick**, not once per act — the belief and the candidate plan
+both move between commits.
+
+| field | for |
+|---|---|
+| `omega_cam`, `accept_rate` | placing `omega_still`: a held stance reads ~0.05, a sweep ~0.96 |
+| `n_votes` / `n_reads` | how much evidence a decision stood on. 3/3 and 3/12 are not the same claim |
+| `cand_*` | what the planner *would* commit if sys0 finished now — intent, ~a second early |
+| `cost` + `tips` across a CLIP row | **P(tip \| cost)**, the implicit-localisation curve |
+| `rolls`, `episode` | rolls-to-solve, per trial, without inferring episode boundaries |
 
 ## 4. Wire, and the frames it carries
 
@@ -220,7 +291,7 @@ that line warns rather than fails — it is a config truth, not a code fault.
 | P0.5 | the **gaze**, `sys1_selftest` unit checks | 45.0 ± 0.5° down, \|yaw\| < 0.5°. Free, offline, every run — and it is the whole v7 result, so nothing else is worth measuring until it passes |
 | P1 | `retrieve()` picks the same `(row, sym)` as the oracle | offline |
 | P2 | closed loop in sim | 40 trials against `sys1_eval.py` |
-| P3 | onboard, **settle/scan only** | ψ, reference continuity, the 20 Hz budget under the live loop |
+| P3 | onboard, **settle/scan only** | ψ, reference continuity, the 20 Hz budget under the live loop. Also where `omega_still` gets placed: watch `omega_cam` and `accept_rate` |
 | P4 | clip commits on hardware | — |
 
 **The palette is the most fragile piece.** The classifier has no "none" class:

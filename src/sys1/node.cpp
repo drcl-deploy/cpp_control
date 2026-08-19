@@ -3,13 +3,21 @@
  *
  * Soft real-time and a separate process on purpose: it must never sit in the
  * 50 Hz loop, and sys0 has to stay runnable without it (open-loop rollouts are
- * the default). It owns no clock — every mode is timed off Sys0Status, so what
- * the robot is ACTUALLY playing is the only thing that advances the plan.
+ * the default). It owns no clock — the act is timed off Sys0Status, so what the
+ * robot is ACTUALLY playing is the only thing that advances the plan.
+ *
+ * OBSERVE every tick the camera is quiet, PLAN every tick for free, ACT only
+ * when sys0 says it finished. That split is the whole node:
+ *
+ *     GUARD    sys0 accepting? lowstate fresh? nominal stance known?
+ *     OBSERVE  new frame AND |omega_cam| < omega_still  ->  belief << look()
+ *     PLAN     candidate = decide(belief)                   PURE, ~50 us
+ *     ACT      sys0.finished                            ->  commit(candidate)
  *
  *   ros2 launch cpp_control g1_sys1_repose.launch.py
  *   ros2 run cpp_control sys1_console.py        # set the target colour live
  *
- * Design + the four findings that shrank it: docs/sys1/planner.md
+ * Design + the findings that shrank it: docs/vibe/sys1/planner.md
  */
 
 #include <arpa/inet.h>
@@ -41,8 +49,10 @@
 #include "common/g1/motion.hpp"
 #include "common/math_utils.hpp"
 #include "cpp_control/tasks/vibe/task_profile.hpp"
+#include "sys1/belief.hpp"
 #include "sys1/clips.hpp"
 #include "sys1/kinematics.hpp"
+#include "sys1/sight.hpp"
 #include "sys1/table.hpp"
 #include "sys1/writer.hpp"
 
@@ -114,11 +124,13 @@ class Sys1Node : public rclcpp::Node {
 
     RCLCPP_INFO(this->get_logger(),
                 "sys1 %s ready: %zu clips (F%zu B%zu L%zu R%zu) | pattern %s | "
-                "target %s | camera %s:%u @ %.0f Hz",
+                "target %s | belief %d/%d reads under %.2f rad/s | camera "
+                "%s:%u @ %.0f Hz",
                 version_.c_str(), table_.rows().size(), table_.pool('F').size(),
                 table_.pool('B').size(), table_.pool('L').size(),
                 table_.pool('R').size(), cfg_.pattern.c_str(),
                 vibe::cube_color_name(clips_->target_color()),
+                cfg_.belief_min_votes, cfg_.belief_window, cfg_.omega_still,
                 camera_ip_.c_str(), camera_port_, rate_hz_);
   }
 
@@ -132,7 +144,7 @@ class Sys1Node : public rclcpp::Node {
 
   void load_config(const std::string& path) {
     const YAML::Node root = YAML::LoadFile(path);
-    version_ = root["version"] ? root["version"].as<std::string>() : "v6";
+    version_ = root["version"] ? root["version"].as<std::string>() : "v7";
     cfg_ = Cfg::preset(version_);
     if (const auto k = root["knobs"]) {
       auto f = [&](const char* n, float& v) { if (k[n]) v = k[n].as<float>(); };
@@ -141,10 +153,12 @@ class Sys1Node : public rclcpp::Node {
       if (k["pattern"]) cfg_.pattern = k["pattern"].as<std::string>();
       b("nominal_stand", cfg_.nominal_stand);  // v6 + this IS v7; A/B in one edit
       i("retry_limit", cfg_.retry_limit);
-      i("stall_limit", cfg_.stall_limit);
       i("settle_steps", cfg_.settle_steps);
       i("scan_steps", cfg_.scan_steps);
-      i("read_tail", cfg_.read_tail);
+      i("hold_tail", cfg_.hold_tail);
+      i("belief_window", cfg_.belief_window);
+      i("belief_min_votes", cfg_.belief_min_votes);
+      f("omega_still", cfg_.omega_still);
       i("blend_frames", cfg_.blend_frames);
       i("proc_width", cfg_.proc_width);
       i("min_value", cfg_.min_value);
@@ -189,6 +203,8 @@ class Sys1Node : public rclcpp::Node {
 
     const int target = root["target_color"] ? root["target_color"].as<int>() : 4;
     clips_ = std::make_unique<Sys1Clips>(table_, cfg_, target);
+    eye_ = std::make_unique<CubeSight>(cfg_, PALETTE_SIM, table_.half_extent());
+    belief_ = std::make_unique<Belief>(cfg_);
     writer_ = std::make_unique<ReferenceWriter>(table_, cfg_);
 
     for (int i = 0; i < 3; ++i) {
@@ -214,7 +230,17 @@ class Sys1Node : public rclcpp::Node {
       live_.joint_pos_il[j] = m->motor_state[mj].q;
       live_.joint_vel_il[j] = m->motor_state[mj].dq;
     }
-    for (int i = 0; i < 3; ++i) waist_q_[i] = m->motor_state[waist_[i]].q;
+    // HOW FAST THE CAMERA IS SWINGING, which is the only thing that decides
+    // whether a frame is evidence or blur. The camera is rigid to torso_link,
+    // so the base's gyro plus the waist chain's rates bound it — no FK, and
+    // both numbers were already on this message.
+    const auto& g = m->imu_state.gyroscope;
+    float w = std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    for (int i = 0; i < 3; ++i) {
+      waist_q_[i] = m->motor_state[waist_[i]].q;
+      w += std::fabs(m->motor_state[waist_[i]].dq);
+    }
+    omega_cam_ = w;
     last_state_ = this->now();
   }
 
@@ -261,10 +287,20 @@ class Sys1Node : public rclcpp::Node {
       RCLCPP_WARN(this->get_logger(), "ignoring invalid goal_color %d", m->data);
       return;
     }
-    if (m->data == clips_->target_color()) return;
+    // Re-picking the colour already selected is the operator saying "go again":
+    // it is the only way out of a LATCHED done, and it aborts a trial that went
+    // wrong. Same key, new episode, either way.
+    if (m->data == clips_->target_color()) {
+      clips_->reset();
+      belief_->clear();
+      RCLCPP_INFO(this->get_logger(), "re-armed on %s — episode %d",
+                  vibe::cube_color_name(m->data), clips_->episode());
+      return;
+    }
     clips_->set_target_color(m->data);
-    RCLCPP_INFO(this->get_logger(), "target -> %d (%s)", m->data,
-                vibe::cube_color_name(m->data));
+    belief_->clear();
+    RCLCPP_INFO(this->get_logger(), "target -> %d (%s), episode %d", m->data,
+                vibe::cube_color_name(m->data), clips_->episode());
   }
 
   // ── Camera wire ────────────────────────────────────────────────
@@ -347,68 +383,39 @@ class Sys1Node : public rclcpp::Node {
       raw.convertTo(metres, CV_32FC1, 1e-3);
     }
 
-    std::lock_guard<std::mutex> lock(frame_mutex_);
-    bgr_ = std::move(bgr);
-    depth_ = std::move(metres);
-    intr_ = {depth->fx, depth->fy, depth->cx, depth->cy};
-    last_frame_ = this->now();
+    {
+      std::lock_guard<std::mutex> lock(frame_mutex_);
+      bgr_ = std::move(bgr);
+      depth_ = std::move(metres);
+      intr_ = {depth->fx, depth->fy, depth->cx, depth->cy};
+    }
+    // Atomics, because these two are the only fields the ROS thread reads
+    // WITHOUT the lock — the freshness log and the "is this frame new" test.
+    last_frame_ns_.store(this->now().nanoseconds(), std::memory_order_relaxed);
+    frame_seq_.fetch_add(1, std::memory_order_release);
   }
 
-  // ── The loop ───────────────────────────────────────────────────
+  // ── OBSERVE ────────────────────────────────────────────────────
 
-  bool fresh(const rclcpp::Time& t) const {
-    return t.nanoseconds() > 0 && (this->now() - t).seconds() < stale_s_;
-  }
+  /// One read, if there is a new frame AND the camera was holding still for it.
+  /// The old "take exactly the last 2*read_tail frames" was a proxy for this;
+  /// measuring the camera's own rate is both simpler and the true condition, so
+  /// a SCAN's sweep rejects itself and a SETTLE's whole hold is readable.
+  ///
+  /// A CLIP is excluded outright rather than left to the gate. A clip has quiet
+  /// moments, but it spends them in an arbitrary exit pose whose waist aims the
+  /// head wherever the recording left it — that is precisely the v6 gaze the
+  /// nominal stance exists to escape, so those reads are quiet and still wrong.
+  /// The mandatory settle after every clip is what this produces: a clip ends
+  /// with an empty belief, and an empty belief plans the stance.
+  void observe() {
+    if (plan_.mode == Mode::CLIP) return;
+    const uint64_t seq = frame_seq_.load(std::memory_order_acquire);
+    if (seq == seen_seq_) return;  // no new frame; the camera is slower than us
+    seen_seq_ = seq;
+    ++frames_offered_;
+    if (omega_cam_ > cfg_.omega_still) return;  // moving: this frame is blur
 
-  void tick() {
-    if (!sys0_seen_ || !sys0_.accepting) {
-      if (armed_) RCLCPP_INFO(this->get_logger(), "sys1: sys0 left POLICY — idle");
-      armed_ = false;
-      return;
-    }
-    if (!fresh(last_state_) || !fresh(last_frame_) ||
-        (cfg_.nominal_stand && !stand_ready_)) {
-      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                           "sys1: waiting for %s%s%s",
-                           fresh(last_state_) ? "" : "lowstate ",
-                           fresh(last_frame_) ? "" : "camera frames ",
-                           (!cfg_.nominal_stand || stand_ready_)
-                               ? ""
-                               : "sys0's nominal stance");
-      return;
-    }
-
-    if (!armed_) {  // fresh episode: never plan the new one from the old cube
-      armed_ = true;
-      clips_->reset();
-      RCLCPP_INFO(this->get_logger(), "sys1: armed, target %s",
-                  vibe::cube_color_name(clips_->target_color()));
-      commit(clips_->still(Mode::SETTLE, 0.0f));
-      return;
-    }
-
-    if (sys0_.reference_id != reference_id_) {
-      // sys0 commits on arrival, so this is a dropped message, not a race.
-      if (++waiting_ > 3) {
-        RCLCPP_WARN(this->get_logger(), "sys1: '%s' never engaged — resending",
-                    reference_id_.c_str());
-        republish();
-      }
-      return;
-    }
-    waiting_ = 0;
-
-    if (plan_.mode == Mode::CLIP) {  // eyes shut, pure replay
-      if (sys0_.finished) commit(clips_->still(Mode::SETTLE, 0.0f));
-      return;
-    }
-    // The sweep finishes 2 read-tails before the end, so these are exactly the
-    // frames with the camera stationary at nominal pitch.
-    if (sys0_.frame + 2 * cfg_.read_tail >= sys0_.frames) look();
-    if (sys0_.finished) commit(clips_->decide());
-  }
-
-  void look() {
     cv::Mat bgr, depth;
     Intrinsics intr;
     {
@@ -417,20 +424,92 @@ class Sys1Node : public rclcpp::Node {
       depth = depth_;
       intr = intr_;
     }
+    if (bgr.empty() || depth.empty()) return;
+
     const auto t0 = std::chrono::steady_clock::now();
-    clips_->look(bgr, depth, intr, camera_pose());
+    belief_->push((*eye_)(bgr, depth, intr, camera_pose()));
     observe_ms_ = std::chrono::duration<float, std::milli>(
                       std::chrono::steady_clock::now() - t0).count();
-    ++looks_;
+    ++frames_read_;
+  }
+
+  // ── The loop ───────────────────────────────────────────────────
+
+  void tick() {
+    if (!sys0_seen_ || !sys0_.accepting) {
+      if (armed_) RCLCPP_INFO(this->get_logger(), "sys1: sys0 left POLICY — idle");
+      armed_ = false;
+      return;
+    }
+    // The camera is deliberately NOT a gate. Losing it starves the belief, and
+    // a starved belief plans the nominal stance — so a camera that dies mid
+    // clip returns the robot to its feet instead of freezing it in the exit
+    // pose of a half-finished turn.
+    if (!fresh(last_state_) || (cfg_.nominal_stand && !stand_ready_)) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                           "sys1: waiting for %s%s",
+                           fresh(last_state_) ? "" : "lowstate ",
+                           (!cfg_.nominal_stand || stand_ready_)
+                               ? ""
+                               : "sys0's nominal stance");
+      return;
+    }
+    if (!camera_fresh())
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                           "sys1: no camera frames — standing by");
+
+    if (!armed_) {  // fresh episode: never plan the new one from the old cube
+      armed_ = true;
+      clips_->reset();
+      belief_->clear();
+      RCLCPP_INFO(this->get_logger(), "sys1: armed, target %s, episode %d",
+                  vibe::cube_color_name(clips_->target_color()),
+                  clips_->episode());
+      candidate_ = clips_->decide(*belief_);
+      commit(candidate_);
+      publish_status();
+      return;
+    }
+
+    observe();
+    clips_->observe(*belief_);
+    candidate_ = clips_->decide(*belief_);
+
+    if (sys0_.reference_id != reference_id_) {
+      // sys0 commits on arrival, so this is a dropped message, not a race.
+      if (++waiting_ > 3) {
+        RCLCPP_WARN(this->get_logger(), "sys1: '%s' never engaged — resending",
+                    reference_id_.c_str());
+        republish();
+        waiting_ = 0;  // one resend per 4 ticks, not one per tick forever
+      }
+    } else {
+      waiting_ = 0;
+      if (sys0_.finished) commit(candidate_);
+    }
+    publish_status();
+  }
+
+  bool fresh(const rclcpp::Time& t) const {
+    return t.nanoseconds() > 0 && (this->now() - t).seconds() < stale_s_;
+  }
+
+  bool camera_fresh() const {
+    const int64_t ns = last_frame_ns_.load(std::memory_order_relaxed);
+    return ns > 0 &&
+           (this->now() - rclcpp::Time(ns, RCL_ROS_TIME)).seconds() < stale_s_;
   }
 
   void commit(const Plan& plan) {
     plan_ = plan;
+    clips_->commit(plan_);  // burn the clip, count the roll
     reference_id_ = "sys1-" + std::to_string(++seq_);
     waiting_ = 0;
-    looks_ = 0;
+    committed_ = true;
+    // A new act invalidates the evidence gathered under the old one: the next
+    // decision must be made from reads taken while THIS reference was playing.
+    belief_->clear();
     publish_reference(writer_->build(plan_, live_));
-    publish_status();
   }
 
   void republish() { publish_reference(writer_->build(plan_, live_)); }
@@ -453,30 +532,51 @@ class Sys1Node : public rclcpp::Node {
     reference_pub_->publish(m);
   }
 
+  /// Every tick, not every commit. The belief moves between commits and so does
+  /// the candidate plan, so a once-per-second status froze the console on stale
+  /// numbers and gave a bag one sample per act to reason about.
   void publish_status() {
-    const Sight& s = clips_->sight();
     msg::Sys1Status m;
     m.mode = static_cast<uint8_t>(plan_.mode);
     m.label = plan_.label;
+    m.cost = plan_.cost;
+    m.entry_yaw = plan_.entry_yaw;
+    m.frames = writer_->frames();
+    m.lead_in_frames = writer_->lead_in_frames();
+    m.committed = committed_;
+    committed_ = false;
+
+    m.cand_mode = static_cast<uint8_t>(candidate_.mode);
+    m.cand_label = candidate_.label;
+    m.cand_cost = candidate_.cost;
+
     m.delta = static_cast<uint8_t>(clips_->delta());
     m.rung = clips_->rung();
     m.tips = clips_->tips();
     m.stall = clips_->stall();
     m.burned = clips_->burned();
+    m.rolls = clips_->rolls();
+    m.episode = clips_->episode();
     m.target_color = clips_->target_color();
     m.done = clips_->done();
-    m.sees = s.color_ok;
-    m.pose_ok = s.ok;
-    m.color = s.color;
-    m.reason = s.reason;
-    m.range_m = s.range_m();
-    m.bearing_rad = s.bearing();
-    m.phi_rad = s.phi;
-    m.n_px = s.n_px;
-    m.cost = plan_.cost;
-    m.entry_yaw = plan_.entry_yaw;
-    m.frames = writer_->frames();
-    m.lead_in_frames = writer_->lead_in_frames();
+
+    m.n_reads = belief_->n_reads();
+    m.n_votes = belief_->n_votes();
+    m.omega_cam = omega_cam_;
+    m.accept_rate = frames_offered_
+                        ? static_cast<float>(frames_read_) / frames_offered_
+                        : 0.0f;
+    m.color = belief_->color();
+    m.sees = belief_->valid();
+    m.pose_ok = belief_->pose_ok();
+    if (belief_->pose_ok()) {
+      const Sight& s = belief_->pose();
+      m.range_m = s.range_m();
+      m.bearing_rad = s.bearing();
+      m.phi_rad = s.phi;
+      m.n_px = s.n_px;
+    }
+    m.reason = belief_->empty() ? "blind" : belief_->newest().reason;
     m.version = version_;
     m.observe_ms = observe_ms_;
     status_pub_->publish(m);
@@ -487,6 +587,8 @@ class Sys1Node : public rclcpp::Node {
   std::string version_;
   ClipTable table_;
   std::unique_ptr<Sys1Clips> clips_;
+  std::unique_ptr<CubeSight> eye_;
+  std::unique_ptr<Belief> belief_;
   std::unique_ptr<ReferenceWriter> writer_;
   std::string camera_ip_;
   uint16_t camera_port_ = 5555;
@@ -499,8 +601,8 @@ class Sys1Node : public rclcpp::Node {
   LiveState live_;
   std::array<float, 4> imu_quat_{1.f, 0.f, 0.f, 0.f};
   std::array<float, 3> waist_q_{};
+  float omega_cam_ = 0.f;  ///< rad/s; the quiescence gate reads this
   rclcpp::Time last_state_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_frame_{0, 0, RCL_ROS_TIME};
   msg::Sys0Status sys0_;
   bool sys0_seen_ = false;
 
@@ -510,15 +612,19 @@ class Sys1Node : public rclcpp::Node {
   std::mutex frame_mutex_;
   cv::Mat bgr_, depth_;
   Intrinsics intr_;
+  std::atomic<uint64_t> frame_seq_{0};
+  std::atomic<int64_t> last_frame_ns_{0};
+  uint64_t seen_seq_ = 0;
   int colour_only_ = 0;
   bool depth_warned_ = false;
 
   // plan state
-  Plan plan_;
+  Plan plan_, candidate_;
   std::string reference_id_;
   uint64_t seq_ = 0;
-  int waiting_ = 0, looks_ = 0;
-  bool armed_ = false;
+  int waiting_ = 0;
+  uint64_t frames_offered_ = 0, frames_read_ = 0;
+  bool armed_ = false, committed_ = false;
   float observe_ms_ = 0.f;
 
   rclcpp::Publisher<msg::MotionReference>::SharedPtr reference_pub_;

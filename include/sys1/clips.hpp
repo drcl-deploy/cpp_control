@@ -1,19 +1,26 @@
 #pragma once
 
-/// SETTLE -> read -> SCAN or CLIP. Three modes, one state integer, one ranking
-/// scalar. Port of vibe `planner/clips.py::Sys1Clips` — the algorithm only; the
-/// clock lives in the node, because on hardware sys0 owns it (docs/sys1/planner.md §2).
+/// STILL or CLIP, one state integer, one ranking scalar. Port of vibe
+/// `planner/clips.py::Sys1Clips` — the algorithm only; the clock lives in the
+/// node, because on hardware sys0 owns it (docs/vibe/sys1/planner.md §2).
+///
+/// Split in three, so the planner can think every tick and act only when sys0
+/// is done: `observe()` folds a belief into the ladder, `decide()` is PURE and
+/// may be called at any rate, `commit()` records what was actually published.
 
 #include <set>
 #include <string>
 
+#include "sys1/belief.hpp"
 #include "sys1/cfg.hpp"
-#include "sys1/sight.hpp"
 #include "sys1/table.hpp"
 
 namespace cpp_control {
 namespace sys1 {
 
+/// Wire vocabulary. Structurally there are two: a CLIP, and a STILL whose yaw
+/// happens to be zero (SETTLE) or swept (SCAN). Kept apart on the message
+/// because a bag reads better for it, derived from the yaw everywhere else.
 enum class Mode { INIT, SETTLE, SCAN, CLIP };
 const char* mode_name(Mode m);
 
@@ -33,47 +40,48 @@ class Sys1Clips {
  public:
   Sys1Clips(const ClipTable& table, const Cfg& cfg, int target_color);
 
-  /// EVERY field, evidence included: a retained Sight plans the new episode
+  /// Fold the belief into the ladder: step a rung on an observed top-colour
+  /// change, latch `done` on the target. Idempotent — safe every tick.
+  void observe(const Belief& b);
+
+  /// PURE. The whole planner, four branches, no side effects — so the node can
+  /// call it every tick for a live intent preview and commit the same object
+  /// later without the answer having drifted.
+  Plan decide(const Belief& b) const;
+
+  /// Record what was actually published: burn the clip and count the roll.
+  void commit(const Plan& p);
+
+  /// EVERY field, evidence included: a retained ladder plans the new episode
   /// from the old one's cube.
   void reset();
 
-  /// One look. Cheap enough to call on every planner tick; only the read that
-  /// `decide()` consumes can move the ladder (sys1_cpp.md §8.5 — a flickering
-  /// read advanced three rungs from one still mode).
-  const Sight& look(const cv::Mat& bgr, const cv::Mat& depth_m,
-                    const Intrinsics& intr, const CameraPose& cam);
-
-  /// Consume the latest look: count the tip, then choose the next mode.
-  Plan decide();
-
-  Plan still(Mode mode, float yaw) const;
+  Plan still(float yaw) const;
 
   void set_target_color(int c);
   int target_color() const { return target_; }
-  const Sight& sight() const { return see_; }
-  const Plan& plan() const { return plan_; }
-  const CubeSight& eye() const { return eye_; }
+
   int rung() const { return n_; }
   int tips() const { return tips_; }
   int stall() const { return stall_; }
+  int rolls() const { return rolls_; }
+  int episode() const { return episode_; }
   int burned() const { return static_cast<int>(tried_.size()); }
   char delta() const;  ///< the rung being asked for — PURE, never advances
   bool done() const { return done_; }
-  std::string status() const;
 
  private:
   void advance();
-  Plan retrieve();
+  Plan retrieve(const Sight& see) const;
 
   const ClipTable& t_;
   Cfg cfg_;
-  CubeSight eye_;
-  Sight see_;
-  Plan plan_;
   int target_ = 4;
   int n_ = 0;      ///< THE state: which rung of the pattern
   int tips_ = 0;   ///< tips actually SEEN (telemetry only)
   int stall_ = 0;  ///< commits at this rung with no tip seen
+  int rolls_ = 0;  ///< clips committed this episode
+  int episode_ = 0;
   int last_color_ = -1;
   bool done_ = false;
   std::set<int> tried_;

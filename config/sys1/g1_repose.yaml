@@ -4,12 +4,15 @@
 # `version` picks the preset; anything under `knobs` overrides it, so an A/B is
 # a one-line edit and cannot silently drift from the numbers it baselines.
 
-version: v7        # v5 | v6 | v7 — v7 is v6 + the NOMINAL STAND (62.5% -> 95%)
+version: v7        # v7 ships; v6 is the same planner without the NOMINAL STAND,
+                   # the one ablation still worth running (62.5% -> 95%)
 target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
                    # goal_color overrides it, so sys0 and sys1 boot agreeing
 
-rate_hz: 20.0      # planner tick. Soft real-time; ~2 ms of work per tick.
-stale_s: 1.0       # lowstate / camera silence that parks the planner
+rate_hz: 20.0      # planner tick: OBSERVE + PLAN every tick, ACT only when sys0
+                   # says it finished. Soft real-time; ~2 ms of work per tick.
+stale_s: 1.0       # lowstate silence that parks the planner. NOT the camera —
+                   # losing that starves the belief, which plans the stance
 
 # The 78-row alphabet (bench-produced, offline — the bake stays Python).
 clips: /home/loki/drcl_projects/vibe/data/sys1_clips.npz
@@ -43,4 +46,18 @@ mount:
   xyz: [0.05, 0.0, 0.4318]
   quat: [0.6533, 0.2706, -0.2706, -0.6533]   # wxyz, 45 deg down-forward
 
+# Overrides on top of `version`. Every default is in include/sys1/cfg.hpp; these
+# are the three the hardware bring-up actually turns.
+#
+#   omega_still       rad/s of camera motion above which a frame is blur, not
+#                     evidence. A held stance sits near 0.05, a 90 deg sweep at
+#                     0.96 — read `omega_cam` and `accept_rate` off
+#                     /vibe/sys1/status to place it between the two.
+#   belief_min_votes  agreeing reads before the planner may act. Raise it if the
+#                     palette is noisy; it buys recall back without touching a
+#                     single perception threshold.
+#   scan_steps        a SCAN sweeps for `scan_steps - 2*hold_tail` frames and
+#                     then holds still for the rest. Only the held part is
+#                     readable, so `hold_tail` is sized in EVIDENCE: 15 frames
+#                     at 50 fps is 0.6 s, or ~12 reads at a 20 Hz tick.
 knobs: {}

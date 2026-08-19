@@ -371,7 +371,6 @@ void ClipTable::set_nominal_stand(const std::vector<float>& default_angles_mj) {
     throw std::runtime_error("sys1 table: nominal stance is not " +
                              std::to_string(g1::NUM_JOINTS) + " MJ joints");
   write_row(g1::Motion::stand(default_angles_mj, fps_), 0, stand_.data());
-  nominal_stand_ = true;
 }
 
 void ClipTable::bake(const std::string& out) const {
