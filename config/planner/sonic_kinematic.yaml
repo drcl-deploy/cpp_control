@@ -1,0 +1,27 @@
+g1_sonic_kinematic_planner_node:
+  ros__parameters:
+    input_source: unitree       # unitree raw remote, or sensor_msgs/Joy
+    reference_topic: /tracker/reference
+    controller_status_topic: /vibe/controller/status
+    lowstate_topic: /lowstate
+    joy_topic: /joy
+
+    rate_hz: 10.0
+    stale_s: 0.5
+    dead_zone: 0.12
+    yaw_rate: 0.9              # rad/s at full right-stick deflection
+    reverse_speed_max: 0.4     # conservative across all learned modes
+    default_height: 0.788740
+    lookahead_frames: 2
+    blend_frames: 8
+    random_seed: 1234
+    initial_mode: 2            # menu starts on Walk; active mode starts Idle
+    terminal: true
+
+    # Generic Xbox sensor_msgs/Joy layout. Ignored for input_source=unitree.
+    joy_left_y_axis: 1
+    joy_right_x_axis: 3
+    joy_dpad_x_axis: 6
+    joy_lt_axis: 2
+    joy_lt_button: -1          # >=0 uses a button instead of the trigger axis
+    joy_lt_pressed_below: -0.5

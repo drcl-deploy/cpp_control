@@ -45,6 +45,13 @@ def generate_launch_description():
         DeclareLaunchArgument('motion_start_frame', default_value='0'),
         DeclareLaunchArgument('il_ordered', default_value='false',
                               description='motion npz is IL-ordered (retargeted dataset)'),
+        DeclareLaunchArgument(
+            'planner', default_value='false',
+            description='A arms streamed planner references; RB disarms to stand'),
+        DeclareLaunchArgument('status_topic',
+                              default_value='/vibe/controller/status'),
+        DeclareLaunchArgument('reference_topic',
+                              default_value='/tracker/reference'),
 
         Node(
             package='cpp_control',
@@ -58,6 +65,9 @@ def generate_launch_description():
                 'motion_path': LaunchConfiguration('motion_path'),
                 'motion_start_frame': LaunchConfiguration('motion_start_frame'),
                 'il_ordered': LaunchConfiguration('il_ordered'),
+                'planner': LaunchConfiguration('planner'),
+                'status_topic': LaunchConfiguration('status_topic'),
+                'reference_topic': LaunchConfiguration('reference_topic'),
             }],
         ),
     ])

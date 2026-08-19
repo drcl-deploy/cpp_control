@@ -115,6 +115,23 @@ target_link_libraries(cpp_control_deploy ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB:
 add_library(cpp_control_vibe_contract STATIC src/tasks/vibe/task_profile.cpp)
 target_link_libraries(cpp_control_vibe_contract cpp_control_deploy)
 
+# GEAR-SONIC V2 kinematic planner contract. The engine is ROS-free and owns
+# the model's mixed float/int64 ABI; the node below only handles operator state
+# and the repository's MotionReference envelope.
+add_library(cpp_control_sonic_kinematic_planner STATIC
+  src/planners/sonic_kinematic.cpp)
+target_link_libraries(cpp_control_sonic_kinematic_planner
+  cpp_control_deploy ${ONNXRUNTIME_LIBRARIES})
+
+add_executable(sonic_kinematic_selftest
+  tests/sonic_kinematic_selftest.cpp)
+target_link_libraries(sonic_kinematic_selftest
+  cpp_control_sonic_kinematic_planner cpp_control_deploy)
+if(BUILD_TESTING)
+  add_test(NAME sonic_kinematic_selftest COMMAND sonic_kinematic_selftest)
+endif()
+list(APPEND INSTALL_TARGETS sonic_kinematic_selftest)
+
 # Deploy self-test (unit checks; optionally smoke-runs a real export):
 #   ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
 add_executable(deploy_selftest tests/deploy_selftest.cpp)
@@ -196,6 +213,20 @@ if(unitree_hg_FOUND OR messages_FOUND)
   ament_target_dependencies(cpp_control_g1_sonic
     rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
   rosidl_target_interfaces(cpp_control_g1_sonic ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
+  # Level 3: GEAR-SONIC kinematic planner. This process intentionally does not
+  # inherit G1Node: it may observe the remote but never owns low-level modes.
+  if(unitree_hg_FOUND)
+    add_executable(g1_sonic_kinematic_planner_node
+      src/planners/sonic_kinematic_node.cpp)
+    target_link_libraries(g1_sonic_kinematic_planner_node
+      cpp_control_sonic_kinematic_planner cpp_control_deploy)
+    ament_target_dependencies(g1_sonic_kinematic_planner_node
+      rclcpp sensor_msgs unitree_hg)
+    rosidl_target_interfaces(g1_sonic_kinematic_planner_node
+      ${PROJECT_NAME} "rosidl_typesupport_cpp")
+    list(APPEND INSTALL_TARGETS g1_sonic_kinematic_planner_node)
+  endif()
 
   # Task: vibe (g1 vibe-sonic — extractor export + /enc/tokens)
   if(vision_encoders_FOUND)
@@ -295,6 +326,8 @@ endif()
 
 install(DIRECTORY launch config models include
   DESTINATION share/${PROJECT_NAME}/
+  PATTERN ".cache" EXCLUDE
+  PATTERN ".gitignore" EXCLUDE
 )
 
 install(PROGRAMS
@@ -313,6 +346,7 @@ install(PROGRAMS
   scripts/planners/repose/repose_replay_observe.sh
   scripts/planners/repose/repose_stream_observe.sh
   scripts/planners/repose/repose_validate_observe_bag.py
+  scripts/planners/setup_sonic_kinematic.sh
   DESTINATION lib/${PROJECT_NAME}/
 )
 
