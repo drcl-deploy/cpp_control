@@ -166,6 +166,43 @@ disagree about what "4" means.
 `done` LATCHES, so `R` is the trial loop: solve, `R`, solve again. It also
 aborts a trial that went wrong — same key, new `episode`.
 
+### Voice keys from the offboard microphone
+
+The optional voice helper is deliberately not a ROS node. It runs on the
+offboard X11 desktop, recognizes only the six colour names, and types the
+corresponding `0`-`5` key into the focused terminal. The same path therefore
+works with a local sim console and with an attached onboard tmux console; the
+existing console remains the only goal publisher.
+
+One-time offboard dependency (the first run may also download Vosk's small
+English model into its user cache):
+
+```bash
+python3 -m pip install --user vosk
+```
+
+List inputs and first test recognition without typing anything:
+
+```bash
+ros2 run cpp_control repose_voice_keys.py --list-devices
+ros2 run cpp_control repose_voice_keys.py --device CMTECK --dry-run
+```
+
+For the live path, mute the microphone, start the helper in a separate terminal,
+then focus the Repose console. Unmute, say exactly one colour, and mute again;
+the ending silence finalizes one utterance and the helper types one digit.
+
+```bash
+ros2 run cpp_control repose_voice_keys.py --device CMTECK
+```
+
+It accepts final results only, rejects phrases and low-confidence words, waits
+one second between keys, and never types letters (`red` maps to `0`, not `r`, so
+it cannot be confused with the console's uppercase `R` re-arm key). The target
+and `ep` fields in the focused console are the operator's acknowledgment. Use
+`--confidence` to tune the default `0.75` threshold. `REPOSE_VOICE_MODEL` or
+`--model` selects a pre-downloaded model directory for an offline session.
+
 Five rows, and what each is for:
 
 ```

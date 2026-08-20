@@ -350,6 +350,7 @@ install(PROGRAMS
   scripts/vibe/stream_vibes.sh
   scripts/planners/repose/repose_run_console.sh
   scripts/planners/repose/repose_console.py
+  scripts/planners/repose/repose_voice_keys.py
   scripts/planners/repose/repose_observe_viewer.py
   scripts/planners/repose/repose_record_observe.sh
   scripts/planners/repose/repose_replay_observe.py
@@ -365,6 +366,10 @@ install(PROGRAMS
 )
 
 if(BUILD_TESTING)
+  add_test(NAME repose_voice_keys_selftest
+    COMMAND /usr/bin/env python3
+      ${CMAKE_CURRENT_SOURCE_DIR}/scripts/planners/repose/repose_voice_keys.py
+      --self-test)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 endif()
