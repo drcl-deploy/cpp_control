@@ -1,7 +1,7 @@
 r"""Closed-loop Repose: the shared Vibe runtime, plus the planner that drives it.
 
     ros2 launch cpp_control g1_repose_planner.launch.py \\
-        artifact_dir:=/path/to/export [checkpoint:=<training step>]
+        artifact:=<run>/<export> [env:=sim|real]
     ros2 run cpp_control repose_console.py        # pick the target colour, live
 
 This is a task wrapper like g1_vibe_repose.launch.py, not a layer on top of it:
@@ -33,8 +33,12 @@ def generate_launch_description():
     common = os.path.join(pkg, 'launch', 'g1_vibe_sonic.launch.py')
 
     return LaunchDescription([
-        DeclareLaunchArgument('artifact_dir',
-                              description='Absolute Repose checkpoint directory'),
+        DeclareLaunchArgument(
+            'artifact', default_value='',
+            description='Repose export under $VIBE_ASSET_ROOT/models: <run>[/<export>]'),
+        DeclareLaunchArgument(
+            'artifact_dir', default_value='',
+            description='Repose export directory; relative resolves under $VIBE_ASSET_ROOT'),
         DeclareLaunchArgument('checkpoint', default_value='',
                               description='Artifact step if the directory has multiple exports'),
         # sim by default: the shipping palette was measured off the sim renderer,
@@ -61,6 +65,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(common),
             launch_arguments={
+                'artifact': LaunchConfiguration('artifact'),
                 'artifact_dir': LaunchConfiguration('artifact_dir'),
                 'checkpoint': LaunchConfiguration('checkpoint'),
                 'expected_task_family': 'repose',

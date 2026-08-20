@@ -220,6 +220,10 @@ camera_depth: 1                               # unitree_mujoco/simulate/config.y
 | `retargeted_motions/` | the dataset | spans sliced at boot |
 | a baked bundle | `repose_planner_selftest --bake` | the Orin: one file, no dataset |
 
+The yaml names all three relative to `$VIBE_ASSET_ROOT` — `data/sys1_clips.npz`,
+not a home directory — so one file boots on the desktop and on the Orin
+([assets.md](../../vibe/assets.md)). Absolute still wins where you want it.
+
 The planner brings its own npz reader: numpy writes ZIP64 local headers, which cnpy
 reads as 4 GB lengths, and `motion_files` is an `object` dtype cnpy cannot parse
 at all.
@@ -263,6 +267,9 @@ Two rules the loader enforces, both by throwing:
 
 The pre-split flat `knobs:` block is refused by name, with the migration in the
 message.
+
+`clips`, `frames.path` and `frames.library` are the only paths in the file, and
+all three go through `asset_path()` (§5).
 
 ## 5.6 Two reads, and why hardware needed the second
 
@@ -310,7 +317,7 @@ g1_vibe_sonic.launch.py            bridge + encoder + controller
 ```
 
 ```bash
-ros2 launch cpp_control g1_repose_planner.launch.py artifact_dir:=/path/to/export
+ros2 launch cpp_control g1_repose_planner.launch.py artifact:=<run>/<export>
 bash scripts/planners/repose/repose_run_console.sh      # 0-5 or r/o/g/y/b/p sets the target
 ```
 

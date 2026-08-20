@@ -37,6 +37,7 @@
 #include <unitree_hg/msg/low_state.hpp>
 #include <vision_encoders/frame_wire.hpp>
 
+#include "common/asset_path.hpp"
 #include "common/gamepad.hpp"
 #include "common/g1/joint_orders.hpp"
 #include "cpp_control/planners/repose/cfg.hpp"
@@ -133,7 +134,7 @@ class ReposeObserveNode final : public rclcpp::Node {
     const YAML::Node root = YAML::LoadFile(path);
     cfg_ = Cfg::from_yaml(root);
 
-    const ClipTable table = ClipTable::load(root["clips"].as<std::string>());
+    const ClipTable table = ClipTable::load(asset_path(root["clips"].as<std::string>()));
     eye_ = std::make_unique<CubeSight>(cfg_, table.half_extent());
 
     const auto cam = root["camera"];

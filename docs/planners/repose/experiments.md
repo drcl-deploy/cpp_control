@@ -66,12 +66,16 @@ On the hardware bag, scored by the production `CubeSight`:
 | `g1_real.yaml` | **83.3%** | 0/60 |
 
 ```bash
-ros2 launch cpp_control g1_repose_planner.launch.py artifact_dir:=<export>              # sim
-ros2 launch cpp_control g1_repose_planner.launch.py artifact_dir:=<export> env:=real     # hardware
+ros2 launch cpp_control g1_repose_planner.launch.py artifact:=<run>/<export>             # sim
+ros2 launch cpp_control g1_repose_planner.launch.py artifact:=<run>/<export> env:=real    # hardware
 ```
 
 `env` works the same on `g1_repose_planner_calibration.launch.py`. `planner_config:=`
 still takes an explicit path and overrides `env` entirely.
+
+`artifact:=<run>/<export>` resolves under `$VIBE_ASSET_ROOT/models` (setup.sh:
+`<repo>/vibe/models`), so every line here is identical on the desktop and on the
+Orin — see [assets.md](../../vibe/assets.md).
 
 **A/B them without a robot.** Both are scored offline against a labelled bag, so
 the comparison costs seconds and needs no hardware:
@@ -103,7 +107,7 @@ re-run the tuner ([color_calibration.md §9](color_calibration.md)).
 source ~/unitree_ros2/setup.sh          # or setup_local.sh for simulation
 
 ros2 launch cpp_control g1_repose_planner.launch.py \
-  artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/g1_repose_big_cube_floor/wandb_checkpoints/011pgzbh
+  artifact:=g1_repose_big_cube_floor/011pgzbh
 ```
 
 Same artifact discovery as every other task wrapper, same `enable_bridge`,

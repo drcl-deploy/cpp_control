@@ -87,6 +87,7 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/motion.md](docs/motion.md) | `g1::Motion` — the one reference-motion class |
 | [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
 | [docs/vibe/experiments.md](docs/vibe/experiments.md) | real/simulation experiment commands, viewing, and recording |
+| [docs/vibe/assets.md](docs/vibe/assets.md) | `$VIBE_ASSET_ROOT`: one path string for checkpoints and data on every box |
 | [docs/vibe/tasks.md](docs/vibe/tasks.md) | shared Vibe runtime, task contracts, launch and reference transport |
 | [docs/vibe/background.md](docs/vibe/background.md) | deployment constraints, reference lessons, and design decisions |
 | [docs/vibe/roadmap.md](docs/vibe/roadmap.md) | measured hardening priorities and explicitly deferred work |
@@ -94,6 +95,7 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/planners/repose/experiments.md](docs/planners/repose/experiments.md) | the closed-loop run: depth, launch, console, what a bag carries |
 | [docs/planners/repose/v7_simplified.md](docs/planners/repose/v7_simplified.md) | the OBSERVE/PLAN/ACT split — parity matrix, what was deleted, block diagram |
 | [docs/planners/repose/color_calibration.md](docs/planners/repose/color_calibration.md) | RGB-D palette collection: 30 clicks/colour + 60 negatives |
+| [docs/planners/repose/observe_calibration.md](docs/planners/repose/observe_calibration.md) | the observe block's theory: masks, blobs, chromaticity, the two reads |
 
 ## acknowledgements
 

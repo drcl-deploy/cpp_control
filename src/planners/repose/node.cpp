@@ -57,6 +57,7 @@
 #include "common/math_utils.hpp"
 #include "cpp_control/tasks/vibe/task_profile.hpp"
 #include "cpp_control/planners/repose/belief.hpp"
+#include "common/asset_path.hpp"
 #include "cpp_control/planners/repose/clips.hpp"
 #include "cpp_control/planners/repose/kinematics.hpp"
 #include "cpp_control/planners/repose/sight.hpp"
@@ -168,12 +169,14 @@ class ReposeNode : public rclcpp::Node {
     version_ = root["version"] ? root["version"].as<std::string>() : "v7";
     cfg_ = Cfg::from_yaml(root);
 
-    table_ = ClipTable::load(root["clips"].as<std::string>());
+    // Every path below is relative to $VIBE_ASSET_ROOT unless it is absolute
+    // (common/asset_path.hpp), so this yaml is one string on both boxes.
+    table_ = ClipTable::load(asset_path(root["clips"].as<std::string>()));
     const auto frames = root["frames"];
     const auto source = frames["source"].as<std::string>();
-    const auto frames_path = frames["path"].as<std::string>();
+    const auto frames_path = asset_path(frames["path"].as<std::string>());
     if (source == "retargeted")
-      table_.load_frames_retargeted(frames["library"].as<std::string>(),
+      table_.load_frames_retargeted(asset_path(frames["library"].as<std::string>()),
                                     frames_path);
     else if (source == "baked")
       table_.load_frames_baked(frames_path);

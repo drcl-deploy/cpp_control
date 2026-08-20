@@ -8,7 +8,7 @@ camera/state and publishes telemetry.
 
 Sim/hardware:
     ros2 launch cpp_control g1_repose_planner_calibration.launch.py \
-        artifact_dir:=/path/to/repose/export [checkpoint:=STEP]
+        artifact:=<run>/<export> [env:=sim|real]
 
 Offboard:
     bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_stream_observe.sh \
@@ -34,8 +34,11 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'artifact_dir',
-            description='Absolute Repose checkpoint/export directory'),
+            'artifact', default_value='',
+            description='Repose export under $VIBE_ASSET_ROOT/models: <run>[/<export>]'),
+        DeclareLaunchArgument(
+            'artifact_dir', default_value='',
+            description='Repose export directory; relative resolves under $VIBE_ASSET_ROOT'),
         DeclareLaunchArgument('checkpoint', default_value=''),
         DeclareLaunchArgument('env', default_value='sim',
                               choices=['sim', 'real'],
@@ -52,6 +55,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(common),
             launch_arguments={
+                'artifact': LaunchConfiguration('artifact'),
                 'artifact_dir': LaunchConfiguration('artifact_dir'),
                 'checkpoint': LaunchConfiguration('checkpoint'),
                 'expected_task_family': 'repose',

@@ -23,17 +23,20 @@ rate_hz: 20.0      # planner tick: OBSERVE + PLAN every tick, ACT only when the 
 stale_s: 1.0       # lowstate silence that parks the planner. NOT the camera —
                    # losing that starves the belief, which plans the stance
 
+# Paths below are relative to $VIBE_ASSET_ROOT (setup.sh: <repo>/vibe), so this
+# file is one string on the desktop and on the Orin. Absolute still wins.
+#
 # The 78-row alphabet (bench-produced, offline — the bake stays Python).
-clips: /home/loki/drcl_projects/vibe/data/sys1_clips.npz
+clips: data/sys1_clips.npz
 
 frames:
   # retargeted: slice the spans out of the dataset at boot (~6.6 MB resident)
   # baked:      one bundle written by `repose_planner_selftest --bake`, for the Orin
   source: retargeted
-  path: /home/loki/drcl_projects/vibe/data/retargeted_motions
+  path: data/retargeted_motions
   # Which npz each clip came from — `library` is only read for `retargeted`,
   # and only for its `motion_files` list.
-  library: /home/loki/drcl_projects/vibe/data/sys1_library.npz
+  library: data/sys1_library.npz
 
 # D435i colour stream, head-mounted. Intrinsics ride per-plane on the wire, so
 # there is nothing to calibrate here — only where to connect.

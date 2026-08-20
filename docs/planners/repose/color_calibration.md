@@ -46,8 +46,7 @@ Terminal 2 — locked nominal stand and observation stream:
 ```bash
 source ~/unitree_ros2/setup_local.sh
 ros2 launch cpp_control g1_repose_planner_calibration.launch.py \
-  artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/g1_repose_adapt_sonic/wandb_checkpoints/011pgzbh \
-  checkpoint:=58000
+  artifact:=g1_repose_big_cube_floor/011pgzbh
 ```
 
 Terminal 3 — offboard viewer and snapshot bag:
@@ -72,9 +71,7 @@ Terminal 2 — onboard locked nominal stand and observation stream:
 ```bash
 source ~/unitree_ros2/setup.sh
 ros2 launch cpp_control g1_repose_planner_calibration.launch.py \
-  artifact_dir:=/home/unitree/lkrajan/vibe_models/g1_repose_adapt_sonic/wandb_checkpoints/011pgzbh \
-  checkpoint:=58000 \
-  planner_config:=/home/unitree/lkrajan/vibe_data/g1_repose.yaml
+  artifact:=g1_repose_big_cube_floor/011pgzbh env:=real
 ```
 
 Terminal 3 — offboard viewer and snapshot bag:
@@ -211,7 +208,7 @@ SONIC stand, no reference motion, no planner reference):
 
 ```bash
 ros2 launch cpp_control g1_repose_planner_calibration.launch.py \
-  artifact_dir:=<export> env:=real          # env:=sim in sim2sim
+  artifact:=<run>/<export> env:=real        # env:=sim in sim2sim
 bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_check_observe.sh
 ```
 

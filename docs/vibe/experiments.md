@@ -52,27 +52,32 @@ matching setup. The launch starts the bridge server and encoder, then starts
 the controller when the encoder process is running.
 
 ```bash
-# Repose (this run contains two exports, so select the tested checkpoint)
-ros2 launch cpp_control g1_vibe_repose.launch.py artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/g1_repose_adapt_sonic/wandb_checkpoints/011pgzbh checkpoint:=58000
+# Repose
+ros2 launch cpp_control g1_vibe_repose.launch.py artifact:=g1_repose_big_cube_floor/011pgzbh
 
 # UOLM
-ros2 launch cpp_control g1_vibe_uolm.launch.py artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/vibe_uolm/wandb_checkpoints/xhej6sbd
+ros2 launch cpp_control g1_vibe_uolm.launch.py artifact:=vibe_uolm/xhej6sbd
 
 # PerLoco Grail
-ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/vibe_perloco_grail/wandb_checkpoints/0uetimde
+ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact:=vibe_perloco_grail/0uetimde
 
 # PerLoco OmRe
-ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/vibe_perloco_omre/wandb_checkpoints/bc7sz47j
+ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact:=vibe_perloco_omre/bc7sz47j
 
 # Dodge
-ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=/home/loki/drcl_projects/vibe/logs/rsl_rl/vibe_dodge/wandb_checkpoints/wm8wjywv
+ros2 launch cpp_control g1_vibe_dodge.launch.py artifact:=vibe_dodge/dkwwigny
 ```
 
-Each launch discovers the matching `.onnx` and `.manifest.json` pair inside
-`artifact_dir`; checkpoint-specific filenames are not encoded in the launch
-files. Most export directories contain one pair and need no other argument. If
-a directory contains several pairs, launch fails instead of guessing; add
-`checkpoint:=<training_step>` to select one explicitly.
+`artifact:=<run>/<export>` names a directory under `$VIBE_ASSET_ROOT/models`
+(setup.sh: `<repo>/vibe/models`), so these lines are identical on the desktop
+and on the Orin — see [assets.md](assets.md). Drop the `/<export>` when a run
+has only one; `artifact_dir:=<path>` still takes a directory, relative or
+absolute.
+
+Each launch discovers the matching `.onnx` and `.manifest.json` pair inside the
+export directory; checkpoint-specific filenames are not encoded in the launch
+files. Most contain one pair and need no other argument. If one contains
+several, launch fails instead of guessing; add `checkpoint:=<training_step>`.
 
 Closed-loop Repose runs the same way through `g1_repose_planner.launch.py`, which
 adds the planner process to this same runtime — see

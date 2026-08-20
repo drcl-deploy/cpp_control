@@ -7,15 +7,19 @@ port on the first token.
 
 Usage:
     ros2 launch cpp_control g1_vibe_sonic.launch.py \\
-        artifact_dir:=/path/to/export motion_path:=/path/to/motion.npz
+        artifact:=<run>/<export> motion_path:=<clip>.npz
     # hardware: no motion_path — boot to stand, stream clips instead:
-    ros2 launch cpp_control g1_vibe_sonic.launch.py artifact_dir:=/path/to/export
-    publish-motion /path/to/motion.npz     # stage; A starts it
+    ros2 launch cpp_control g1_vibe_sonic.launch.py artifact:=<run>/<export>
+    publish-motion <clip>.npz              # stage; A starts it
     # offboard live camera + attention overlay:
     bash scripts/vibe/stream_vibes.sh
 
-The artifact directory must contain a matching .onnx/.manifest.json pair. If
-it contains multiple pairs, select one with checkpoint:=<training step>.
+Every path here is relative to $VIBE_ASSET_ROOT (setup.sh: <repo>/vibe), so a
+command line is one string on the desktop and on the Orin; absolute still wins.
+`artifact:=<run>[/<export>]` names a training run under models/ and finds the
+export inside it, whatever the run's own layout; `artifact_dir:=` still takes a
+directory. Either way it must hold a matching .onnx/.manifest.json pair, and
+multiple pairs need checkpoint:=<training step>.
 
 Prefer one of the task launch files, which selects a packaged artifact and
 pins expected_task_family. This generic entry point remains useful for export
@@ -59,22 +63,87 @@ def _checkpoint_keys(manifest_path, artifact_stem):
     return keys
 
 
+def asset_path(rel):
+    """Absolute form of `rel`, mirroring C++ common/asset_path.hpp exactly."""
+    if not rel:
+        return rel
+    rel = os.path.expanduser(rel)
+    if os.path.isabs(rel):
+        return rel
+    roots = [root for root in (os.environ.get('VIBE_ASSET_ROOT', ''),
+                               os.path.join(get_package_share_directory('cpp_control'),
+                                            'models')) if root]
+    hits = [os.path.join(root, rel) for root in roots
+            if os.path.exists(os.path.join(root, rel))]
+    if len(hits) == 1:
+        return hits[0]
+    if not roots:
+        raise RuntimeError(
+            "asset path '%s' is relative and no asset root is set. Source "
+            'setup.sh, which exports VIBE_ASSET_ROOT, or pass an absolute path.' % rel)
+    if not hits:
+        raise RuntimeError("asset path '%s' is under none of:\n  %s"
+                           % (rel, '\n  '.join(os.path.join(r, rel) for r in roots)))
+    raise RuntimeError("asset path '%s' is ambiguous — it exists under:\n  %s"
+                       % (rel, '\n  '.join(hits)))
+
+
+def _export_dirs(run_dir):
+    """Directories under a training run that hold an .onnx/.manifest.json pair."""
+    found = []
+    for depth in ('*', '*/*'):
+        for path in sorted(glob.glob(os.path.join(run_dir, depth))):
+            if os.path.isdir(path) and _pairs(path):
+                found.append(path)
+    return found
+
+
+def _artifact_dir(context):
+    """Resolve the export directory from `artifact_dir:=` or `artifact:=`."""
+    explicit = LaunchConfiguration('artifact_dir').perform(context).strip()
+    shorthand = LaunchConfiguration('artifact').perform(context).strip()
+    if explicit and shorthand:
+        raise RuntimeError('Pass artifact_dir OR artifact, not both.')
+    if explicit:
+        return asset_path(explicit)
+    if not shorthand:
+        raise RuntimeError(
+            'Pass artifact:=<run>[/<export>] or artifact_dir:=<path>.')
+
+    run, _, export = shorthand.partition('/')
+    run_dir = asset_path(os.path.join('models', run))
+    found = _export_dirs(run_dir)
+    if export:
+        found = [path for path in found if os.path.basename(path) == export]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise RuntimeError("No export under '%s' matching artifact:=%s"
+                           % (run_dir, shorthand))
+    raise RuntimeError('artifact:=%s is ambiguous. Name one of: %s'
+                       % (shorthand, ', '.join(os.path.basename(p) for p in found)))
+
+
+def _pairs(artifact_dir):
+    """Return the (.onnx, .manifest.json, stem) triples sitting in a directory."""
+    suffix = '.manifest.json'
+    found = []
+    for manifest_path in sorted(glob.glob(os.path.join(artifact_dir, '*' + suffix))):
+        artifact_stem = os.path.basename(manifest_path)[:-len(suffix)]
+        onnx_path = os.path.join(artifact_dir, artifact_stem + '.onnx')
+        if os.path.isfile(onnx_path):
+            found.append((onnx_path, manifest_path, artifact_stem))
+    return found
+
+
 def _resolve_artifact(context):
-    artifact_dir = os.path.abspath(os.path.expanduser(
-        LaunchConfiguration('artifact_dir').perform(context)))
+    artifact_dir = _artifact_dir(context)
     checkpoint = LaunchConfiguration('checkpoint').perform(context).strip()
 
     if not os.path.isdir(artifact_dir):
         raise RuntimeError('Vibe artifact_dir is not a directory: ' + artifact_dir)
 
-    pairs = []
-    suffix = '.manifest.json'
-    for manifest_path in sorted(glob.glob(os.path.join(artifact_dir, '*' + suffix))):
-        artifact_stem = os.path.basename(manifest_path)[:-len(suffix)]
-        onnx_path = os.path.join(artifact_dir, artifact_stem + '.onnx')
-        if os.path.isfile(onnx_path):
-            pairs.append((onnx_path, manifest_path, artifact_stem))
-
+    pairs = _pairs(artifact_dir)
     if not pairs:
         raise RuntimeError(
             'Vibe artifact_dir has no matching .onnx/.manifest.json pair: ' +
@@ -99,6 +168,7 @@ def _resolve_artifact(context):
 
 def _launch_runtime(context, encoder_pkg):
     onnx_path, manifest_path = _resolve_artifact(context)
+    motion_path = asset_path(LaunchConfiguration('motion_path').perform(context).strip())
     encoder_config = os.path.join(encoder_pkg, 'config', 'encoder.yaml')
 
     encoder = Node(
@@ -122,7 +192,7 @@ def _launch_runtime(context, encoder_pkg):
             'config_path': LaunchConfiguration('config_path'),
             'onnx_path': onnx_path,
             'manifest_path': manifest_path,
-            'motion_path': LaunchConfiguration('motion_path'),
+            'motion_path': motion_path,
             'motion_start_frame': LaunchConfiguration('motion_start_frame'),
             'il_ordered': LaunchConfiguration('il_ordered'),
             'tokens_topic': LaunchConfiguration('tokens_topic'),
@@ -175,13 +245,19 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),
         DeclareLaunchArgument(
-            'artifact_dir',
-            description='Directory containing matching ONNX and manifest files'),
+            'artifact', default_value='',
+            description='shorthand for an export under $VIBE_ASSET_ROOT/models: '
+                        '<run>[/<export>], e.g. g1_repose_big_cube_floor/011pgzbh'),
+        DeclareLaunchArgument(
+            'artifact_dir', default_value='',
+            description='export directory holding a matching ONNX/manifest pair; '
+                        'relative resolves under $VIBE_ASSET_ROOT'),
         DeclareLaunchArgument(
             'checkpoint', default_value='',
             description='Training step selector; required only for ambiguous directories'),
         DeclareLaunchArgument('motion_path', default_value='',
-                              description='npz clip; empty = stand until streamed'),
+                              description='npz clip, relative to $VIBE_ASSET_ROOT; '
+                                          'empty = stand until streamed'),
         DeclareLaunchArgument('motion_start_frame', default_value='0'),
         DeclareLaunchArgument('il_ordered', default_value='true',
                               description='motion npz is IL-ordered (retargeted dataset)'),

@@ -41,9 +41,8 @@ Theia Tiny encoder first and then the controller. Pass the artifact directory
 explicitly, then stage a clip where required:
 
 ```bash
-ros2 launch cpp_control g1_vibe_uolm.launch.py \
-    artifact_dir:=/absolute/path/to/wandb_checkpoints/xhej6sbd
-publish-motion /path/to/motion.npz
+ros2 launch cpp_control g1_vibe_uolm.launch.py artifact:=vibe_uolm/xhej6sbd
+publish-motion <clip>.npz
 ```
 
 The task launches discover the matching `.onnx` and `.manifest.json` pair in

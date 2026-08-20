@@ -14,13 +14,18 @@ def generate_launch_description():
     common = os.path.join(pkg, 'launch', 'g1_vibe_sonic.launch.py')
     return LaunchDescription([
         DeclareLaunchArgument(
-            'artifact_dir',
-            description='Absolute PerLoco Grail checkpoint directory'),
+            'artifact', default_value='',
+            description='PerLoco Grail export under $VIBE_ASSET_ROOT/models: <run>[/<export>]'),
+        DeclareLaunchArgument(
+            'artifact_dir', default_value='',
+            description='PerLoco Grail export directory; relative resolves '
+                        'under $VIBE_ASSET_ROOT'),
         DeclareLaunchArgument('checkpoint', default_value='',
                               description='Artifact step if the directory has multiple exports'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(common),
             launch_arguments={
+                'artifact': LaunchConfiguration('artifact'),
                 'artifact_dir': LaunchConfiguration('artifact_dir'),
                 'checkpoint': LaunchConfiguration('checkpoint'),
                 'expected_task_family': 'perloco',
