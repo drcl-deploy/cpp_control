@@ -22,7 +22,7 @@ namespace repose {
 /// Wire vocabulary. Structurally there are two: a CLIP, and a STILL whose yaw
 /// happens to be zero (SETTLE) or swept (SCAN). Kept apart on the message
 /// because a bag reads better for it, derived from the yaw everywhere else.
-enum class Mode { INIT, SETTLE, SCAN, CLIP };
+enum class Mode { INIT, SETTLE, SCAN, CLIP, KINEMATIC_SCAN };
 const char* mode_name(Mode m);
 
 struct Plan {

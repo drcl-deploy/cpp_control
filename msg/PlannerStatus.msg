@@ -8,6 +8,7 @@ uint8 INIT=0
 uint8 SETTLE=1
 uint8 SCAN=2
 uint8 CLIP=3
+uint8 KINEMATIC_SCAN=4
 
 # what the controller is playing right now (the last committed plan)
 uint8 mode
@@ -50,5 +51,5 @@ float32 bearing_rad
 float32 phi_rad
 int32 n_px
 
-string version          # v6 | v7
+string version          # v6 | v7 | v7.1 | v7.2 | v7.3
 float32 observe_ms

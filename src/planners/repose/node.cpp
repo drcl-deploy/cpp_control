@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -43,6 +44,7 @@
 #include <std_msgs/msg/int32.hpp>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <yaml-cpp/yaml.h>
 
@@ -63,6 +65,7 @@
 #include "cpp_control/planners/repose/sight.hpp"
 #include "cpp_control/planners/repose/table.hpp"
 #include "cpp_control/planners/repose/writer.hpp"
+#include "cpp_control/planners/sonic_kinematic.hpp"
 
 namespace cpp_control {
 namespace planners {
@@ -72,6 +75,8 @@ namespace wire = vision_encoders::wire;
 
 namespace {
 
+constexpr float kPi = 3.14159265358979323846f;
+
 std::array<float, 3> yaml_vec3(const YAML::Node& n,
                                const std::array<float, 3>& fallback) {
   if (!n || n.size() != 3) return fallback;
@@ -79,7 +84,6 @@ std::array<float, 3> yaml_vec3(const YAML::Node& n,
 }
 
 float wrap(float a) {
-  constexpr float kPi = 3.14159265358979323846f;
   while (a > kPi) a -= 2.0f * kPi;
   while (a < -kPi) a += 2.0f * kPi;
   return a;
@@ -111,6 +115,32 @@ class ReposeNode : public rclcpp::Node {
         this->declare_parameter("target_color", -1));
     if (target >= 0 && target < vibe::NUM_CUBE_COLORS)
       clips_->set_target_color(target);
+
+    const std::string kinematic_model =
+        this->declare_parameter("kinematic_model_path", "");
+    if (cfg_.kinematic_scan) {
+      if (kinematic_model.empty())
+        throw std::runtime_error(
+            "repose planner: kinematic_model_path is required by " + version_);
+      kinematic_ = std::make_unique<SonicKinematicPlanner>(
+          kinematic_model, /*default_height=*/0.788740f,
+          /*lookahead_frames=*/2, cfg_.kinematic_random_seed);
+      if (cfg_.kinematic_scan_pure)
+        RCLCPP_INFO(this->get_logger(),
+                    "%s stepping SCAN: model %s | mode %d | %.2f m/s | "
+                    "fixed %.1f deg | %.2f s creep, %.2f m burst budget | "
+                    "pure search",
+                    version_.c_str(), kinematic_model.c_str(),
+                    cfg_.kinematic_scan_mode, cfg_.kinematic_scan_speed_mps,
+                    cfg_.kinematic_scan_turn_deg, cfg_.kinematic_scan_creep_s,
+                    cfg_.kinematic_scan_creep_budget_m);
+      else
+        RCLCPP_INFO(this->get_logger(),
+                    "%s stepping SCAN: model %s | mode %d | %.2f m/s | "
+                    "zero translation command",
+                    version_.c_str(), kinematic_model.c_str(),
+                    cfg_.kinematic_scan_mode, cfg_.kinematic_scan_speed_mps);
+    }
 
     reference_pub_ = this->create_publisher<msg::MotionReference>(
         this->declare_parameter("reference_topic", "/tracker/reference"), 10);
@@ -288,12 +318,14 @@ class ReposeNode : public rclcpp::Node {
     if (m->data == clips_->target_color()) {
       clips_->reset();
       belief_->clear();
+      kinematic_creep_used_m_ = 0.0f;
       RCLCPP_INFO(this->get_logger(), "re-armed on %s — episode %d",
                   vibe::cube_color_name(m->data), clips_->episode());
       return;
     }
     clips_->set_target_color(m->data);
     belief_->clear();
+    kinematic_creep_used_m_ = 0.0f;
     RCLCPP_INFO(this->get_logger(), "target -> %d (%s), episode %d", m->data,
                 vibe::cube_color_name(m->data), clips_->episode());
   }
@@ -397,14 +429,14 @@ class ReposeNode : public rclcpp::Node {
   /// measuring the camera's own rate is both simpler and the true condition, so
   /// a SCAN's sweep rejects itself and a SETTLE's whole hold is readable.
   ///
-  /// A CLIP is excluded outright rather than left to the gate. A clip has quiet
-  /// moments, but it spends them in an arbitrary exit pose whose waist aims the
-  /// head wherever the recording left it — that is precisely the v6 gaze the
-  /// nominal stance exists to escape, so those reads are quiet and still wrong.
-  /// The mandatory settle after every clip is what this produces: a clip ends
-  /// with an empty belief, and an empty belief plans the stance.
+  /// A CLIP and v7.2's kinematic SCAN are excluded outright rather than left to
+  /// the gate. v7.3 is the deliberate exception: its generated reference ends
+  /// in a zero-velocity hold, but reads still pass through the same omega gate.
+  /// That preserves the perception contract while keeping search in scan-k.
   void observe() {
-    if (plan_.mode == Mode::CLIP) return;
+    if (plan_.mode == Mode::CLIP ||
+        (plan_.mode == Mode::KINEMATIC_SCAN && !cfg_.kinematic_scan_pure))
+      return;
     const uint64_t seq = frame_seq_.load(std::memory_order_acquire);
     if (seq == seen_seq_) return;  // no new frame; the camera is slower than us
     seen_seq_ = seq;
@@ -455,6 +487,8 @@ class ReposeNode : public rclcpp::Node {
                     "repose planner: controller left POLICY — idle, still observing");
       armed_ = false;
       in_enter_ = false;  // a ramp is only valid against the yaw it was frozen at
+      kinematic_creep_used_m_ = 0.0f;
+      clear_scan_read_wait();
       // decide() is PURE, so an idle planner can still show what it WOULD do.
       // Only once the stance is known, or the preview would be solved against
       // the library's stand frame — v6's gaze, and a quietly wrong answer.
@@ -483,6 +517,7 @@ class ReposeNode : public rclcpp::Node {
       in_enter_ = false;
       clips_->reset();
       belief_->clear();
+      kinematic_creep_used_m_ = 0.0f;
       RCLCPP_INFO(this->get_logger(), "repose planner: armed, target %s, episode %d",
                   vibe::cube_color_name(clips_->target_color()),
                   clips_->episode());
@@ -494,6 +529,12 @@ class ReposeNode : public rclcpp::Node {
 
     clips_->observe(*belief_);
     candidate_ = clips_->decide(*belief_);
+    // A pure scan can carry accepted no-cube reads into its tail. They remain
+    // valid evidence, but they are not permission to start another blind turn
+    // after the camera disappears. Preserve the existing camera-loss answer.
+    if (cfg_.kinematic_scan_pure &&
+        plan_.mode == Mode::KINEMATIC_SCAN && !camera_fresh())
+      candidate_ = clips_->still(0.0f);
 
     if (controller_.reference_id != reference_id_) {
       // the controller commits on arrival, so this is a dropped message, not a race.
@@ -508,13 +549,47 @@ class ReposeNode : public rclcpp::Node {
       // The ramp landed: its clip goes out next, not whatever the planner would
       // pick now. `candidate_` is a preview between acts, and the belief has
       // been cleared since the read that chose this clip.
-      if (controller_.finished) in_enter_ ? commit_clip(pending_) : commit(candidate_);
+      if (controller_.finished && !hold_finished_scan_for_reads())
+        in_enter_ ? commit_clip(pending_) : commit(candidate_);
     }
     publish_status();
   }
 
   bool fresh(const rclcpp::Time& t) const {
     return t.nanoseconds() > 0 && (this->now() - t).seconds() < stale_s_;
+  }
+
+  void clear_scan_read_wait() {
+    scan_read_wait_started_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+
+  /// A pure scan may finish before the physical camera is below omega_still.
+  /// The controller already holds the final row, so wait in scan-k for enough
+  /// accepted reads rather than bouncing through nominal SETTLE. Camera loss,
+  /// target completion, and a bounded timeout still take the normal safe path.
+  bool hold_finished_scan_for_reads() {
+    if (!cfg_.kinematic_scan_pure || plan_.mode != Mode::KINEMATIC_SCAN ||
+        clips_->done() || belief_->n_reads() >= cfg_.belief_min_votes) {
+      clear_scan_read_wait();
+      return false;
+    }
+    if (!camera_fresh()) {
+      clear_scan_read_wait();
+      return false;
+    }
+    if (scan_read_wait_started_.nanoseconds() == 0) {
+      scan_read_wait_started_ = this->now();
+      RCLCPP_INFO(this->get_logger(),
+                  "v7.3 scan-k holding final pose for quiet reads");
+      return true;
+    }
+    const double elapsed = (this->now() - scan_read_wait_started_).seconds();
+    if (elapsed < cfg_.kinematic_scan_read_timeout_s) return true;
+    RCLCPP_WARN(this->get_logger(),
+                "v7.3 scan-k remained unreadable for %.2f s — settling",
+                elapsed);
+    clear_scan_read_wait();
+    return false;
   }
 
   /// The robot's heading off the pelvis IMU. Yaw is the only channel of it the
@@ -546,7 +621,32 @@ class ReposeNode : public rclcpp::Node {
   /// absolute target rather than a residual that goes stale.
   bool ramping() const { return cfg_.enter_yaw_rate_deg > 0.0f; }
 
+  /// Extend a generated turn with a truthful held row. Position, orientation,
+  /// and contact remain the generator's final values; joint velocity and root
+  /// twist become zero. This is a pause inside scan-k, not nominal SETTLE.
+  int append_kinematic_read_tail() {
+    if (!cfg_.kinematic_scan_pure || active_rows_.empty()) return 0;
+    const int cols = g1::WIRE_COLS_FULL;
+    const int tail_frames = std::max(
+        1, static_cast<int>(std::lround(cfg_.kinematic_scan_read_tail_s *
+                                        active_fps_)));
+    std::vector<float> held(active_rows_.end() - cols, active_rows_.end());
+    std::fill(held.begin() + g1::NUM_JOINTS,
+              held.begin() + 2 * g1::NUM_JOINTS, 0.0f);
+    std::fill(held.begin() + g1::WIRE_COLS_MIN,
+              held.begin() + g1::WIRE_COLS_MIN + 6, 0.0f);
+    active_rows_.reserve(active_rows_.size() +
+                         static_cast<size_t>(tail_frames) * cols);
+    for (int i = 0; i < tail_frames; ++i)
+      active_rows_.insert(active_rows_.end(), held.begin(), held.end());
+    active_frames_ += tail_frames;
+    return tail_frames;
+  }
+
   void commit(const Plan& plan) {
+    clear_scan_read_wait();
+    if (plan.mode == Mode::KINEMATIC_SCAN) return commit_kinematic_scan(plan);
+    kinematic_creep_used_m_ = 0.0f;
     if (ramping() && plan.mode == Mode::CLIP) return commit_enter(plan);
     stage_ = ReferenceWriter::Stage::FULL;
     live_.held_row.clear();
@@ -558,10 +658,134 @@ class ReposeNode : public rclcpp::Node {
     // A new act invalidates the evidence gathered under the old one: the next
     // decision must be made from reads taken while THIS reference was playing.
     belief_->clear();
-    publish_reference(writer_->build(plan_, live_, stage_));
+    cache_writer_reference();
+    publish_reference();
+  }
+
+  /// v7.2+'s SCAN is one discrete stepping turn, generated from the measured
+  /// joints at this act boundary. Root position/yaw are canonical on purpose:
+  /// MotionClock aligns frame zero to the live robot, so the direction vectors
+  /// below are base-relative and need no odometry.
+  void commit_kinematic_scan(const Plan& scan) {
+    if (!kinematic_)
+      throw std::runtime_error(
+          "repose planner: kinematic SCAN selected without an engine");
+
+    std::array<float, g1::NUM_JOINTS> joints_mj{};
+    for (int il = 0; il < g1::NUM_JOINTS; ++il)
+      joints_mj[g1::IL2MJ[il]] = live_.joint_pos_il[il];
+
+    SonicKinematicCommand command;
+    command.mode = cfg_.kinematic_scan_mode;
+    command.target_speed = cfg_.kinematic_scan_speed_mps;
+    command.facing_direction = {std::cos(scan.yaw_offset),
+                                std::sin(scan.yaw_offset), 0.0f};
+
+    // Native Sonic never walks below its per-mode floor and switches to Idle
+    // when the stick is released. Mirror that contract for the first few scan
+    // acts, then fall back to the zero-vector stepping turn once the bounded
+    // displacement budget is spent.
+    const float estimated_creep_m =
+        cfg_.kinematic_scan_speed_mps * cfg_.kinematic_scan_creep_s;
+    bool use_creep =
+        cfg_.kinematic_scan_pure && cfg_.kinematic_scan_creep_s > 0.0f &&
+        kinematic_creep_used_m_ + estimated_creep_m <=
+            cfg_.kinematic_scan_creep_budget_m + 1e-6f;
+    if (use_creep) command.movement_direction = command.facing_direction;
+
+    try {
+      kinematic_->initialize(joints_mj);
+      SonicKinematicResult generated =
+          kinematic_->plan(command, /*previous=*/nullptr, /*current_frame=*/0);
+      double inference_ms = generated.inference_ms;
+      g1::Motion motion = std::move(generated.motion);
+
+      if (use_creep) {
+        const int stop_frame = std::clamp(
+            static_cast<int>(std::lround(cfg_.kinematic_scan_creep_s *
+                                         motion.fps)),
+            1, motion.num_frames - 1);
+        SonicKinematicCommand idle;
+        idle.mode = 0;
+        idle.target_speed = -1.0f;
+        idle.facing_direction = command.facing_direction;
+        const SonicKinematicResult stopping =
+            kinematic_->plan(idle, &motion, stop_frame);
+        inference_ms += stopping.inference_ms;
+        // handoff_frame=0 retains the walking prefix; generation_frame places
+        // the learned Idle transition at the context used to produce it.
+        motion = SonicKinematicPlanner::splice(
+            motion, /*handoff_frame=*/0, stopping.motion,
+            stopping.generation_frame, cfg_.kinematic_scan_stop_blend_frames);
+      }
+
+      auto translation_of = [](const g1::Motion& m) {
+        const auto p0 = m.root_pos(0);
+        const auto p1 = m.root_pos(m.num_frames - 1);
+        return std::hypot(p1[0] - p0[0], p1[1] - p0[1]);
+      };
+      float translation = translation_of(motion);
+      if (use_creep &&
+          kinematic_creep_used_m_ + translation >
+              cfg_.kinematic_scan_creep_budget_m + 1e-6f) {
+        // Model displacement varies mildly with the measured gait pose. The
+        // speed*time test above avoids speculative inference in normal use;
+        // this post-generation check makes the metre budget a hard bound.
+        RCLCPP_WARN(this->get_logger(),
+                    "v7.3 creep would exceed %.3f m burst budget; regenerating "
+                    "this act in place",
+                    cfg_.kinematic_scan_creep_budget_m);
+        command.movement_direction = {0.0f, 0.0f, 0.0f};
+        kinematic_->initialize(joints_mj);
+        SonicKinematicResult fallback =
+            kinematic_->plan(command, /*previous=*/nullptr, /*current_frame=*/0);
+        inference_ms += fallback.inference_ms;
+        motion = std::move(fallback.motion);
+        translation = translation_of(motion);
+        use_creep = false;
+      }
+
+      stage_ = ReferenceWriter::Stage::FULL;
+      in_enter_ = false;
+      live_.held_row.clear();
+      plan_ = scan;
+      active_rows_ = SonicKinematicPlanner::to_wire_rows(motion);
+      active_frames_ = motion.num_frames;
+      active_lead_in_frames_ = 0;
+      active_fps_ = motion.fps;
+      active_entry_yaw_ = 0.0f;
+      const int read_tail_frames = append_kinematic_read_tail();
+      plan_.frames = active_frames_;
+      reference_id_ = "the planner-" + std::to_string(++seq_);
+      waiting_ = 0;
+      committed_ = true;
+      belief_->clear();
+
+      if (use_creep) kinematic_creep_used_m_ += translation;
+      RCLCPP_INFO(this->get_logger(),
+                  "%s SCAN generated: yaw %+.1f deg | %s | %d frames @ %.0f "
+                  "Hz (%d read-tail) | translation %.3f m | creep %.3f/%.3f "
+                  "m | %.1f ms",
+                  version_.c_str(),
+                  scan.yaw_offset * 180.0f / kPi,
+                  use_creep ? "native creep -> Idle" : "in-place fallback",
+                  active_frames_, active_fps_, read_tail_frames, translation,
+                  kinematic_creep_used_m_, cfg_.kinematic_scan_creep_budget_m,
+                  inference_ms);
+      publish_reference();
+    } catch (const std::exception& e) {
+      // A generation failure must never leave the robot holding a non-nominal
+      // exit forever. The old stationary sweep is not a fallback here: this
+      // preset exists because that primitive is not credible on hardware.
+      RCLCPP_ERROR(this->get_logger(),
+                   "%s SCAN generation failed: %s — settling",
+                   version_.c_str(), e.what());
+      commit(clips_->still(0.0f));
+    }
   }
 
   void commit_enter(const Plan& clip) {
+    clear_scan_read_wait();
     // Freeze the heading the ramp is paying toward while the robot is still
     // quiescent — the ONE number that must survive the ramp. `entry_yaw` is a
     // base-frame residual, so it goes stale the instant the robot turns; the
@@ -582,10 +806,12 @@ class ReposeNode : public rclcpp::Node {
     waiting_ = 0;
     committed_ = true;
     belief_->clear();  // the ramp decides nothing, and reads nothing
-    publish_reference(writer_->build(plan_, live_, stage_));
+    cache_writer_reference();
+    publish_reference();
   }
 
   void commit_clip(Plan clip) {
+    clear_scan_read_wait();
     // What the ramp FAILED to pay, measured. The controller tracks a swept heading with a
     // lag, so this is small but never zero, and assuming zero is exactly the
     // error the split exists to remove.
@@ -599,28 +825,38 @@ class ReposeNode : public rclcpp::Node {
     waiting_ = 0;
     committed_ = true;
     belief_->clear();
-    publish_reference(writer_->build(plan_, live_, stage_));
+    cache_writer_reference();
+    publish_reference();
   }
 
-  void republish() { publish_reference(writer_->build(plan_, live_, stage_)); }
+  void cache_writer_reference() {
+    const std::vector<float>& rows = writer_->build(plan_, live_, stage_);
+    active_rows_.assign(rows.begin(), rows.end());
+    active_frames_ = writer_->frames();
+    active_lead_in_frames_ = writer_->lead_in_frames();
+    active_fps_ = table_.fps();
+    active_entry_yaw_ = writer_->ramped() ? 0.0f : plan_.entry_yaw;
+  }
 
-  void publish_reference(const std::vector<float>& rows) {
+  void republish() { publish_reference(); }
+
+  void publish_reference() {
     msg::MotionReference m;
     m.schema_version = msg::MotionReference::SCHEMA_VERSION;
     m.reference_id = reference_id_;
-    m.frames = static_cast<uint32_t>(writer_->frames());
-    m.cols = static_cast<uint32_t>(writer_->cols());
-    m.fps = table_.fps();
+    m.frames = static_cast<uint32_t>(active_frames_);
+    m.cols = static_cast<uint32_t>(g1::WIRE_COLS_FULL);
+    m.fps = active_fps_;
     // Both are source values, not fallbacks: a clip carries its recorded twist
     // and contact schedule, and a stand truthfully commands zero of each.
     m.has_twist = true;
     m.has_contact = true;
     m.has_object_goal = false;
-    // v7.1 ramps the heading inside the rows, and engage() would compose the
-    // two: the residual is claimed exactly once, by whoever carried it.
-    m.entry_yaw_offset = writer_->ramped() ? 0.0f : plan_.entry_yaw;
+    // v7.1 may carry heading in its rows; v7.2's generated world trajectory
+    // always starts in a canonical frame and MotionClock aligns that frame.
+    m.entry_yaw_offset = active_entry_yaw_;
     m.mode = static_cast<uint8_t>(plan_.mode);
-    m.data = rows;
+    m.data = active_rows_;
     reference_pub_->publish(m);
   }
 
@@ -632,9 +868,12 @@ class ReposeNode : public rclcpp::Node {
     m.mode = static_cast<uint8_t>(plan_.mode);
     m.label = plan_.label;
     m.cost = plan_.cost;
-    m.entry_yaw = plan_.entry_yaw;
-    m.frames = writer_->frames();
-    m.lead_in_frames = writer_->lead_in_frames();
+    m.entry_yaw = (plan_.mode == Mode::SCAN ||
+                   plan_.mode == Mode::KINEMATIC_SCAN)
+                      ? plan_.yaw_offset
+                      : plan_.entry_yaw;
+    m.frames = active_frames_;
+    m.lead_in_frames = active_lead_in_frames_;
     m.committed = committed_;
     committed_ = false;
 
@@ -682,6 +921,7 @@ class ReposeNode : public rclcpp::Node {
   std::unique_ptr<CubeSight> eye_;
   std::unique_ptr<Belief> belief_;
   std::unique_ptr<ReferenceWriter> writer_;
+  std::unique_ptr<SonicKinematicPlanner> kinematic_;
   std::string camera_ip_;
   uint16_t camera_port_ = 5555;
   double rate_hz_ = 20.0, stale_s_ = 1.0;
@@ -717,6 +957,13 @@ class ReposeNode : public rclcpp::Node {
   bool in_enter_ = false;
   float enter_target_yaw_ = 0.f;  ///< absolute heading, frozen at the ramp
   std::string reference_id_;
+  std::vector<float> active_rows_;
+  int active_frames_ = 0;
+  int active_lead_in_frames_ = 0;
+  float active_fps_ = 50.0f;
+  float active_entry_yaw_ = 0.0f;
+  float kinematic_creep_used_m_ = 0.0f;
+  rclcpp::Time scan_read_wait_started_{0, 0, RCL_ROS_TIME};
   uint64_t seq_ = 0;
   int waiting_ = 0;
   uint64_t frames_offered_ = 0, frames_read_ = 0;

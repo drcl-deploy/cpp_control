@@ -51,6 +51,7 @@ const char* mode_name(Mode m) {
     case Mode::SETTLE: return "settle";
     case Mode::SCAN:   return "scan";
     case Mode::CLIP:   return "clip";
+    case Mode::KINEMATIC_SCAN: return "scan-k";
     default:           return "init";
   }
 }
@@ -134,8 +135,15 @@ Plan Clips::decide(const Belief& b) const {
 }
 
 Plan Clips::still(float yaw) const {
+  // v7.3 is a locomotion search, not a proportional heading servo. Preserve
+  // the camera hint's direction but remove the old perception-state jump from
+  // 5.625 to 90 degrees; repeated pure scan-k acts cover the search space.
+  if (cfg_.kinematic_scan_pure && yaw != 0.0f)
+    yaw = std::copysign(cfg_.kinematic_scan_turn_deg * kPi / 180.0f, yaw);
   Plan p;
-  p.mode = yaw == 0.0f ? Mode::SETTLE : Mode::SCAN;
+  p.mode = yaw == 0.0f
+               ? Mode::SETTLE
+               : (cfg_.kinematic_scan ? Mode::KINEMATIC_SCAN : Mode::SCAN);
   p.yaw_offset = yaw;
   p.frames = yaw == 0.0f ? cfg_.settle_steps : cfg_.scan_steps;
   p.label = mode_name(p.mode);

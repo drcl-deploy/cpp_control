@@ -121,6 +121,35 @@ struct Cfg {
   /// needs none — its yaw is zero, so the whole hold is quiescent.
   int hold_tail = 15;
 
+  // ── v7.2 kinematic SCAN ──
+  //
+  // The stationary reference sweep is a good sim command but a poor hardware
+  // primitive: it asks a standing policy to rotate loaded feet. v7.2 replaces
+  // SCAN only with GEAR-SONIC's locomotion-conditioned stepping turn. A zero
+  // movement vector is intentional: in Walk mode the planner uses its
+  // in-place-turn fallback, producing foot motion without walking away.
+  bool kinematic_scan = false;  ///< version-owned; false is byte-identical v7
+  /// v7.3 keeps search inside KINEMATIC_SCAN: its final generated stance is
+  /// held for quiet reads, then another generated turn follows directly.
+  bool kinematic_scan_pure = false;
+  int kinematic_scan_mode = 2;  ///< v7.2: Walk fallback; v7.3 overrides
+  float kinematic_scan_speed_mps = 0.10f;
+  int kinematic_random_seed = 1234;
+  float kinematic_scan_read_tail_s = 0.60f;
+  float kinematic_scan_read_timeout_s = 1.0f;
+  /// v7.3 turns in repeatable locomotion-sized increments. This removes the
+  /// 5.625..90 degree perception-state jump that the tracker rendered as
+  /// "nothing, then one large swing" on hardware.
+  float kinematic_scan_turn_deg = 22.5f;
+  /// Engage Sonic's native walking path briefly, then generate and splice an
+  /// Idle transition before the read tail. Zero keeps v7.3 on the v7.2
+  /// in-place fallback for a direct hardware A/B.
+  float kinematic_scan_creep_s = 0.30f;
+  /// Conservative planned-distance budget for one uninterrupted scan-k burst.
+  /// Once spent, later turns remain bounded but use the in-place fallback.
+  float kinematic_scan_creep_budget_m = 0.14f;
+  int kinematic_scan_stop_blend_frames = 8;
+
   // ── the seam (no sim twin: hardware has no teleport) ──
   int blend_frames = 12;    ///< live->reference offset decay; only if no lead-in
   float lead_in_rate = 1.5f;  ///< rad/s ramp onto a clip's entry; 0 = blend only
@@ -165,6 +194,26 @@ struct Cfg {
     Cfg c = v7();
     c.enter_yaw_rate_deg = 50.0f;
     c.lead_in_max_s = 1.2f;
+    return c;
+  }
+  /// v7.2 — the focused hardware SCAN ablation. This is deliberately built
+  /// on v7 rather than v7.1: changing the turn primitive and the clip-entry
+  /// ramp in one preset would make either hardware result uninterpretable.
+  static Cfg v7_2() {
+    Cfg c = v7();
+    c.kinematic_scan = true;
+    return c;
+  }
+  /// v7.3 — v7.2 without the nominal-SETTLE chatter between search turns.
+  /// The short pause inside scan-k is required by the camera-motion gate; this
+  /// changes the state transition, not the perception contract.
+  static Cfg v7_3() {
+    Cfg c = v7_2();
+    c.kinematic_scan_pure = true;
+    // Native gamepad locomotion never commands v7.2's 0.10 m/s Walk. Its
+    // lowest deployed surface is Slow Walk at 0.20 m/s.
+    c.kinematic_scan_mode = 1;
+    c.kinematic_scan_speed_mps = 0.20f;
     return c;
   }
   static Cfg preset(const std::string& name);

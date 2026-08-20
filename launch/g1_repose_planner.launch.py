@@ -51,6 +51,12 @@ def generate_launch_description():
             'planner_config',
             default_value=[os.path.join(pkg, 'config', 'repose_planner', 'g1_'),
                            LaunchConfiguration('env'), '.yaml']),
+        DeclareLaunchArgument(
+            'kinematic_model',
+            default_value=os.path.join(
+                pkg, 'models', 'planner', 'sonic_kinematic',
+                'planner_sonic.onnx'),
+            description='GEAR-SONIC V2 planner used only by Repose v7.2+'),
         DeclareLaunchArgument('goal_color', default_value='4',
                               description='0 red 1 orange 2 green 3 yellow 4 blue 5 pink; '
                                           'drives the policy one-hot AND the planner ladder'),
@@ -83,6 +89,7 @@ def generate_launch_description():
             parameters=[{
                 'config_path': LaunchConfiguration('planner_config'),
                 'camera_host': LaunchConfiguration('camera_ip'),
+                'kinematic_model_path': LaunchConfiguration('kinematic_model'),
                 # The same argument the controller gets: one colour, both halves, from
                 # boot rather than from the first console keypress.
                 'target_color': LaunchConfiguration('goal_color'),

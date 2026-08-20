@@ -30,7 +30,7 @@ NAMES = ("red", "orange", "green", "yellow", "blue", "pink")
 KEYS = "rogybp"
 RGB = ((230, 51, 51), (242, 115, 26), (51, 230, 51),
        (230, 230, 51), (51, 51, 230), (204, 51, 166))
-MODES = ("init", "settle", "scan", "clip")
+MODES = ("init", "settle", "scan", "clip", "scan-k")
 CONTROLLER_MODES = ("zeroing", "damping", "nominal", "standing", "stand", "POLICY")
 
 CSI = "\033["

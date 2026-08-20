@@ -16,8 +16,11 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v6") return Cfg::v6();
   if (name == "v7") return Cfg::v7();
   if (name == "v7.1") return Cfg::v7_1();
-  throw std::runtime_error("repose planner: version must be v6 | v7 | v7.1, got '" +
-                           name + "'");
+  if (name == "v7.2") return Cfg::v7_2();
+  if (name == "v7.3") return Cfg::v7_3();
+  throw std::runtime_error(
+      "repose planner: version must be v6 | v7 | v7.1 | v7.2 | v7.3, got '" +
+      name + "'");
 }
 
 // ── The loader ───────────────────────────────────────────────────
@@ -172,6 +175,22 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_l("scan_steps", c.scan_steps);
   r_l("hold_tail", c.hold_tail);
 
+  const YAML::Node k = root["kinematic_scan"];
+  reject_unknown(k, "kinematic_scan",
+                 {"mode", "speed_mps", "random_seed", "read_tail_s",
+                  "read_timeout_s", "turn_deg", "creep_s",
+                  "creep_budget_m", "stop_blend_frames"});
+  Reader r_k{k};
+  r_k("mode", c.kinematic_scan_mode);
+  r_k("speed_mps", c.kinematic_scan_speed_mps);
+  r_k("random_seed", c.kinematic_random_seed);
+  r_k("read_tail_s", c.kinematic_scan_read_tail_s);
+  r_k("read_timeout_s", c.kinematic_scan_read_timeout_s);
+  r_k("turn_deg", c.kinematic_scan_turn_deg);
+  r_k("creep_s", c.kinematic_scan_creep_s);
+  r_k("creep_budget_m", c.kinematic_scan_creep_budget_m);
+  r_k("stop_blend_frames", c.kinematic_scan_stop_blend_frames);
+
   const YAML::Node s = root["seam"];
   reject_unknown(s, "seam",
                  {"blend_frames", "lead_in_rate", "lead_in_min_s", "lead_in_max_s",
@@ -208,7 +227,19 @@ bool Cfg::operator==(const Cfg& o) const {
          lead_in_rate == o.lead_in_rate && lead_in_min_s == o.lead_in_min_s &&
          lead_in_max_s == o.lead_in_max_s &&
          enter_yaw_rate_deg == o.enter_yaw_rate_deg &&
-         enter_joint_rate == o.enter_joint_rate;
+         enter_joint_rate == o.enter_joint_rate &&
+         kinematic_scan == o.kinematic_scan &&
+         kinematic_scan_pure == o.kinematic_scan_pure &&
+         kinematic_scan_mode == o.kinematic_scan_mode &&
+         kinematic_scan_speed_mps == o.kinematic_scan_speed_mps &&
+         kinematic_random_seed == o.kinematic_random_seed &&
+         kinematic_scan_read_tail_s == o.kinematic_scan_read_tail_s &&
+         kinematic_scan_read_timeout_s == o.kinematic_scan_read_timeout_s &&
+         kinematic_scan_turn_deg == o.kinematic_scan_turn_deg &&
+         kinematic_scan_creep_s == o.kinematic_scan_creep_s &&
+         kinematic_scan_creep_budget_m == o.kinematic_scan_creep_budget_m &&
+         kinematic_scan_stop_blend_frames ==
+             o.kinematic_scan_stop_blend_frames;
 }
 
 void Cfg::validate() const {
@@ -242,6 +273,42 @@ void Cfg::validate() const {
         "enter_joint_rate > 0");
   if (lead_in_max_s < lead_in_min_s)
     throw std::runtime_error("repose planner: lead_in_max_s must be >= lead_in_min_s");
+  if (kinematic_scan_mode < 1 || kinematic_scan_mode > 3)
+    throw std::runtime_error(
+        "repose planner: kinematic_scan.mode must be Slow Walk, Walk, or Run "
+        "(1..3)");
+  if (kinematic_scan_speed_mps <= 0.0f)
+    throw std::runtime_error(
+        "repose planner: kinematic_scan.speed_mps must be > 0; zero selects "
+        "the mode's default speed rather than stopping");
+  if (kinematic_scan_read_tail_s <= 0.0f ||
+      kinematic_scan_read_timeout_s <= 0.0f)
+    throw std::runtime_error(
+        "repose planner: kinematic_scan read_tail_s and read_timeout_s must "
+        "both be > 0");
+  if (kinematic_scan_turn_deg <= 0.0f || kinematic_scan_turn_deg > 180.0f)
+    throw std::runtime_error(
+        "repose planner: kinematic_scan.turn_deg must be in (0, 180]");
+  if (kinematic_scan_creep_s < 0.0f ||
+      kinematic_scan_creep_budget_m < 0.0f ||
+      kinematic_scan_stop_blend_frames < 0)
+    throw std::runtime_error(
+        "repose planner: kinematic_scan creep_s, creep_budget_m, and "
+        "stop_blend_frames must be >= 0");
+  if (kinematic_scan_pure && kinematic_scan_creep_s > 0.0f) {
+    const std::array<float, 4> native_min{0.0f, 0.2f, 0.8f, 1.5f};
+    const std::array<float, 4> native_max{0.0f, 0.8f, 1.5f, 3.0f};
+    if (kinematic_scan_speed_mps < native_min[kinematic_scan_mode] ||
+        kinematic_scan_speed_mps > native_max[kinematic_scan_mode])
+      throw std::runtime_error(
+          "repose planner: a v7.3 creep must use Sonic's native speed range "
+          "(Slow Walk 0.2..0.8, Walk 0.8..1.5, Run 1.5..3.0 m/s)");
+    if (kinematic_scan_creep_budget_m + 1e-6f <
+        kinematic_scan_speed_mps * kinematic_scan_creep_s)
+      throw std::runtime_error(
+          "repose planner: kinematic_scan.creep_budget_m must admit at least "
+          "one speed_mps * creep_s arc");
+  }
 
   // ── the knobs the yaml only just gained a way to get wrong ──
   if (min_value < 0 || min_value > 255)

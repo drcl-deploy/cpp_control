@@ -46,7 +46,7 @@ VIEW_TOPICS = (
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 # The planner vocabulary, mirrored from msg/PlannerStatus.msg and scripts/planners/repose/repose_console.py.
-PLANNER_MODES = ('init', 'settle', 'scan', 'clip')
+PLANNER_MODES = ('init', 'settle', 'scan', 'clip', 'scan-k')
 CONTROLLER_MODES = ('zeroing', 'damping', 'nominal', 'standing', 'stand', 'POLICY')
 CUBE_COLORS = ('red', 'orange', 'green', 'yellow', 'blue', 'pink')
 CUBE_RGB = ((230, 51, 51), (242, 115, 26), (51, 230, 51),

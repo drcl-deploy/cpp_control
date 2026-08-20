@@ -94,10 +94,53 @@ void check_cfg() {
         "with a ceiling that does not truncate the median heading ask");
   check(Cfg::preset("v7.1").enter_yaw_rate_deg == r.enter_yaw_rate_deg,
         "the preset name resolves");
+  const Cfg k = Cfg::v7_2();
+  check(k.kinematic_scan && !v7.kinematic_scan,
+        "v7.2 replaces SCAN with the kinematic stepping turn");
+  Cfg k_without_switch = k;
+  k_without_switch.kinematic_scan = false;
+  check(k_without_switch == v7,
+        "and differs from v7 by that switch only");
+  check(Cfg::preset("v7.2").kinematic_scan,
+        "the v7.2 preset name resolves");
+  const Cfg p = Cfg::v7_3();
+  check(p.kinematic_scan && p.kinematic_scan_pure,
+        "v7.3 keeps the stepping turn inside a pure scan-k search state");
+  check(p.kinematic_scan_mode == 1 && p.kinematic_scan_speed_mps == 0.20f,
+        "v7.3 creep uses Sonic's native Slow Walk floor");
+  Cfg p_without_switch = p;
+  p_without_switch.kinematic_scan_pure = false;
+  p_without_switch.kinematic_scan_mode = k.kinematic_scan_mode;
+  p_without_switch.kinematic_scan_speed_mps = k.kinematic_scan_speed_mps;
+  check(p_without_switch == k,
+        "and otherwise retains the v7.2 stepping-SCAN contract");
+  check(Cfg::preset("v7.3").kinematic_scan_pure,
+        "the v7.3 preset name resolves");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
         "a quiescence gate that never opens is refused");
+  check(refuses([](Cfg& c) { c.kinematic_scan_speed_mps = 0.0f; }),
+        "a zero stepping-SCAN speed cannot silently select model default");
+  check(refuses([](Cfg& c) { c.kinematic_scan_read_tail_s = 0.0f; }),
+        "a pure scan needs a nonzero quiet read tail");
+  check(refuses([](Cfg& c) { c.kinematic_scan_read_timeout_s = 0.0f; }),
+        "a pure scan read wait stays bounded");
+  check(refuses([](Cfg& c) { c.kinematic_scan_turn_deg = 0.0f; }),
+        "a bounded scan needs a nonzero turn quantum");
+  check(refuses([](Cfg& c) {
+          c.kinematic_scan_pure = true;
+          c.kinematic_scan_mode = 2;
+          c.kinematic_scan_speed_mps = 0.10f;
+        }),
+        "a creep outside Sonic's native mode speed range is refused");
+  check(refuses([](Cfg& c) {
+          c.kinematic_scan_pure = true;
+          c.kinematic_scan_mode = 1;
+          c.kinematic_scan_speed_mps = 0.20f;
+          c.kinematic_scan_creep_budget_m = 0.01f;
+        }),
+        "the creep budget must admit at least one configured arc");
 }
 
 /// The belief is what makes the ladder safe, so assert the two properties the
@@ -156,6 +199,32 @@ void check_decide_is_pure(const ClipTable& t) {
   seen.hint = 0.4f;
   for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(seen);
   check(clips.decide(b).mode == Mode::SCAN, "colour without a pose scans");
+
+  Cfg kinematic_cfg = Cfg::v7_2();
+  Clips kinematic_clips(t, kinematic_cfg, 4);
+  Belief kinematic_belief(kinematic_cfg);
+  for (int i = 0; i < kinematic_cfg.belief_min_votes; ++i)
+    kinematic_belief.push(seen);
+  check(kinematic_clips.decide(kinematic_belief).mode ==
+            Mode::KINEMATIC_SCAN,
+        "v7.2 answers the same missing pose with a stepping SCAN");
+
+  Cfg pure_cfg = Cfg::v7_3();
+  Clips pure_clips(t, pure_cfg, 4);
+  Belief partial_cube(pure_cfg);
+  for (int i = 0; i < pure_cfg.belief_min_votes; ++i)
+    partial_cube.push(seen);
+  const Plan bounded = pure_clips.decide(partial_cube);
+  check(std::fabs(std::fabs(bounded.yaw_offset) -
+                  pure_cfg.kinematic_scan_turn_deg * M_PI / 180.0f) < 1e-6f,
+        "v7.3 converts a vision hint into one fixed locomotion turn quantum");
+  Belief no_cube(pure_cfg);
+  Sight empty_read;
+  for (int i = 0; i < pure_cfg.belief_min_votes; ++i)
+    no_cube.push(empty_read);
+  check(no_cube.n_reads() >= pure_cfg.belief_min_votes && !no_cube.valid() &&
+            pure_clips.decide(no_cube).mode == Mode::KINEMATIC_SCAN,
+        "quiet no-cube reads request another scan-k, not SETTLE");
 
   Sight placed = seen;
   placed.ok = true;
@@ -642,9 +711,9 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   if (parity) {
     check(Cfg::from_yaml(root) == Cfg::preset(named),
           "the shipped yaml round-trips to the preset it names");
-    // `version:` is the ablation switch, so all three have to survive the same
+    // `version:` is the ablation switch, so all five have to survive the same
     // file — that is the "one line A/Bs both" claim, tested.
-    for (const char* v : {"v6", "v7", "v7.1"}) {
+    for (const char* v : {"v6", "v7", "v7.1", "v7.2", "v7.3"}) {
       YAML::Node n = YAML::Clone(root);
       n["version"] = v;
       check(Cfg::from_yaml(n) == Cfg::preset(v),

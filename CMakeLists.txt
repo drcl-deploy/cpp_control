@@ -282,7 +282,8 @@ if(OpenCV_FOUND)
     target_include_directories(g1_repose_planner_node
       PRIVATE ${vision_encoders_INCLUDE_DIRS})
     target_link_libraries(g1_repose_planner_node
-      cpp_control_repose_planner cpp_control_vibe_contract yaml-cpp)
+      cpp_control_repose_planner cpp_control_sonic_kinematic_planner
+      cpp_control_vibe_contract yaml-cpp)
     ament_target_dependencies(g1_repose_planner_node
       rclcpp std_msgs unitree_hg vision_encoders)
     rosidl_target_interfaces(g1_repose_planner_node

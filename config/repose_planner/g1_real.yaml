@@ -6,15 +6,14 @@
 # reads is reachable any other way, and an unknown key is a hard error: a knob
 # that is silently ignored reads as tuned and behaves as stock.
 #
-# THE THREE KNOBS THE PRESETS DISAGREE ON ARE DELIBERATELY ABSENT:
-# `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Writing
-# them here would pin them, and `version:` would stop switching the ablations it
-# exists to switch. Write one only to override a preset on purpose — and expect
-# `repose_planner_selftest --config` to tell you that you did.
+# VERSION-OWNED KNOBS ARE DELIBERATELY ABSENT: `loop.nominal_stand`,
+# `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`, and the internal kinematic
+# SCAN/pure-SCAN enables plus native creep mode/speed. Writing one here would
+# pin it, and `version:` would stop switching the ablation it exists to switch.
 
-version: v7        # each version is ONE knob over the last: v6 has no NOMINAL
-                   # STAND (62.5% -> 95%), v7.1 adds the ENTER ramp (§7.1).
-                   # Both ablations run from this one line.
+version: v7.3      # active hardware experiment: bounded native creep search.
+                   # Set v7 for the established stationary-SCAN baseline or
+                   # v7.2 for the scan-k -> SETTLE control.
 target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
                    # goal_color overrides it, so the controller and the planner boot agreeing
 
@@ -139,6 +138,17 @@ loop:
                         # makes a SCAN observable at all, since every frame of the
                         # sweep itself fails omega_still. Sized in EVIDENCE: 15
                         # frames at 50 fps is 0.6 s, ~12 reads at a 20 Hz tick
+
+# Parsed under every preset, activated only by `version: v7.2` or `v7.3`.
+kinematic_scan:
+  # v7.2: Walk/0.10 zero-vector control; v7.3: Slow Walk/0.20 native creep.
+  random_seed: 1234
+  turn_deg: 22.5
+  creep_s: 0.30
+  creep_budget_m: 0.14
+  stop_blend_frames: 8
+  read_tail_s: 0.60
+  read_timeout_s: 1.00
 
 # ── THE SEAM ─────────────────────────────────────────────────────────────────
 # Live pose -> a clip's entry pose. No sim twin: hardware has no teleport.

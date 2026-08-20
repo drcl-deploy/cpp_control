@@ -7,6 +7,10 @@ patch that fusion. This build splits the three and deletes the patches.
 Design of record: [planner.md](planner.md). This doc is the **delta**: what changed,
 why, and what it is allowed to cost. Nothing here restates §3.
 
+Postscript: the later hardware SCAN experiments are documented separately in
+[v7_2_kinematic_scan.md](v7_2_kinematic_scan.md) and
+[v7_3_pure_scan.md](v7_3_pure_scan.md); they do not change this v7 record.
+
 ---
 
 ## 1. Parity matrix
@@ -24,7 +28,7 @@ claim; right column is what actually backs it.
 | SETTLE | 40 f | 40 f | unchanged |
 | solve rate, sim2sim | v7 | v7-simplified | **indistinguishable** (operator call, one session) |
 | wire | `PlannerStatus` @ 1 Hz | `PlannerStatus` @ 20 Hz, +10 fields | additive; `ControllerStatus`, `MotionReference` untouched |
-| binary | v5 / v6 / v7 | v6 / v7 (+ v7.1) | one dead config removed; v7.1 landed after, [planner.md §7.1](planner.md) |
+| binary | v5 / v6 / v7 | v6 / v7 (+ v7.1, v7.2, v7.3) | one dead config removed; later ablations are documented in [planner.md §7](planner.md) |
 
 Parity was the goal. **The changes are all in what happens when something goes
 wrong** — a lost camera, a flickered read, a dropped reference — and sim2sim on the

@@ -16,17 +16,19 @@ split, with the parity matrix: [v7_simplified.md](v7_simplified.md).
 
 ---
 
-## 0. One shipping config, two ablations
+## 0. One shipping config, four ablations
 
 v5 and its knobs are gone: the A/B is finished, the numbers are below, and a
-binary carrying dead configurations is not a minimal planner. Each surviving
-version is **one knob** over the last, so one binary A/Bs both.
+binary carrying dead configurations is not a minimal planner. Each experimental
+version is **one knob** over its declared base, so one binary can A/B it.
 
 | version | knob | what it does |
 |---|---|---|
 | v6 | — | the baseline: `RRF`, `horizon_gain 0.3`, graded sighting |
 | **v7** | `nominal_stand` | hold the robot's own nominal stance in a still mode, not the library's stand frame |
 | v7.1 | `enter_yaw_rate_deg` | put the HEADING in the lead-in ramp, at a bounded rate (§7.1) |
+| v7.2 | `kinematic_scan` | replace only the stationary SCAN sweep with a GEAR-SONIC stepping turn (§7.2) |
+| v7.3 | `kinematic_scan_pure` + bounded native creep | fixed-angle Slow-Walk/Idle turns, searched directly with quiet reads inside scan-k (§7.3) |
 
 Everything the versions used to split — `pattern: RRF`, `horizon_gain: 0.3`,
 `min_visible_color: 0.0` — is now simply the default. `stall_limit` and
@@ -134,9 +136,11 @@ decide(belief):                           # a pure function, four branches
     else                                  -> CLIP = argmin over pool × 4 syms
 ```
 
-Structurally there are **two** modes, not three: a CLIP, and a STILL whose yaw is
-either zero (SETTLE) or swept (SCAN). They share one builder and one writer
-branch; the message keeps them apart only because a bag reads better for it.
+Through v7.1 there are structurally **two** modes: a CLIP, and a STILL whose yaw
+is either zero (SETTLE) or swept (SCAN). v7.2 adds one locomotion act,
+`KINEMATIC_SCAN`; it is deliberately followed by the same nominal SETTLE that
+makes a CLIP readable. v7.3 makes that act self-readable at its held tail and
+may follow it directly with another `KINEMATIC_SCAN`.
 
 ### The belief
 
@@ -248,22 +252,29 @@ ablation ledger — and supplies the defaults; every key overrides it.
 | `observe.mask` | `mask` read only — `top_pct`, `band_m`, `erode` |
 | `belief` | `window`, `min_votes`, `omega_still` |
 | `loop` | the ladder and the stills |
+| `kinematic_scan` | v7.2+ planner mode/speed, deterministic seed, bounded turn, native creep/stop, displacement budget, quiet tail, and read wait |
 | `seam` | lead-in, blend, the v7.1 ramp |
 
 Two files ship, and the launch picks between them with `env:=sim|real`
-(**sim by default**): `g1_sim.yaml` is the untuned base, `g1_real.yaml` carries a
-measured palette and the `mask` read. They differ ONLY in `observe:`.
+(**sim by default**): `g1_sim.yaml` is the untuned base and currently selects
+the v7.3 bring-up experiment; `g1_real.yaml` now selects the same experiment
+with its measured palette and `mask` read for the requested hardware trial.
+Set its one `version:` line back to v7 for the established stationary-SCAN
+baseline. Apart from the measured perception block, both files share the
+planner tuning.
 
 Two rules the loader enforces, both by throwing:
 
 1. **An unknown key is an error.** A silently ignored knob reads as tuned and
    behaves as stock, which is the worst outcome available.
-2. **The three knobs the presets disagree on are absent from the shipped file** —
-   `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Pinning
-   them in yaml would make `version:` stop switching the ablations it exists to
-   switch. `ros2 run cpp_control repose_planner_selftest --config <file>
-   --check-preset-parity` asserts all three presets still round-trip through it,
-   so the day someone pins one, the test says so.
+2. **The version-owned knobs are absent from the shipped file** —
+   `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`, and the
+   internal `kinematic_scan` and pure-search enables plus native creep mode/speed. Pinning one in yaml would make `version:`
+   stop switching the ablation it exists to switch. `ros2 run cpp_control
+   repose_planner_selftest --config <file> --check-preset-parity` asserts all
+   five presets still round-trip through the untuned sim file, so the day
+   someone pins one, the test says so. The real file is deliberately tuned and
+   is checked without this parity flag.
 
 The pre-split flat `knobs:` block is refused by name, with the migration in the
 message.
@@ -444,6 +455,77 @@ removes it without overshooting. It is a discontinuity in a reference *channel*
 the tokenizer reads, not in the commanded position, so it is a surprise to the
 policy rather than a torque step. Closing it is a clip-slicing change in vibe
 (cut spans at low-velocity frames), not a planner change.
+
+## 7.2 The stepping SCAN (v7.2)
+
+The stationary SCAN reference works in sim but asks a standing policy to turn
+loaded feet on hardware. v7.2 changes that primitive only. The Repose node owns
+the ROS-free GEAR-SONIC planner engine and requests:
+
+```text
+mode               = Walk
+target_speed       = 0.10 m/s
+movement_direction = [0, 0, 0]
+facing_direction   = [cos(scan_yaw), sin(scan_yaw), 0]
+```
+
+The zero movement vector is intentional. Under a locomotion mode the released
+model interprets it as a stepping turn toward the fixed facing target. A model
+regression check at 45 degrees measures about 39 degrees of generated yaw and
+2 cm of net reference translation.
+
+This is a discrete act, not a new continuous planner:
+
+```text
+SETTLE -> KINEMATIC_SCAN -> SETTLE -> observe / decide
+```
+
+The moving act is never read from. Even when its final frames are quiet, its
+waist is generated rather than v7's known nominal gaze. Commit clears the
+belief; the empty belief therefore commands SETTLE next, and only that stance
+may refill it. Every generation starts from measured joint positions with a
+canonical root, so no synthetic root translation or odometry carries across
+Repose acts. `MotionClock` remains the live heading authority.
+
+v7.2 is built directly on v7, not v7.1. The scan primitive and clip-entry ramp
+are independent hardware ablations; composing both before either is measured
+would make the result uninterpretable. Full build notes and the smoke sequence
+are in [v7_2_kinematic_scan.md](v7_2_kinematic_scan.md).
+
+## 7.3 Bounded creep search (v7.3)
+
+v7.2 made each generated turn unreadable, so its empty belief necessarily
+selected nominal SETTLE before every next search turn. v7.3 keeps search in
+scan-k, bounds every nonzero vision hint to a fixed 22.5 degree act, and uses a
+short native Slow Walk creep before asking the same planner for Idle. The
+generated walking and stop references are cross-faded before publication, then
+a zero-velocity hold admits reads under the unchanged `omega_still` gate:
+
+```text
+scan-k CREEP -> generated IDLE -> scan-k QUIET READ
+                 | no usable cube -> next scan-k
+                 | cube + pose    -> CLIP
+                 | target         -> SETTLE / DONE
+                 | stale/timeout  -> SETTLE
+```
+
+Native Sonic exposes Slow Walk at 0.2–0.8 m/s, Walk at 0.8–1.5, and Run at
+1.5–3.0; stick-neutral changes to Idle. v7.3 therefore uses Slow Walk at 0.20
+m/s for 0.30 s rather than inventing a 0.05 m/s gait, then mirrors the native
+Idle transition and eight-frame animation blend. A 0.14 m cumulative budget
+admits roughly two generated 6.2 cm arcs; later turns in the same uninterrupted
+search retain the fixed angle but use v7.2's in-place fallback.
+
+This is pure at the state-machine level, not uninterrupted angular motion. A
+moving frame still cannot become evidence: colour/depth blur and the lack of
+capture-time lowstate alignment make that pose geometrically stale. The
+controller naturally holds the last reference row while a bounded extra read
+wait runs, so no recursion or controller change is involved.
+
+Each next turn is generated from measured joints with a fresh canonical root.
+The released-model regression measures about 20 degrees yaw and 6.2 cm
+translation for the default creep/Idle act. Full design and bring-up gates are in
+[v7_3_pure_scan.md](v7_3_pure_scan.md).
 
 ---
 

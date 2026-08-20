@@ -6,20 +6,20 @@
 # reads is reachable any other way, and an unknown key is a hard error: a knob
 # that is silently ignored reads as tuned and behaves as stock.
 #
-# THE THREE KNOBS THE PRESETS DISAGREE ON ARE DELIBERATELY ABSENT:
-# `loop.nominal_stand`, `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`. Writing
-# them here would pin them, and `version:` would stop switching the ablations it
-# exists to switch. Write one only to override a preset on purpose — and expect
-# `repose_planner_selftest --config` to tell you that you did.
+# VERSION-OWNED KNOBS ARE DELIBERATELY ABSENT: `loop.nominal_stand`,
+# `seam.enter_yaw_rate_deg`, `seam.lead_in_max_s`, and the internal kinematic
+# SCAN/pure-SCAN enables plus native creep mode/speed. Writing one here would
+# pin it, and `version:` would stop switching the ablation it exists to switch.
 
-version: v7        # each version is ONE knob over the last: v6 has no NOMINAL
-                   # STAND (62.5% -> 95%), v7.1 adds the ENTER ramp (§7.1).
-                   # Both ablations run from this one line.
+version: v7.3      # v7.2 stepping SCAN, kept as one search state across turns.
+                   # v7.2 remains the scan-k -> settle control; v7.1 remains
+                   # the independent ENTER-ramp ablation.
 target_color: 4    # 0 red 1 orange 2 green 3 yellow 4 blue 5 pink; the launch's
                    # goal_color overrides it, so the controller and the planner boot agreeing
 
 rate_hz: 20.0      # planner tick: OBSERVE + PLAN every tick, ACT only when the controller
-                   # says it finished. Soft real-time; ~2 ms of work per tick.
+                   # says it finished. A creep act runs walking + Idle ONNX once
+                   # each; ordinary ticks remain ~2 ms.
 stale_s: 1.0       # lowstate silence that parks the planner. NOT the camera —
                    # losing that starves the belief, which plans the stance
 
@@ -132,6 +132,22 @@ loop:
                         # makes a SCAN observable at all, since every frame of the
                         # sweep itself fails omega_still. Sized in EVIDENCE: 15
                         # frames at 50 fps is 0.6 s, ~12 reads at a 20 Hz tick
+
+# v7.2 uses the zero-vector stepping-turn fallback. v7.3 removes the old
+# 5.625..90 deg command jump, briefly engages native Slow Walk, asks Sonic for
+# an Idle transition, then holds that generated stop for quiet reads. Once the
+# burst budget is spent, pure scan-k continues with bounded in-place turns.
+# `version: v7` ignores this block and retains the stationary sweep.
+kinematic_scan:
+  # mode/speed are version-owned: v7.2 keeps Walk/0.10 for its zero-vector
+  # control; v7.3 uses native Slow Walk/0.20 for the creep experiment.
+  random_seed: 1234
+  turn_deg: 22.5        # fixed magnitude; camera hint supplies only the sign
+  creep_s: 0.30         # native walk prefix before the generated Idle stop
+  creep_budget_m: 0.14  # about two creep acts; then bounded in-place turns
+  stop_blend_frames: 8  # Sonic's native old/new animation cross-fade width
+  read_tail_s: 0.60     # zero-velocity final-pose hold inside scan-k
+  read_timeout_s: 1.00  # extra finished hold; then SETTLE if still unreadable
 
 # ── THE SEAM ─────────────────────────────────────────────────────────────────
 # Live pose -> a clip's entry pose. No sim twin: hardware has no teleport.
