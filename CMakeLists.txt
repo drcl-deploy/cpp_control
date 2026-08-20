@@ -101,6 +101,7 @@ endif()
 
 # ── Deploy infra: manifest-driven ONNX + g1 motion (ROS-free) ──
 add_library(cpp_control_deploy STATIC
+  src/common/asset_path.cpp
   src/common/deploy_manifest.cpp
   src/common/onnx_session.cpp
   src/common/g1/motion.cpp
@@ -109,6 +110,10 @@ add_library(cpp_control_deploy STATIC
 target_include_directories(cpp_control_deploy PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 target_link_libraries(cpp_control_deploy ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB::ZLIB)
+
+# config_loader resolves every yaml path through asset_path(), which lives in
+# the ROS-free lib above so the planner selftests share the one rule.
+target_link_libraries(cpp_control_common cpp_control_deploy)
 
 # Vibe task contracts are ROS-free: validate artifact semantics in tests and
 # share exactly the same profile selection with the runtime.

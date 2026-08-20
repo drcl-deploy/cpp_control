@@ -12,11 +12,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "cnpy/cnpy.h"
+#include "common/asset_path.hpp"
 #include "common/deploy_manifest.hpp"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
@@ -452,6 +454,65 @@ static void smoke_run(const std::string& onnx, const std::string& manifest_path)
     std::puts("ok  smoke run (zero obs)");
 }
 
+// ── asset_path: one rule, two roots ─────────────────────────────
+// Absolute always wins; relative is searched under $VIBE_ASSET_ROOT then the
+// package's installed models/; missing and ambiguous both throw.
+static bool throws(const std::string& p)
+{
+    try
+    {
+        asset_path(p);
+        return false;
+    }
+    catch (const std::exception&)
+    {
+        return true;
+    }
+}
+
+static void test_asset_path()
+{
+    namespace fs = std::filesystem;
+    const char* saved_asset = std::getenv("VIBE_ASSET_ROOT");
+    const char* saved_ament = std::getenv("AMENT_PREFIX_PATH");
+    const std::string keep_asset = saved_asset ? saved_asset : "";
+    const std::string keep_ament = saved_ament ? saved_ament : "";
+
+    const fs::path base = fs::path(tmp_path("asset_roots"));
+    fs::remove_all(base);
+    const fs::path assets = base / "vibe";
+    const fs::path models = base / "prefix" / "share" / "cpp_control" / "models";
+    fs::create_directories(assets / "data");
+    fs::create_directories(models / "locomotion");
+    std::ofstream(assets / "data" / "clips.npz").put('x');
+    std::ofstream(models / "locomotion" / "g1.onnx").put('x');
+    std::ofstream(assets / "both.onnx").put('x');
+    std::ofstream(models / "both.onnx").put('x');
+
+    setenv("VIBE_ASSET_ROOT", assets.c_str(), 1);
+    setenv("AMENT_PREFIX_PATH", (base / "prefix").c_str(), 1);
+
+    CHECK(asset_path("") == "");                             // "" means "none"
+    CHECK(asset_path("/opt/x.onnx") == "/opt/x.onnx");       // absolute, never searched
+    CHECK(asset_path("data/clips.npz") == (assets / "data" / "clips.npz").string());
+    CHECK(asset_path("locomotion/g1.onnx") == (models / "locomotion" / "g1.onnx").string());
+    CHECK(throws("data/missing.npz"));                       // under no root
+    CHECK(throws("both.onnx"));                              // under two roots
+
+    // No roots at all: an absolute path still resolves, a relative one says why.
+    unsetenv("VIBE_ASSET_ROOT");
+    unsetenv("AMENT_PREFIX_PATH");
+    CHECK(asset_path("/opt/x.onnx") == "/opt/x.onnx");
+    CHECK(throws("data/clips.npz"));
+
+    fs::remove_all(base);
+    if (keep_asset.empty()) unsetenv("VIBE_ASSET_ROOT");
+    else setenv("VIBE_ASSET_ROOT", keep_asset.c_str(), 1);
+    if (keep_ament.empty()) unsetenv("AMENT_PREFIX_PATH");
+    else setenv("AMENT_PREFIX_PATH", keep_ament.c_str(), 1);
+    std::puts("ok  asset_path (2 roots, absolute wins, missing/ambiguous throw)");
+}
+
 int main(int argc, char** argv)
 {
     test_history();
@@ -459,6 +520,7 @@ int main(int argc, char** argv)
     test_motion();
     test_joint_orders();
     test_tokenizer_layout();
+    test_asset_path();
 
     std::vector<std::string> pos;
     std::string motion;
