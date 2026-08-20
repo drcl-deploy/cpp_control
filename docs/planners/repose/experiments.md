@@ -20,6 +20,7 @@ hardware workflows.
 | controls | `RB` stand, `L1` prep, `A` run | `RB` stand + disarm, `A` arm + run — no L1 prep |
 | extra terminal | — | the console, to set the target colour and re-arm |
 | observe block | — | `env:=sim` or `env:=real` (§2.5) |
+| assets it reads | `vibe/models/` | + `vibe/data/` — the clip table and its frames (§3) |
 
 The planner also **observes whenever lowstate is alive**, armed or not. The
 console shows the belief before you press `A`, which is the cheapest way to find
@@ -114,6 +115,20 @@ Same artifact discovery as every other task wrapper, same `enable_bridge`,
 same `Ctrl-C` tears down all four processes. `checkpoint:=<step>` is only needed
 when the directory holds more than one `.onnx`/`.manifest.json` pair.
 `goal_color:=` sets the starting target; the console changes it live.
+
+**The planner needs `vibe/data/` too, not only `vibe/models/`.** Three keys in
+the yaml name it, all relative to `$VIBE_ASSET_ROOT`
+([assets.md](../../vibe/assets.md)):
+
+| yaml key | file | if it is missing |
+|---|---|---|
+| `clips` | `data/sys1_clips.npz` | boot throws, naming every root it tried |
+| `frames.library` | `data/sys1_library.npz` | same — `source: retargeted` only |
+| `frames.path` | `data/retargeted_motions/` | same |
+
+On the Orin, `rsync` those three to the same paths under `<repo>/vibe` and the
+yaml needs no edit. Or bake them into one file and point `frames.source: baked`
+at it ([planner.md §5](planner.md)) — one npz instead of the dataset.
 
 After launch, press `RB` to enter the nominal SONIC stand. The planner remains idle
 and cannot replace that reference. Press `A` once to arm the closed loop. Press

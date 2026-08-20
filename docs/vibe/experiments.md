@@ -28,6 +28,27 @@ The setup selects everything that differs between deployments:
 The offboard bridge client internally uses isolated ROS domain `71`; no manual
 domain export is needed.
 
+## 1.5 Put the assets where the setup expects them
+
+The setup also exports `VIBE_ASSET_ROOT=<repo>/vibe`. Checkpoints and motion
+data are not tracked by this package, so nothing in a config or a command line
+names an absolute path — everything below is relative to that root:
+
+```
+unitree_ros2/vibe/
+  models/   <run>/<export>/{*.onnx,*.manifest.json}      what artifact:= finds
+  data/     sys1_clips.npz, sys1_library.npz, retargeted_motions/
+```
+
+| box | how |
+|---|---|
+| desktop | symlink `vibe/models` and `vibe/data` at the training tree |
+| Orin | `rsync` into the same two directories — the path under `vibe/` must match |
+
+Only the prefix differs between the two, which is the whole point: every command
+on this page is one string on both. Absolute paths still override. The rule and
+its error messages are in [assets.md](assets.md).
+
 ## 2. Start the camera source
 
 For a real experiment, run the camera streamer onboard:
