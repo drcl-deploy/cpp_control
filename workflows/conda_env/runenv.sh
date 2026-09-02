@@ -48,6 +48,16 @@ else
     export ROS_LOCALHOST_ONLY=1
 fi
 
+# Both shells cache command locations, and everything above just changed PATH
+# out from under that cache. Without this, `ros2` still resolves to whatever the
+# system had (here /opt/ros/jazzy) for the rest of the shell's life — while
+# `command -v` reports the right one, so the check below would happily pass.
+if [ -n "$ZSH_VERSION" ]; then
+    rehash
+else
+    hash -r 2>/dev/null || true
+fi
+
 _dr_ros2=$(command -v ros2 2>/dev/null)
 case "$_dr_ros2" in
     "$CONDA_PREFIX"/*)
