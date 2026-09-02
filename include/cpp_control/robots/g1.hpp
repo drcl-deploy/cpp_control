@@ -101,6 +101,7 @@ namespace cpp_control
         void publish_g1_command(const RobotCommand &cmd);
         rclcpp::Publisher<messages::msg::G1Command>::SharedPtr lowcmd_pub_drcl_;
         rclcpp::Subscription<messages::msg::G1State>::SharedPtr lowstate_sub_drcl_;
+        int state_tick_ = 0;   ///< messages since the last state-paced control step
 #endif
     };
 

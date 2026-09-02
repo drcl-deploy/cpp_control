@@ -20,6 +20,17 @@ struct RobotState
     std::array<float, 3> base_pos_w = {0.0f, 0.0f, 0.0f};
     std::array<float, 3> base_lin_vel_w = {0.0f, 0.0f, 0.0f};
 
+    // Full world-frame base pose and twist. Only a source that genuinely has
+    // them sets `base_state_valid`: mj_sim's ground truth (G1State.base_pose /
+    // base_twist) or a motion-capture system. An IMU does NOT — it has no
+    // position, no heading and no world linear velocity — and neither does
+    // SportModeState, which carries no orientation. Tasks whose policy was
+    // trained on world-frame observations must check the flag rather than read
+    // a plausible-looking identity pose.
+    std::array<float, 4> base_quat_w = {1.0f, 0.0f, 0.0f, 0.0f};  // w,x,y,z
+    std::array<float, 3> base_ang_vel_w = {0.0f, 0.0f, 0.0f};
+    bool base_state_valid = false;
+
     std::vector<float> joint_positions;
     std::vector<float> joint_velocities;
     std::vector<float> joint_torques;

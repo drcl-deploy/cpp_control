@@ -14,6 +14,10 @@ Config::Config(const std::string& config_path)
         {
             control_dt = config["control_dt"].as<double>();
         }
+        if (config["state_decimation"])
+        {
+            state_decimation = config["state_decimation"].as<int>();
+        }
         if (config["msg_type"])
         {
             msg_type = config["msg_type"].as<std::string>();

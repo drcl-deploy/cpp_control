@@ -264,6 +264,43 @@ void G1Node::subscribe_g1_state(messages::msg::G1State::SharedPtr msg)
         robot_state_.joint_velocities[i] = msg->motor_state[i].dq;
         robot_state_.joint_torques[i] = msg->motor_state[i].tauest;
     }
+
+    // World-frame base pose and twist. In mj_sim these are the pelvis
+    // framepos/framequat/framelinvel/frameangvel sensors, i.e. ground truth,
+    // all four in the WORLD frame — note that the angular velocity is NOT the
+    // body-local one MuJoCo keeps in a free joint's qvel[3:6]. Tasks with a
+    // world-frame observation (the difftrack tracker) need exactly this; ones
+    // that only want the IMU keep ignoring it.
+    robot_state_.base_pos_w = {
+        static_cast<float>(msg->base_pose.position.x),
+        static_cast<float>(msg->base_pose.position.y),
+        static_cast<float>(msg->base_pose.position.z)};
+    robot_state_.base_quat_w = {
+        static_cast<float>(msg->base_pose.orientation.w),
+        static_cast<float>(msg->base_pose.orientation.x),
+        static_cast<float>(msg->base_pose.orientation.y),
+        static_cast<float>(msg->base_pose.orientation.z)};
+    robot_state_.base_lin_vel_w = {
+        static_cast<float>(msg->base_twist.linear.x),
+        static_cast<float>(msg->base_twist.linear.y),
+        static_cast<float>(msg->base_twist.linear.z)};
+    robot_state_.base_ang_vel_w = {
+        static_cast<float>(msg->base_twist.angular.x),
+        static_cast<float>(msg->base_twist.angular.y),
+        static_cast<float>(msg->base_twist.angular.z)};
+    robot_state_.base_state_valid = true;
+
+    // State-paced control: one control step every `state_decimation` messages.
+    //
+    // mj_sim publishes exactly one state per physics step, so this fixes the
+    // physics-per-control-step ratio at the decimation the policy trained with,
+    // however fast or slow the simulator's own loop happens to run. Off by
+    // default (state_decimation 0), where the wall timer drives as before.
+    if (state_paced() && ++state_tick_ >= config_->state_decimation)
+    {
+        state_tick_ = 0;
+        control_loop();
+    }
 }
 
 void G1Node::publish_g1_command(const RobotCommand& cmd)

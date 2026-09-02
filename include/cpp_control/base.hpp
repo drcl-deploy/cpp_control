@@ -100,13 +100,24 @@ protected:
     // For nominal pose interpolation (protected so Level 1 gamepad can access)
     std::vector<float> pre_nominal_pos_;
 
-private:
+    /// One pass of the control FSM: mode -> command -> publish.
+    ///
+    /// Normally driven by this node's wall timer. Level 1 calls it directly
+    /// when `state_decimation` pacing is on, so the loop runs off the robot's
+    /// own state stream instead of the wall clock.
     void control_loop();
+
+    /// True when init() left the wall timer uncreated, because the config's
+    /// `state_decimation` asked Level 1 to drive control_loop() itself.
+    bool state_paced() const { return state_paced_; }
+
+private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
 
     std::vector<int> prev_buttons_;
 
     bool init_done_ = false;
+    bool state_paced_ = false;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 };

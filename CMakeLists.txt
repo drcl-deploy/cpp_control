@@ -22,6 +22,7 @@ find_package(unitree_hg QUIET)
 find_package(unitree_go QUIET)
 find_package(messages QUIET)
 find_package(vision_encoders QUIET)  # ImageTokens (vibe-sonic)
+find_package(Eigen3 QUIET)           # difftrack observation builder
 
 if(unitree_hg_FOUND)
   message(STATUS "Found unitree_hg -- Unitree HG backend enabled")
@@ -36,6 +37,16 @@ endif()
 
 if(NOT unitree_hg_FOUND AND NOT messages_FOUND)
   message(FATAL_ERROR "At least one of unitree_hg or messages is required")
+endif()
+
+# Eigen is not a dependency of this package as a whole -- everything else here
+# uses plain arrays and common/math_utils.hpp. Only the difftrack tracker needs
+# it, so it is optional and that one task drops out without it rather than
+# making Eigen a new requirement for every consumer.
+if(Eigen3_FOUND)
+  message(STATUS "Found Eigen3 -- g1_difftrack_node enabled")
+else()
+  message(STATUS "Eigen3 NOT found -- g1_difftrack_node disabled")
 endif()
 
 # ── ONNX Runtime ──────────────────────────────────────────────
@@ -163,6 +174,25 @@ if(unitree_hg_FOUND OR messages_FOUND)
   # ament_target_dependencies(g1_vibe_residual_v2_node
   #   rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
 
+  # ── difftrack (diffsimrl ADD/AMP tracking policies) ──
+  # The observation builder is ROS-free and testable on its own; the self-test
+  # scores it (and policy.onnx) against a golden rollout recorded in diffsimrl.
+  if(Eigen3_FOUND)
+    add_library(cpp_control_difftrack STATIC src/common/g1/difftrack_obs.cpp)
+    target_link_libraries(cpp_control_difftrack Eigen3::Eigen yaml-cpp)
+
+    add_executable(difftrack_selftest tests/difftrack_selftest.cpp)
+    target_link_libraries(difftrack_selftest
+      cpp_control_difftrack ${ONNXRUNTIME_LIBRARIES})
+
+    add_executable(g1_difftrack_node src/tasks/tracker/g1_difftrack.cpp)
+    target_link_libraries(g1_difftrack_node cpp_control_g1 cpp_control_difftrack)
+    ament_target_dependencies(g1_difftrack_node
+      rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+
+    list(APPEND INSTALL_TARGETS g1_difftrack_node)
+  endif()
+
   # Task: tracker (g1 sonic — exported vibe policy + manifest)
   add_executable(g1_sonic_node src/tasks/tracker/g1_sonic.cpp)
   target_link_libraries(g1_sonic_node cpp_control_g1 cpp_control_deploy)
@@ -223,6 +253,8 @@ install(DIRECTORY launch config models include
 )
 
 install(PROGRAMS
+  scripts/make_sim2sim_scene.py
+  scripts/run_difftrack_sim2sim.sh
   scripts/npz_motion_publisher.py
   # scripts/viser_ghost_g1_residual.py   # LEGACY (vibe v1) — reference only
   scripts/attn_viewer.py

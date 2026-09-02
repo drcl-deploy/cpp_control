@@ -9,6 +9,23 @@ struct Config
 {
     // Control parameters
     double control_dt = 0.02;
+
+    // Pace the control loop off the state stream instead of the wall clock:
+    // one control step every `state_decimation` state messages. 0 (default)
+    // keeps the wall timer.
+    //
+    // A wall timer assumes the plant runs in real time. mj_sim does not — it
+    // steps as fast as its loop goes (measured ~1.7x real time here, and it
+    // moves with machine load), so a 50 Hz wall-clock controller hands the
+    // robot 40 ms of physics per 20 ms control step and the policy is being
+    // asked to control a plant running 1.7x fast. Ticking off the state stream
+    // fixes the ratio exactly: mj_sim publishes one message per physics step,
+    // so `state_decimation = control_dt / sim_timestep` is the decimation the
+    // policy trained with, whatever the wall clock is doing.
+    //
+    // On hardware set it to (state publish rate x control_dt), or leave it 0
+    // and let the wall timer run — there the plant IS real time.
+    int state_decimation = 0;
     std::string msg_type = "hg";
     std::string imu_type = "pelvis";
     std::string workflow = "unitree";  // "unitree" or "drcl_deploy"

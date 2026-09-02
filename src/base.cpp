@@ -42,13 +42,21 @@ void BaseNode::init()
     last_actions_.resize(n, 0.0f);
     pre_nominal_pos_.resize(n, 0.0f);
 
-    // Start control timer
+    // Start control timer — unless Level 1 is going to drive control_loop() off
+    // the robot's state stream instead (config state_decimation), which is the
+    // only way to hold the physics-per-control-step ratio against a simulator
+    // that does not run in real time.
     double dt = config_ ? config_->control_dt : 0.02;
-    control_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(static_cast<int>(dt * 1000)),
-        [this]() { this->control_loop(); });
+    state_paced_ = config_ && config_->state_decimation > 0;
+    if (!state_paced_)
+    {
+        control_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(static_cast<int>(dt * 1000)),
+            [this]() { this->control_loop(); });
+    }
 
-    RCLCPP_INFO(this->get_logger(), "BaseNode ready: %d motors, dt=%.3f", n, dt);
+    RCLCPP_INFO(this->get_logger(), "BaseNode ready: %d motors, dt=%.3f, paced by %s", n, dt,
+                state_paced_ ? "the state stream" : "the wall clock");
 }
 
 // ── Control Loop ──────────────────────────────────────────────

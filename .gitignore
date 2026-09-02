@@ -1,1 +1,9 @@
 thirdparty/onnxruntime-linux-x64-*
+
+# Exported difftrack model directories: ~4 MB each (policy.onnx + motion.bin +
+# the golden trace), and regenerated in one command from the training run —
+#   python diffsimrl/code/scripts/export_to_drcl_cpp_control.py <run_dir> \
+#       --out models/tracker/difftrack --trace-steps 400
+# Tripling the repo to carry them is not worth it; delete this line if you would
+# rather the artifacts travelled with the branch.
+models/tracker/difftrack/

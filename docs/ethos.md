@@ -66,6 +66,7 @@ graph TD
 | 0 | `BaseNode` | control-mode FSM (zeroing / damping / nominal / stand / policy), joystick, timer loop |
 | 1 | `G1Node`, `MiniPiNode` | joint config, message backends, gamepad, robot-level stand engine |
 | 1.5 | `G1TextopTrackerNode` | motion streaming + WBC obs, shared by trackers that ride the topic wire |
+| 2 | `G1DiffTrackNode` | diffsimrl tracking policies — [docs/trackers/difftrack.md](trackers/difftrack.md) |
 | 2 | task nodes | obs building, inference, action mapping |
 
 ## control modes
@@ -91,6 +92,7 @@ semantics (sonic tracker, textop) simply don't set it.
 | `g1/sonic_stand.{hpp,cpp}` | robot-level stand kernel over a base-SONIC export |
 | `deploy_manifest` + `onnx_session` | manifest-driven serving — [docs/onnx_policies.md](onnx_policies.md) |
 | `obs_terms.hpp` | `HistoryTerm` (mjlab CircularBuffer semantics) |
+| `g1/difftrack_obs.{hpp,cpp}` | diffsimrl tracking observation + clip anchor — [docs/trackers/difftrack.md](trackers/difftrack.md) |
 | `math_utils.hpp` | wxyz quat algebra, projected gravity, 6D rotations, frame math |
 
 ## codebase structure

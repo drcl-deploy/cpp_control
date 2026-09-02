@@ -32,6 +32,11 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
 publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
 
+# G1 difftrack tracker (diffsimrl ADD/AMP tracking policy)
+ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk
+./build/cpp_control/difftrack_selftest .../models/tracker/difftrack/g1_walk
+bash scripts/run_difftrack_sim2sim.sh -d 30 g1_walk    # unattended sim2sim
+
 # G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
 ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
 ros2 launch cpp_control g1_vibe_sonic.launch.py \
@@ -61,6 +66,7 @@ export and `RB/R1` runs an actively-balancing SONIC stand
 | [docs/onnx_policies.md](docs/onnx_policies.md) | the two ONNX serving stacks (legacy vs manifest) and when to use which |
 | [docs/motion.md](docs/motion.md) | `g1::Motion` — the one reference-motion class |
 | [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
+| [docs/trackers/difftrack.md](docs/trackers/difftrack.md) | diffsimrl tracking policies: export, world-state requirement, entry, sim2sim |
 
 ## acknowledgements
 
@@ -69,3 +75,6 @@ this package deploys policies trained with, and stands on the ideas of:
 - [beyondmimic](https://github.com/HybridRobotics/motion_tracking_controller) — motion tracking controller
 - [textop-tracker](https://github.com/TeleHuman/Textop) — text-conditioned whole-body tracking
 - [SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) — whole-body control
+- diffsimrl — differentiable-simulator motion tracking (ADD/AMP); the difftrack
+  task deploys its exports, and its observation builder is ported from the same
+  policies' deployment in `crl-humanoid-ros`

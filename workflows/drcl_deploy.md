@@ -47,6 +47,12 @@ uv venv venv --python 3.10 --system-site-packages --prompt drcl
 source /opt/ros/humble/setup.bash && source venv/bin/activate
 ```
 
+### without root, or beside another ROS distro
+
+If ROS 2 Humble from apt is not an option (no root, or the machine already has a
+different distro), [conda_env/](conda_env/README.md) builds the same toolchain
+into a conda environment and documents every workaround it needs.
+
 ## usage 
 * in terminal1, spawn simulation 
 ```

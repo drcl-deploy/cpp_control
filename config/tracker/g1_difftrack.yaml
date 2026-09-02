@@ -1,0 +1,93 @@
+# G1 difftrack tracker (diffsimrl ADD/AMP policies) — node/plumbing config only.
+#
+# Gains, default pose, action scale, joint order, the observation layout and the
+# reference clip all come from the export's difftrack_config.json (the
+# checkpoint is the authority, not this file). The kps/kds/default_angles below
+# are pre-load fallbacks for the zeroing/nominal modes and are overwritten at
+# startup with the trained values.
+
+control_dt: 0.02   # must equal the export's control_dt (asserted at startup)
+
+# Tick the control loop off the state stream, not the wall clock: one control
+# step every 10 state messages. mj_sim publishes one message per 2 ms physics
+# step, so that is exactly the 20 ms of physics per control step the policy
+# trained with — and it stays exact however fast mj_sim's own loop runs
+# (measured 1.7x real time here, and it moves with machine load).
+#
+# On HARDWARE set this to (state publish rate x control_dt), or to 0 to go back
+# to the wall timer: there the plant really is real time.
+state_decimation: 10
+
+msg_type: "hg"
+imu_type: "pelvis"
+
+# drcl_deploy is the default because it is the only backend that carries a
+# world-frame base pose and twist (G1State.base_pose / base_twist), which these
+# policies need. Under "unitree" the node needs mocap_pose_topic instead.
+workflow: "drcl_deploy"
+
+lowcmd_topic: "/robot_command"
+lowstate_topic: "/robot_state"
+
+# The G1's MJCF joint order; equals the unitree_hg motor order and mj_sim's
+# command2actuator map. Resolved against the export's policy_joint_names BY
+# NAME at startup — an unplaceable name is fatal.
+joint_names: [
+  left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_joint,
+  left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_joint,
+  right_ankle_pitch_joint, right_ankle_roll_joint,
+  waist_yaw_joint, waist_roll_joint, waist_pitch_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+# HOLD gains: used for zeroing, damping, the nominal pose and the entry ramp —
+# every mode except the policy, which uses the checkpoint's own (much softer)
+# trained gains out of difftrack_config.json.
+#
+# They are separate on purpose. The trained gains (kp 14-99 on the shipped
+# export) are what the POLICY drives through, and a policy commanding targets
+# well away from the measured pose gets ample authority from them. A static PD
+# hold does not: holding a humanoid upright needs enough joint stiffness to pay
+# for the gravity torque about the ankle without deflecting past the point of no
+# return. Measured in mj_sim, ramping from the model's reset pose to the default
+# pose and holding, as (hip, knee, ankle, waist, arm) kp:
+#
+#   (100, 150,  40, 100, 40)  falls        <- the package's other g1 yamls
+#   (150, 200, 100, 150, 40)  falls
+#   (200, 300, 150, 200, 40)  falls
+#   (200, 300, 200, 200, 40)  falls
+#   (300, 400, 300, 300, 60)  holds        <- these values
+#
+# kd is kp/20. This is a measurement of THIS simulated plant from THIS starting
+# pose, not the robot's own tuning — check it against your hardware before using
+# the stand entry on a real robot.
+kps: [300.0, 300.0, 300.0, 400.0, 300.0, 300.0,
+      300.0, 300.0, 300.0, 400.0, 300.0, 300.0,
+      300.0, 300.0, 300.0,
+      60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0,
+      60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+
+kds: [15.0, 15.0, 15.0, 20.0, 15.0, 15.0,
+      15.0, 15.0, 15.0, 20.0, 15.0, 15.0,
+      15.0, 15.0, 15.0,
+      3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+      3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+
+# Overwritten at startup with the export's default pose (the posture the policy
+# expects to be handed).
+default_angles: [-0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 -0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,
+                 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+action_scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+num_actions: 29
