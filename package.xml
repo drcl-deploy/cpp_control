@@ -13,6 +13,7 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>vision_encoders</depend>  <!-- ImageTokens (adapt-sonic); build-orders after the msg pkg -->
 
   <!-- Optional: at least one required. CMake handles conditional builds. -->

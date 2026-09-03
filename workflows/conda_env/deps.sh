@@ -3,7 +3,7 @@
 #
 #   * ONNX Runtime 1.22, symlinked under cpp_control/thirdparty/ where the
 #     package's CMakeLists globs for it (readme step 2).
-#   * the `assets` package, which owns the MuJoCo scenes mj_sim loads, into the
+#   * the `assets` package (retired drcl_deploy plant; installed only if present) into the
 #     drclros env, and SIM_ASSETS_PATH pointing at its asset root.
 #
 # Re-running this is safe; it skips what is already unpacked.
@@ -37,14 +37,16 @@ fi
 mkdir -p "$PKG/thirdparty"
 ln -sfn "$ORT_DIR" "$PKG/thirdparty/onnxruntime-linux-x64-${ORT_VERSION}"
 
-# --- assets -----------------------------------------------------------------
-# mj_sim resolves cfg['sim']['model_path'] against $SIM_ASSETS_PATH, and dies
-# with a TypeError on None rather than a message if it is unset.
+# --- assets (retired drcl_deploy plant) --------------------------------------
+# `assets` owns the MuJoCo scenes mj_sim loads, and mj_sim resolves
+# cfg['sim']['model_path'] against $SIM_ASSETS_PATH. Both belong to the
+# drcl_deploy workspace this package no longer lives in, so this is INFORMATIONAL
+# now, not a requirement: the unitree plant brings its own model
+# (unitree_mujoco/unitree_robots/g1) and scripts/make_sim2sim_scene.py
+# --flavor unitree needs nothing but the `mujoco` python package.
 if [ -d "$WS/src/assets" ]; then
   pip install --quiet -e "$WS/src/assets"
-else
-  echo "  note: $WS/src/assets not cloned -- mj_sim will have no scenes."
-  echo "        git clone https://github.com/drcl-deploy/assets $WS/src/assets"
+  echo "  note: drcl_deploy assets found and installed."
 fi
 
 # ---------------------------------------------------------------------------
@@ -56,10 +58,17 @@ for f in "$PKG/thirdparty/onnxruntime-linux-x64-${ORT_VERSION}/include/onnxrunti
   if [ -e "$f" ]; then printf '  ok    %s\n' "${f#$PKG/}"
   else printf '  FAIL  %s\n' "${f#$PKG/}"; fail=1; fi
 done
-if python -c 'import assets' 2>/dev/null; then
-  printf '  ok    %-24s %s\n' "assets" "$(python -c 'from assets.paths import asset_path; print(asset_path("g1", "scene_flat.xml"))' 2>/dev/null || echo installed)"
+# mujoco: scripts/make_sim2sim_scene.py --flavor unitree builds the sim2sim
+# scene through MjSpec. This one IS required -- without it there is no scene and
+# the sim2sim runner stops before it starts anything.
+if python -c 'import mujoco' 2>/dev/null; then
+  printf '  ok    %-24s %s\n' "mujoco" "$(python -c 'import mujoco; print(mujoco.__version__)')"
 else
-  printf '  FAIL  %-24s not importable\n' assets; fail=1
+  printf '  FAIL  %-24s not importable  ->  pip install mujoco\n' mujoco; fail=1
+fi
+# assets belongs to the retired drcl_deploy plant: reported, never required.
+if python -c 'import assets' 2>/dev/null; then
+  printf '  ok    %-24s %s\n' "assets (drcl, optional)" "installed"
 fi
 
 echo
@@ -67,4 +76,5 @@ if [ "$fail" -ne 0 ]; then
   echo "DEPS INCOMPLETE -- see the failures above."
   exit 1
 fi
-echo "DEPS OK -- next: bash build.sh --packages-up-to cpp_control"
+echo "DEPS OK -- next: bash build.sh --packages-select unitree_go unitree_hg unitree_api"
+echo "                 bash build.sh --packages-select cpp_control"

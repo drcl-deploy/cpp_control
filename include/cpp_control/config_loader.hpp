@@ -30,6 +30,29 @@ struct Config
     std::string imu_type = "pelvis";
     std::string workflow = "unitree";  // "unitree" or "drcl_deploy"
 
+    // Where the UNITREE backend gets a world-frame base pose and twist, which
+    // LowState alone cannot supply (an IMU has no position and no heading).
+    //
+    //   "none"           (default) it does not. Tasks that need world state —
+    //                    the difftrack tracker — must be given a mocap source,
+    //                    and refuse to engage without one. This is hardware.
+    //
+    //   "sportmode_imu"  assemble it from SportModeState (position, world
+    //                    linear velocity) plus LowState's IMU quaternion and
+    //                    gyro. Named for what it READS, because what those
+    //                    fields mean depends entirely on who is publishing:
+    //
+    //                      * under unitree_mujoco they are MuJoCo's `frame_pos`
+    //                        / `frame_vel` / `imu_quat` / `imu_gyro` sensors on
+    //                        the pelvis site, i.e. ground truth, and this is
+    //                        exactly the state mj_sim puts in G1State.
+    //                      * on the ROBOT they are not. SportModeState is not
+    //                        published at all once the built-in motion service
+    //                        is off; when it is on, its position is legged
+    //                        odometry and drifts, and the IMU's yaw drifts with
+    //                        it. Do not set this on hardware — use mocap.
+    std::string unitree_world_state = "none";
+
     // Topics
     std::string lowcmd_topic = "/lowcmd";
     std::string lowstate_topic = "/lowstate";

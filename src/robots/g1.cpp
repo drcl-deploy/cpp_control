@@ -1,5 +1,7 @@
 #include "cpp_control/robots/g1.hpp"
 
+#include "common/math_utils.hpp"
+
 #include <cstring>
 
 namespace cpp_control
@@ -131,6 +133,43 @@ void G1Node::init_unitree()
         sportmode_topic, 10,
         [this](unitree_go::msg::SportModeState::SharedPtr msg) { this->subscribe_sport_mode_state(msg); });
     RCLCPP_INFO(this->get_logger(), "Subscribing to SportModeState: %s", sportmode_topic.c_str());
+
+    // The yaml is the default; a launch line can override it. That exists for
+    // exactly one job: turning this OFF when a Level 2 task has its own
+    // world-pose source (an onboard estimator on `odom_topic`, mocap). Two
+    // sources writing robot_state_.base_* interleave into a base state that is
+    // neither of them, and nothing downstream can tell — both look like a pose.
+    // `-E estimator` in run_difftrack_sim2sim.sh passes `none` here.
+    std::string world_state = config_ ? config_->unitree_world_state : std::string("none");
+    const std::string world_state_param =
+        this->declare_parameter("unitree_world_state", std::string());
+    if (!world_state_param.empty())
+    {
+        if (world_state_param != "none" && world_state_param != "sportmode_imu")
+            throw std::runtime_error(
+                "unitree_world_state must be \"none\" or \"sportmode_imu\", got \"" +
+                world_state_param + "\"");
+        if (world_state_param != world_state)
+            RCLCPP_INFO(this->get_logger(),
+                        "unitree_world_state: yaml says '%s', launch line says '%s' — using '%s'",
+                        world_state.c_str(), world_state_param.c_str(),
+                        world_state_param.c_str());
+        world_state = world_state_param;
+    }
+
+    world_state_from_sportmode_ = (world_state == "sportmode_imu");
+    if (world_state_from_sportmode_)
+    {
+        // Loud, and at WARN, because the one way this option is dangerous is
+        // silently: on the robot the same two messages carry drifting odometry
+        // and a drifting yaw, and a world-frame policy would act on them
+        // without anything looking wrong.
+        RCLCPP_WARN(this->get_logger(),
+                    "unitree_world_state=sportmode_imu: the world base pose and twist come "
+                    "from SportModeState (position, linear velocity) + the IMU (orientation, "
+                    "angular velocity). Ground truth under unitree_mujoco; ODOMETRY THAT "
+                    "DRIFTS on the robot. Simulation only — hardware needs mocap.");
+    }
 }
 
 void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
@@ -154,6 +193,27 @@ void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
         robot_state_.joint_torques[i] = msg->motor_state[i].tau_est;
     }
     robot_state_.tick = msg->tick;
+    note_state_received();
+
+    // The orientation half of the world base state. LowState's quaternion is
+    // the pelvis attitude in the world frame, and under unitree_mujoco it is
+    // MuJoCo's `imu_quat` sensor on a site coincident with the pelvis origin,
+    // so it is that body's world orientation exactly.
+    //
+    // The gyro is NOT: `imu_gyro` is body-local, like every gyroscope. Rotating
+    // it into the world is the same correction mj_sim's G1State already carries
+    // (frameangvel, not the free joint's qvel[3:6]) and the same one whose
+    // absence cost a 4x tracking-duration regression in diffsimrl's own
+    // sim2mujoco path. Copying it raw would be wrong in exactly the way that is
+    // invisible while the robot stands upright.
+    if (world_state_from_sportmode_)
+    {
+        robot_state_.base_quat_w = robot_state_.imu_quaternion;
+        robot_state_.base_ang_vel_w =
+            math::quat_rotate(robot_state_.imu_quaternion, robot_state_.imu_gyroscope);
+        have_imu_world_ = true;
+        update_unitree_world_state_valid();
+    }
 
     // Gamepad (mode switching + let Level 2 read velocities)
     handle_gamepad(*msg);
@@ -163,8 +223,35 @@ void G1Node::subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedP
 {
     // Mirror OG textop deployment: position zeroed, velocity from odom.
     // robot_state_.base_lin_vel_w stores world-frame velocity.
-    robot_state_.base_pos_w = {msg->position[0], msg->position[1], msg->position[2]};
-    robot_state_.base_lin_vel_w = {msg->velocity[0], msg->velocity[1], msg->velocity[2]};
+    //
+    // NOT when a Level 2 task owns the world pose. This write is unconditional
+    // on unitree_world_state — the two fields predate that flag and other tasks
+    // read them as plain odometry — and under unitree_mujoco what it writes is
+    // the simulator's GROUND TRUTH. A task running on an onboard estimator
+    // would then have ground-truth position landing on top of its estimate at
+    // 500 Hz, and would measure a transfer that does not exist on a robot.
+    if (!world_pose_owned_externally_)
+    {
+        robot_state_.base_pos_w = {msg->position[0], msg->position[1], msg->position[2]};
+        robot_state_.base_lin_vel_w = {msg->velocity[0], msg->velocity[1], msg->velocity[2]};
+    }
+
+    if (world_state_from_sportmode_)
+    {
+        have_sportmode_ = true;
+        update_unitree_world_state_valid();
+    }
+}
+
+void G1Node::update_unitree_world_state_valid()
+{
+    if (robot_state_.base_state_valid || !have_imu_world_ || !have_sportmode_)
+        return;
+    robot_state_.base_state_valid = true;
+    RCLCPP_INFO(this->get_logger(),
+                "world base state complete: pelvis at [%+.3f %+.3f %+.3f] m",
+                robot_state_.base_pos_w[0], robot_state_.base_pos_w[1],
+                robot_state_.base_pos_w[2]);
 }
 
 void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
@@ -264,6 +351,7 @@ void G1Node::subscribe_g1_state(messages::msg::G1State::SharedPtr msg)
         robot_state_.joint_velocities[i] = msg->motor_state[i].dq;
         robot_state_.joint_torques[i] = msg->motor_state[i].tauest;
     }
+    note_state_received();
 
     // World-frame base pose and twist. In mj_sim these are the pelvis
     // framepos/framequat/framelinvel/frameangvel sensors, i.e. ground truth,

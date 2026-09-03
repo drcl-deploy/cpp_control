@@ -1,0 +1,148 @@
+diff --git a/simulate/src/main.cc b/simulate/src/main.cc
+index db38cb2..0aae9b5 100755
+--- a/simulate/src/main.cc
++++ b/simulate/src/main.cc
+@@ -572,7 +572,21 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
+ 
+ void *UnitreeSdk2BridgeThread(void *arg)
+ {
+-  // Wait for mujoco data
++  // Wait for mujoco data.
++  //
++  // LOCAL PATCH (cpp_control): 500000 -> 1000 us.
++  //
++  // The physics thread sets `d` and immediately starts stepping, so every
++  // microsecond spent here is the robot integrating with ctrl all-zero -- no
++  // controller can have commanded anything yet, because the DDS bridge below
++  // this loop is what publishes the state it would react to. At a 500 ms poll
++  // that window measured 716 ms of simulated time on a G1, and a humanoid does
++  // not survive it: cpp_control's difftrack sim2sim finds a sharp cliff at
++  // ~350 ms, below which the standing hold recovers with zero torque
++  // saturation and above which it is on the floor before the first command
++  // lands. 1 ms brings the window to ~200 ms.
++  //
++  // Nothing else changes: same order, same condition, same everything after.
+   while (true)
+   {
+     if (d)
+@@ -580,10 +594,13 @@ void *UnitreeSdk2BridgeThread(void *arg)
+       std::cout << "Mujoco data is prepared" << std::endl;
+       break;
+     }
+-    usleep(500000);
++    usleep(1000);
+   }
+ 
+-  unitree::robot::ChannelFactory::Instance()->Init(param::config.domain_id, param::config.interface);
++  // LOCAL PATCH (cpp_control): moved to main(), before the physics thread is
++  // started. Creating the DDS participant needs neither `m` nor `d`, and doing
++  // it here put it INSIDE the window in which the robot is already being
++  // integrated with no controller. See the note on the poll above.
+ 
+ 
+   int body_id = mj_name2id(m, mjOBJ_BODY, "torso_link");
+@@ -692,8 +709,46 @@ int main(int argc, char **argv)
+     std::make_unique<mj::GlfwAdapter>(),
+     &cam, &opt, &pert, /* is_passive = */ false);
+ 
++  // LOCAL PATCH (cpp_control): DDS up before ANY physics runs.
++  //
++  // Everything between the first physics step and the first LowCmd is the robot
++  // integrating limp, and it is not a small window -- the difftrack sim2sim
++  // measures a hard cliff at ~350 ms, past which a standing G1 is on the floor
++  // before a controller can touch it. Participant creation is the expensive
++  // half and depends on nothing MuJoCo owns, so it belongs here rather than in
++  // the bridge thread. Combined with the 1 ms poll above this takes the window
++  // from 716 ms to well inside the budget.
++  unitree::robot::ChannelFactory::Instance()->Init(param::config.domain_id,
++                                                  param::config.interface);
++
+   std::thread unitree_thread(UnitreeSdk2BridgeThread, nullptr);
+ 
++  // LOCAL PATCH (cpp_control): --wait-for-cmd.
++  //
++  // Shrinking the limp window is not the same as closing it, and for a humanoid
++  // the difference matters: measured here, a G1 standing in its reset pose has
++  // its hips 0.33 rad out of place after a third of a second of zero torque,
++  // and a controller handed THAT cannot recover it however good its gains are.
++  // So when asked, do not integrate at all until somebody is commanding. The UI
++  // comes up, the robot is drawn at its reset pose, and the clock starts on the
++  // first LowCmd -- which is what makes a sim2sim number a measurement of a
++  // policy rather than of a startup race.
++  //
++  // Opt-in. Without the flag nothing changes: a simulator started on its own,
++  // or driven from a joystick, runs exactly as before.
++  if (param::config.wait_for_cmd)
++  {
++    sim->run = 0;
++    std::thread([&sim]() {
++      while (!param::lowcmd_received.load())
++      {
++        std::this_thread::sleep_for(std::chrono::milliseconds(1));
++      }
++      std::cout << "First LowCmd received; starting physics" << std::endl;
++      sim->run = 1;
++    }).detach();
++  }
++
+   // start physics thread
+   std::thread physicsthreadhandle(&PhysicsThread, sim.get(), param::config.robot_scene.c_str());
+   // start simulation UI loop (blocking call)
+diff --git a/simulate/src/param.h b/simulate/src/param.h
+index f730e03..7af8221 100644
+--- a/simulate/src/param.h
++++ b/simulate/src/param.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <atomic>
+ #include <iostream>
+ #include <boost/program_options.hpp>
+ #include <yaml-cpp/yaml.h>
+@@ -9,6 +10,10 @@
+ namespace param
+ {
+ 
++// LOCAL PATCH (cpp_control): set by the bridge the first time a LowCmd has been
++// received. With --wait-for-cmd, the physics does not advance until then.
++inline std::atomic<bool> lowcmd_received{false};
++
+ constexpr int IDL_AUTO = -1;
+ constexpr int IDL_GO = 0;
+ constexpr int IDL_HG = 1;
+@@ -61,6 +66,11 @@ inline struct SimulationConfig
+     int enable_elastic_band;
+     int band_attached_link = 0;
+ 
++    // LOCAL PATCH (cpp_control): hold the simulation at its reset state until a
++    // controller has actually commanded something. Off by default -- upstream
++    // behaviour is unchanged and a simulator started on its own still runs.
++    bool wait_for_cmd = false;
++
+     void load_from_yaml(const std::string &filename)
+     {
+         auto cfg = YAML::LoadFile(filename);
+@@ -103,6 +113,8 @@ inline po::variables_map helper(int argc, char** argv)
+         ("robot,r", po::value<std::string>(&config.robot), "Robot type; -r go2")
+         ("scene,s", po::value<std::filesystem::path>(&config.robot_scene), "Robot scene file; -s scene_terrain.xml")
+         ("idl_type,t", po::value<int>(&config.idl_type), "DDS IDL type: -1 auto, 0 unitree_go, 1 unitree_hg")
++        ("wait-for-cmd,c", po::bool_switch(&config.wait_for_cmd),
++         "hold the physics at the reset state until the first LowCmd arrives")
+     ;
+ 
+     po::variables_map vm;
+diff --git a/simulate/src/unitree_sdk2_bridge.h b/simulate/src/unitree_sdk2_bridge.h
+index 7c13289..82f12c0 100644
+--- a/simulate/src/unitree_sdk2_bridge.h
++++ b/simulate/src/unitree_sdk2_bridge.h
+@@ -174,6 +174,10 @@ public:
+     virtual void run()
+     {
+         if(!mj_data_) return;
++        // LOCAL PATCH (cpp_control): tell the physics thread a controller is
++        // actually commanding. isTimeout() is false only once a LowCmd has
++        // been received, so this cannot be faked by an all-zero first message.
++        if(!lowcmd->isTimeout()) { param::lowcmd_received = true; }
+         if(lowstate->joystick) { lowstate->joystick->update(); }
+         // lowcmd
+         {

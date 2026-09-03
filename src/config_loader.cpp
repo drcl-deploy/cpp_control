@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 Config::Config(const std::string& config_path)
 {
@@ -29,6 +30,16 @@ Config::Config(const std::string& config_path)
         if (config["workflow"])
         {
             workflow = config["workflow"].as<std::string>();
+        }
+        if (config["unitree_world_state"])
+        {
+            unitree_world_state = config["unitree_world_state"].as<std::string>();
+            if (unitree_world_state != "none" && unitree_world_state != "sportmode_imu")
+            {
+                throw std::runtime_error(
+                    "unitree_world_state must be \"none\" or \"sportmode_imu\", got \"" +
+                    unitree_world_state + "\"");
+            }
         }
 
         // Topics

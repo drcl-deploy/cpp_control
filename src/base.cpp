@@ -63,6 +63,26 @@ void BaseNode::init()
 
 void BaseNode::control_loop()
 {
+    // Nothing to say until the robot has said something. See note_state_received().
+    // Cheap and unconditional: under state pacing this is already true by
+    // construction, and on hardware the first LowState arrives long before
+    // anyone presses anything.
+    if (!state_received_)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "waiting for the first state message before commanding "
+                             "anything (no plant yet?)");
+        return;
+    }
+
+    // First tick with a real robot behind it, and before anything is published.
+    // See on_first_state().
+    if (!first_state_handled_)
+    {
+        first_state_handled_ = true;
+        on_first_state();
+    }
+
     RobotCommand cmd;
     switch (control_mode_)
     {

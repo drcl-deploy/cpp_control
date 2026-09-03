@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Build the drcl_deploy workspace in the drclros conda env.
+# Build unitree_ros2/cyclonedds_ws in the drclros conda env.
 # Run under bash: zsh does not word-split unquoted variables, which silently
 # folds every cmake flag into CMAKE_BUILD_TYPE.
 #
-#   bash workflows/conda_env/build.sh --packages-up-to cpp_control
+#   bash workflows/conda_env/build.sh --packages-select unitree_go unitree_hg unitree_api
+#   bash workflows/conda_env/build.sh --packages-select cpp_control
 #
 # CMP0094=NEW: several packages declare cmake_minimum_required(VERSION 3.8),
 # which leaves FindPython on the pre-3.15 VERSION lookup strategy -- it then
@@ -43,10 +44,12 @@ if [ "$preflight_fail" -ne 0 ]; then
 fi
 
 # colcon puts a dependency's install prefix on the path only if the package
-# DECLARES the dependency, and cpp_control deliberately leaves `messages` and
-# `unitree_hg` out of its package.xml (CMake picks whichever is present at
+# DECLARES the dependency, and cpp_control deliberately leaves `unitree_hg` and
+# `messages` out of its package.xml (CMake picks whichever is present at
 # configure time). Without help it then configures with neither backend and
-# stops at "At least one of unitree_hg or messages is required".
+# stops at "At least one of unitree_hg or messages is required" -- and it does
+# so even now that unitree_hg is a sibling in this very workspace, because the
+# undeclared dependency is the reason, not the distance.
 #
 # So add every sibling install prefix explicitly. That is the targeted version
 # of the workflow doc's `source install/setup.sh` step, and it keeps this script
@@ -58,6 +61,18 @@ for _d in "$WS"/install/*/; do
   [ -d "$_d/share" ] || continue
   CMAKE_PREFIX_PATH="${_d%/}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 done
+
+# unitree_hg is what compiles the LowState/LowCmd backend in -- the message path
+# the robot actually speaks. Say whether it is there, because
+# "Requested workflow backend not compiled" at startup is the only other place
+# this gets noticed, and by then you are in front of a robot.
+if [ -d "$WS/install/unitree_hg" ]; then
+  echo "unitree backend: unitree_hg from $WS/install"
+else
+  echo "unitree backend: NOT available -- build the message packages first:"
+  echo "                   bash $HERE/build.sh --packages-select unitree_go unitree_hg unitree_api"
+  echo "                 without them cpp_control configures with no backend and stops."
+fi
 export CMAKE_PREFIX_PATH
 
 cd "$WS"

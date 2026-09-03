@@ -12,7 +12,8 @@ control_dt: 0.02   # must equal the export's control_dt (asserted at startup)
 # step every 10 state messages. mj_sim publishes one message per 2 ms physics
 # step, so that is exactly the 20 ms of physics per control step the policy
 # trained with — and it stays exact however fast mj_sim's own loop runs
-# (measured 1.7x real time here, and it moves with machine load).
+# (scripts/run_mj_sim.py paces to 1x; upstream mj_sim free-runs at 1.4x-1.8x,
+# and this decimation is what makes the policy's physics identical either way).
 #
 # On HARDWARE set this to (state publish rate x control_dt), or to 0 to go back
 # to the wall timer: there the plant really is real time.

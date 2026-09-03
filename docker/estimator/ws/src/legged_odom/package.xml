@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>legged_odom</name>
+  <version>0.1.0</version>
+  <description>
+    Onboard base-state estimation for the G1: unitree_hg LowState in,
+    nav_msgs/Odometry out. Glue around legged_control2's contact-aided Kalman
+    filter and generalized-momentum observer; a passive listener that never
+    commands the robot.
+  </description>
+  <maintainer email="dyuman2001@gmail.com">Dyuman Aditya</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>eigen</depend>
+  <depend>rclcpp</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>unitree_hg</depend>
+  <depend>legged_model</depend>
+  <depend>legged_estimation</depend>
+
+  <exec_depend>unitree_description</exec_depend>
+  <exec_depend>rmw_cyclonedds_cpp</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

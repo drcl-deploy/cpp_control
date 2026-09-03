@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 
 namespace cpp_control
@@ -30,6 +31,55 @@ double heading_yaw(const Eigen::Quaterniond& q)
 
 G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_name)
 {
+    // BEFORE init(), and that ordering is the whole reason this is not down
+    // with the other parameters: init() -> init_robot() is where G1Node builds
+    // the SONIC stand engine out of config_->stand_onnx_path, and a parameter
+    // declared after it would be read by nobody. A relative name is joined
+    // against models_dir (the launch file's view of the INSTALLED share/models),
+    // the same way motion:= is joined against models_root.
+    {
+        std::string stand_onnx = this->declare_parameter("stand_onnx_path", std::string());
+        const std::string models_dir = this->declare_parameter("models_dir", std::string());
+        if (!stand_onnx.empty() && stand_onnx[0] != '/')
+        {
+            if (models_dir.empty())
+                throw std::runtime_error(
+                    "difftrack: stand_onnx_path '" + stand_onnx +
+                    "' is relative and no models_dir was given to resolve it against. "
+                    "Pass an absolute path, or launch through g1_difftrack.launch.py.");
+            stand_onnx = (std::filesystem::path(models_dir) / stand_onnx).string();
+        }
+        if (!stand_onnx.empty())
+        {
+            if (!std::filesystem::is_regular_file(stand_onnx))
+                throw std::runtime_error(
+                    "difftrack: no SONIC stand export at " + stand_onnx +
+                    "\n  stand_onnx_path names the policy that holds the robot between "
+                    "clips; leave it empty for the nominal-pose hold instead.");
+            // A git-lfs POINTER is a 130-byte text file that exists, is
+            // readable, and is not a model. Handed to ONNX Runtime it comes
+            // back as "Protobuf parsing failed", which reads as a corrupt
+            // export rather than as `git lfs pull` never having run — and every
+            // .onnx under models/ is LFS-tracked (.gitattributes).
+            {
+                std::ifstream probe(stand_onnx);
+                std::string first;
+                std::getline(probe, first);
+                if (first.rfind("version https://git-lfs", 0) == 0)
+                    throw std::runtime_error(
+                        "difftrack: " + stand_onnx +
+                        " is a git-lfs POINTER, not a model — the weights were never "
+                        "fetched.\n  Install git-lfs and run `git lfs pull` in this "
+                        "package, or leave stand_onnx_path empty to use the "
+                        "nominal-pose hold.");
+            }
+            if (!config_)
+                throw std::runtime_error(
+                    "difftrack: stand_onnx_path needs a config_path to attach to");
+            config_->stand_onnx_path = stand_onnx;
+        }
+    }
+
     // Level 0+1 first: the vtable is ready and joint_names_/kps_/... come from
     // the yaml here, so the export can overwrite them below.
     init();
@@ -64,6 +114,9 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
     entry_ramp_ = this->declare_parameter("entry_ramp", entry_ramp_);
     lead_in_duration_ = this->declare_parameter("lead_in_duration", lead_in_duration_);
     play_duration_ = this->declare_parameter("play_duration", play_duration_);
+    exit_ramp_ = this->declare_parameter("exit_ramp", exit_ramp_);
+    exit_hold_ = this->declare_parameter("exit_hold", exit_hold_);
+    start_in_stand_ = this->declare_parameter("start_in_stand", start_in_stand_);
     anchor_motion_to_robot_ =
         this->declare_parameter("anchor_motion_to_robot", anchor_motion_to_robot_);
     anchor_yaw_to_robot_ = this->declare_parameter("anchor_yaw_to_robot", anchor_yaw_to_robot_);
@@ -148,6 +201,8 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
 
     joint_target_ = cfg.defaultAngles;
     entry_from_ = cfg.defaultAngles;
+    exit_from_ = cfg.defaultAngles;
+    default_policy_pose_ = cfg.defaultAngles;
     obs_.assign(static_cast<size_t>(cfg.numObs), 0.0f);
 
     // ── how long to track ──
@@ -170,14 +225,109 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
     }
 
     // ── optional world-state source for hardware ──
+    //
+    // Declared unconditionally so a launch file can pass them whether or not
+    // optitrack_msgs was on the build's prefix path; asking for OptiTrack from a
+    // binary that has no OptiTrack in it is fatal rather than ignored, because
+    // "the pose topic is silently doing nothing" is exactly the failure that
+    // ends with the node refusing to engage and nobody knowing why.
     const std::string mocap_topic = this->declare_parameter("mocap_pose_topic", std::string());
-    if (!mocap_topic.empty())
+    const std::string optitrack_topic = this->declare_parameter("optitrack_topic", std::string());
+    const int optitrack_id = this->declare_parameter("optitrack_rigid_body_id", 1);
+    const std::vector<double> optitrack_off =
+        this->declare_parameter("optitrack_offset", std::vector<double>{0.0, 0.0, 0.0});
+    const std::string odom_topic = this->declare_parameter("odom_topic", std::string());
+    const std::string odom_twist_frame =
+        this->declare_parameter("odom_twist_frame", std::string("child"));
+
+    {
+        int sources = (!mocap_topic.empty()) + (!optitrack_topic.empty()) + (!odom_topic.empty());
+        if (sources > 1)
+            throw std::runtime_error(
+                "difftrack: set exactly one of mocap_pose_topic, optitrack_topic and odom_topic "
+                "— two world-pose sources would interleave into one base state, and the result "
+                "looks like a plausible pose rather than an error");
+    }
+
+    if (!odom_topic.empty())
+    {
+        // "child" is REP-105 and is what docker/estimator publishes; "world"
+        // is for a publisher that has already rotated the twist. Rejected
+        // rather than defaulted, because a wrong answer here is a pose that
+        // tracks correctly until the robot turns.
+        if (odom_twist_frame == "child")
+            odom_twist_in_child_ = true;
+        else if (odom_twist_frame == "world")
+            odom_twist_in_child_ = false;
+        else
+            throw std::runtime_error("difftrack: odom_twist_frame must be \"child\" (REP-105, "
+                                     "the body frame) or \"world\", got \"" +
+                                     odom_twist_frame + "\"");
+
+        // SensorDataQoS to match the estimator, which publishes best-effort at
+        // the state rate. A RELIABLE subscription would simply never match it,
+        // which is indistinguishable from the estimator not running.
+        odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            odom_topic, rclcpp::SensorDataQoS(),
+            [this](nav_msgs::msg::Odometry::SharedPtr msg) { this->on_odom(msg); });
+        world_pose_external_ = true;
+        // Stop the unitree backend writing base_pos_w / base_lin_vel_w from
+        // SportModeState underneath us — see G1Node::claim_world_pose().
+        claim_world_pose();
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack world state: Odometry on %s, twist read as %s-frame",
+                    odom_topic.c_str(), odom_twist_frame.c_str());
+        RCLCPP_WARN(this->get_logger(),
+                    "difftrack world state: an ONBOARD estimator has no absolute position "
+                    "reference — x, y and heading are dead reckoning and DRIFT. Height and tilt "
+                    "are observable. This is fine for a short anchored clip and is not fine as a "
+                    "world pose; see docs/trackers/difftrack_state_estimation.md.");
+    }
+    else if (!mocap_topic.empty())
     {
         mocap_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
             mocap_topic, 10,
             [this](geometry_msgs::msg::PoseStamped::SharedPtr msg) { this->on_mocap_pose(msg); });
-        RCLCPP_INFO(this->get_logger(), "difftrack world state: mocap on %s",
+        world_pose_external_ = true;
+        // Stop the unitree backend writing base_pos_w / base_lin_vel_w from
+        // SportModeState underneath us — see G1Node::claim_world_pose().
+        claim_world_pose();
+        RCLCPP_INFO(this->get_logger(), "difftrack world state: PoseStamped on %s",
                     mocap_topic.c_str());
+    }
+    else if (!optitrack_topic.empty())
+    {
+#ifdef HAS_OPTITRACK
+        if (optitrack_off.size() != 3)
+            throw std::runtime_error("difftrack: optitrack_offset needs exactly 3 values");
+        optitrack_body_id_ = optitrack_id;
+        optitrack_offset_ = Eigen::Vector3d(optitrack_off[0], optitrack_off[1], optitrack_off[2]);
+
+        // SensorDataQoS: the adaptor publishes best-effort, and a RELIABLE
+        // subscription simply never matches it — which looks identical to the
+        // adaptor not running.
+        optitrack_sub_ = this->create_subscription<optitrack_msgs::msg::MocapFrameData>(
+            optitrack_topic, rclcpp::SensorDataQoS(),
+            [this](optitrack_msgs::msg::MocapFrameData::SharedPtr msg)
+            { this->on_optitrack_frame(msg); });
+        world_pose_external_ = true;
+        // Stop the unitree backend writing base_pos_w / base_lin_vel_w from
+        // SportModeState underneath us — see G1Node::claim_world_pose().
+        claim_world_pose();
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack world state: OptiTrack on %s, rigid body id %d, offset "
+                    "[%+.3f %+.3f %+.3f]",
+                    optitrack_topic.c_str(), optitrack_body_id_, optitrack_offset_.x(),
+                    optitrack_offset_.y(), optitrack_offset_.z());
+#else
+        (void)optitrack_id;
+        (void)optitrack_off;
+        throw std::runtime_error(
+            "difftrack: optitrack_topic was set but this binary was built WITHOUT "
+            "optitrack_msgs. Build the message package into this workspace and rebuild "
+            "cpp_control — see docs/trackers/difftrack_running.md. Or republish the pose as "
+            "geometry_msgs/PoseStamped and use mocap_pose_topic instead.");
+#endif
     }
 
     const std::string play_desc =
@@ -185,6 +335,14 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
             ? std::string("until a button is pressed")
             : std::to_string(play_steps_) + " steps (" +
                   std::to_string(play_steps_ * cfg.controlDt) + "s)";
+    std::string exit_desc;
+    if (exit_hold_ > 0.0)
+        exit_desc += "reference frozen for " + std::to_string(exit_hold_) +
+                     "s (the policy takes the speed off), then ";
+    exit_desc += exit_ramp_ > 0.0
+                     ? "gains fade to the hold gains over " + std::to_string(exit_ramp_) +
+                           "s, then the rest state"
+                     : std::string("straight to the rest state (no gain ramp)");
     RCLCPP_INFO(this->get_logger(),
                 "difftrack loaded %s\n"
                 "  run          %s%s%s\n"
@@ -193,7 +351,9 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                 "  gains        policy kp %.0f-%.0f kd %.1f-%.1f | hold kp %.0f-%.0f\n"
                 "  entry        %s (ramp %.1fs, lead-in %.2fs)\n"
                 "  anchor       %s%s, observation in %s frame\n"
-                "  play         %s",
+                "  play         %s\n"
+                "  rest state   %s%s\n"
+                "  exit         %s",
                 model_dir_.c_str(), cfg.sourceRun.c_str(),
                 cfg.variant.empty() ? "" : "  variant=", cfg.variant.c_str(),
                 cfg.motionFile.c_str(), cfg.clipSteps, cfg.motionLengthS,
@@ -207,7 +367,26 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                 anchor_motion_to_robot_ ? "clip moved onto the robot" : "clip at its recorded pose",
                 anchor_motion_to_robot_ && anchor_yaw_to_robot_ ? " (yaw + position)" : "",
                 observe_in_reference_frame_ ? "the clip's" : "the world",
-                play_desc.c_str());
+                play_desc.c_str(),
+                has_stand() ? "SONIC stand policy (ControlMode::STAND)"
+                            : "nominal-pose hold at the yaml's hold gains",
+                start_in_stand_ ? ", entered on the first state message"
+                                : " (press X, or R1 for the stand engine)",
+                exit_desc.c_str());
+
+    if (auto_engage_ && start_in_stand_)
+    {
+        // Both want to own the boot mode, and auto_engage wins because it is
+        // the one with a measurement behind it: every number in
+        // docs/trackers/difftrack_running.md was taken with its ramp, from the
+        // pose the constructor sees. Warn rather than throw — a sweep script
+        // that sets both should still run.
+        start_in_stand_ = false;
+        RCLCPP_WARN(this->get_logger(),
+                    "start_in_stand is ignored under auto_engage: auto_engage already "
+                    "drives the FSM from boot (X, then A). Drop auto_engage for the "
+                    "operator-driven stand cycle.");
+    }
 
     if (auto_engage_)
     {
@@ -262,11 +441,67 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
 
 void G1DiffTrackNode::on_mocap_pose(geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
+    // The publisher's own stamp, because a PoseStamped has one and it is closer
+    // to when the pose was true than our receive time is.
     const rclcpp::Time stamp(msg->header.stamp);
     const Eigen::Vector3d pos(msg->pose.position.x, msg->pose.position.y,
                               msg->pose.position.z);
     Eigen::Quaterniond quat(msg->pose.orientation.w, msg->pose.orientation.x,
                             msg->pose.orientation.y, msg->pose.orientation.z);
+    ingest_world_pose(pos, quat, stamp);
+}
+
+#ifdef HAS_OPTITRACK
+void G1DiffTrackNode::on_optitrack_frame(optitrack_msgs::msg::MocapFrameData::SharedPtr msg)
+{
+    // A frame arrived; whether OUR rigid body is in it is a separate question,
+    // and the two failures need separate messages. "The adaptor is not running"
+    // and "the robot's markers are occluded or the id is wrong" are diagnosed in
+    // completely different places.
+    for (const auto& rb : msg->rigidbodies)
+    {
+        if (rb.id != optitrack_body_id_)
+            continue;
+
+        Eigen::Quaterniond quat(rb.qw, rb.qx, rb.qy, rb.qz);
+        quat.normalize();
+        // The offset is what has to be added to the RIGID BODY's origin to land
+        // on the pelvis frame, so it is expressed in the body's own frame and
+        // rotates with it. (crl-humanoid-ros's MocapNode adds it in the world
+        // frame instead; that is only equivalent while the robot's orientation
+        // is the identity, which for a walking humanoid it never is.) A marker
+        // cluster taped to the back of the pelvis is exactly this case.
+        const Eigen::Vector3d pos =
+            Eigen::Vector3d(rb.x, rb.y, rb.z) + quat * optitrack_offset_;
+
+        if (!optitrack_body_seen_)
+        {
+            optitrack_body_seen_ = true;
+            RCLCPP_INFO(this->get_logger(),
+                        "difftrack: first OptiTrack frame for rigid body %d at "
+                        "[%+.3f %+.3f %+.3f] m",
+                        optitrack_body_id_, pos.x(), pos.y(), pos.z());
+        }
+
+        // MocapFrameData carries no per-body stamp — only whole-frame camera
+        // timestamps on a clock that is not ours — so the receive time is the
+        // honest one, and it is what crl-humanoid-ros's MocapNode uses too.
+        ingest_world_pose(pos, quat, this->get_clock()->now());
+        return;
+    }
+
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "difftrack: OptiTrack frame carries %zu rigid bodies, none with id "
+                         "%d. The base pose is NOT being updated.",
+                         msg->rigidbodies.size(), optitrack_body_id_);
+}
+#endif
+
+void G1DiffTrackNode::ingest_world_pose(const Eigen::Vector3d& pos,
+                                        const Eigen::Quaterniond& quat_in,
+                                        const rclcpp::Time& stamp)
+{
+    Eigen::Quaterniond quat = quat_in;
     quat.normalize();
 
     if (mocap_have_prev_)
@@ -313,6 +548,54 @@ void G1DiffTrackNode::on_mocap_pose(geometry_msgs::msg::PoseStamped::SharedPtr m
     mocap_last_rx_ = this->get_clock()->now();
 }
 
+void G1DiffTrackNode::on_odom(nav_msgs::msg::Odometry::SharedPtr msg)
+{
+    // An estimator hands over a FILTERED twist, so this does not go through
+    // ingest_world_pose(): differencing the pose here would throw away the
+    // better of the two velocities and add a frame of lag doing it.
+    Eigen::Quaterniond quat(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x,
+                            msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
+    if (quat.norm() < 1e-6)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "difftrack: odometry carries a zero quaternion — ignoring");
+        return;
+    }
+    quat.normalize();
+
+    Eigen::Vector3d lin(msg->twist.twist.linear.x, msg->twist.twist.linear.y,
+                        msg->twist.twist.linear.z);
+    Eigen::Vector3d ang(msg->twist.twist.angular.x, msg->twist.twist.angular.y,
+                        msg->twist.twist.angular.z);
+
+    // The observation is world-frame throughout, so a child-frame twist has to
+    // be rotated. Both halves, and by the same rotation: the angular half is
+    // the one that stays silent when it is wrong, because a body-frame and a
+    // world-frame angular velocity agree exactly while the robot is upright and
+    // facing along +x — which is every static test.
+    if (odom_twist_in_child_)
+    {
+        lin = quat * lin;
+        ang = quat * ang;
+    }
+
+    robot_state_.base_pos_w = {static_cast<float>(msg->pose.pose.position.x),
+                               static_cast<float>(msg->pose.pose.position.y),
+                               static_cast<float>(msg->pose.pose.position.z)};
+    robot_state_.base_quat_w = {static_cast<float>(quat.w()), static_cast<float>(quat.x()),
+                                static_cast<float>(quat.y()), static_cast<float>(quat.z())};
+    for (int i = 0; i < 3; ++i)
+    {
+        robot_state_.base_lin_vel_w[i] = static_cast<float>(lin[i]);
+        robot_state_.base_ang_vel_w[i] = static_cast<float>(ang[i]);
+    }
+    robot_state_.base_state_valid = true;
+
+    // Same staleness clock as the mocap sources: receive time, so a stalled
+    // estimator that keeps its last message queued cannot pass for a live one.
+    mocap_last_rx_ = this->get_clock()->now();
+}
+
 bool G1DiffTrackNode::read_state(DiffTrackState& state)
 {
     if (!robot_state_.base_state_valid)
@@ -323,14 +606,22 @@ bool G1DiffTrackNode::read_state(DiffTrackState& state)
     // indistinguishable from a stationary robot right up until the policy acts
     // on it. The backend-supplied state (mj_sim, the drcl interface) arrives on
     // the same message that drives the control loop, so it cannot go stale
-    // without the loop stopping too — only the separately-published mocap can.
-    if (mocap_sub_ && mocap_timeout_ > 0.0)
+    // without the loop stopping too — only a separately-published world pose
+    // can: the two mocap sources, and the onboard estimator's /odom.
+    //
+    // "Has one ever arrived" is asked of base_state_valid rather than of
+    // mocap_have_prev_, which is the finite-difference path's private state and
+    // is set only by ingest_world_pose(). on_odom() does not go through there —
+    // an Odometry carries its own twist — so gating on mocap_have_prev_ would
+    // refuse every odom-driven run forever, with a message about mocap.
+    if (world_pose_external_ && mocap_timeout_ > 0.0)
     {
         const double age = (this->get_clock()->now() - mocap_last_rx_).seconds();
-        if (!mocap_have_prev_ || age > mocap_timeout_)
+        if (!robot_state_.base_state_valid || age > mocap_timeout_)
         {
             RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                  "difftrack: mocap is %.2fs stale (timeout %.2fs)",
+                                  "difftrack: the world pose is %.2fs stale (timeout %.2fs) — mocap or the "
+                                  "onboard estimator has stopped publishing",
                                   age, mocap_timeout_);
             return false;
         }
@@ -366,8 +657,9 @@ bool G1DiffTrackNode::read_state(DiffTrackState& state)
 // ══════════════════════════════════════════════════════════════
 
 RobotCommand G1DiffTrackNode::command_from_target(const Eigen::VectorXd& target_policy,
-                                                  bool policy_gains) const
+                                                  double gain_blend) const
 {
+    const double b = std::max(0.0, std::min(1.0, gain_blend));
     const auto& cfg = builder_.config();
     RobotCommand cmd;
     cmd.motor_commands.resize(num_motors());
@@ -384,10 +676,13 @@ RobotCommand G1DiffTrackNode::command_from_target(const Eigen::VectorXd& target_
     {
         const int m = policy_to_motor_[p];
         cmd.motor_commands[m].q = static_cast<float>(target_policy[p]);
-        cmd.motor_commands[m].kp = policy_gains ? static_cast<float>(cfg.jointStiffness[p])
-                                                : kps_[m];
-        cmd.motor_commands[m].kd = policy_gains ? static_cast<float>(cfg.jointDamping[p])
-                                                : kds_[m];
+        // Linear in the gain itself. The two tables differ by up to 20x on the
+        // legs, so the interpolation is what keeps the exit from being a torque
+        // step at an unchanged position error.
+        cmd.motor_commands[m].kp = static_cast<float>(
+            (1.0 - b) * kps_[m] + b * cfg.jointStiffness[p]);
+        cmd.motor_commands[m].kd = static_cast<float>(
+            (1.0 - b) * kds_[m] + b * cfg.jointDamping[p]);
     }
     return cmd;
 }
@@ -396,9 +691,9 @@ RobotCommand G1DiffTrackNode::hold_target() const
 {
     // The last target, held with the gains that produced it. Switching gains
     // under an unchanged target would move the robot for no commanded reason,
-    // so FINISHED keeps the policy's gains too — it is holding the policy's own
-    // last target, one tick before the mode changes.
-    return command_from_target(joint_target_, phase_ != Phase::ENTRY);
+    // so this tracks `gain_blend_` — 1 while the policy is driving, walked down
+    // by the exit ramp, 0 once the rest state has it.
+    return command_from_target(joint_target_, gain_blend_);
 }
 
 RobotCommand G1DiffTrackNode::hold_measured() const
@@ -410,7 +705,7 @@ RobotCommand G1DiffTrackNode::hold_measured() const
     Eigen::VectorXd here(cfg.numActions);
     for (int p = 0; p < cfg.numActions; ++p)
         here[p] = robot_state_.joint_positions[policy_to_motor_[p]];
-    return command_from_target(here, false);
+    return command_from_target(here, 0.0);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -423,6 +718,8 @@ void G1DiffTrackNode::engage_reset()
     episode_step_ = 0;
     lead_in_steps_ = 0;
     entry_t_ = 0.0;
+    exit_t_ = 0.0;
+    settle_t_ = 0.0;
     err_sum_ = 0.0;
     err_max_ = 0.0;
     min_height_ = 1e9;
@@ -441,9 +738,14 @@ void G1DiffTrackNode::engage_reset()
         RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                               "difftrack cannot engage: no world base state. These "
                               "policies observe absolute position, heading and world "
-                              "velocity — an IMU is not enough. In sim that is "
-                              "G1State.base_pose/base_twist (workflow: drcl_deploy); "
-                              "on hardware set mocap_pose_topic.");
+                              "velocity — an IMU is not enough. Sources, in the order "
+                              "you are likely to have one: odom_topic (an onboard "
+                              "estimator — docker/estimator publishes /odom, and needs "
+                              "no cameras); optitrack_topic (the lab's OptiTrack "
+                              "adaptor); mocap_pose_topic (any PoseStamped source); or "
+                              "the simulator's own ground truth, which is "
+                              "unitree_world_state: sportmode_imu under unitree_mujoco "
+                              "and G1State.base_pose/base_twist under drcl_deploy.");
         pending_engage_ = true;
         return;
     }
@@ -557,7 +859,7 @@ RobotCommand G1DiffTrackNode::entry_control()
         episode_step_ = 0;
         RCLCPP_INFO(this->get_logger(), "difftrack entry complete -> tracking");
     }
-    return command_from_target(joint_target_, false);
+    return command_from_target(joint_target_, 0.0);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -582,30 +884,159 @@ void G1DiffTrackNode::finish(const char* why)
 
     if (fell_)
     {
+        // No ramp: the robot is already down, and the only useful thing left is
+        // to stop driving it into the floor. gain_blend_ is deliberately left
+        // where it is — the one tick between here and DAMPING holds the last
+        // target with the gains that produced it, rather than stiffening a
+        // fallen robot for a single frame on the way to going limp.
+        phase_ = Phase::FINISHED;
         control_mode_ = ControlMode::DAMPING;
         RCLCPP_WARN(this->get_logger(), "difftrack: damping — the robot is down");
     }
-    else if (has_stand())
+    else if (exit_hold_ > 0.0 && !exit_when_finished_)
     {
-        engage_stand();
-        RCLCPP_INFO(this->get_logger(), "difftrack: handed back to the SONIC stand");
+        // FREEZE THE REFERENCE and keep the policy driving: with the clock
+        // stopped every lookahead instant is the same frame, so what the policy
+        // is asked for is "be at this pose, here, and stay there".
+        //
+        // OFF BY DEFAULT, because measured it makes things WORSE, and the
+        // number is worth carrying: on unitree_mujoco, freezing g1_walk at the
+        // end of an 8 s budget (0.86 m/s, single support) put the robot on the
+        // floor 1.6 s into the freeze, where the same run without it stayed up
+        // through the handover and fell later. Speed over the freeze went 0.86
+        // -> 1.31 -> 0.86 -> 1.11 m/s: it does not brake, it flails.
+        //
+        // That is the same finding buildLeadIn() records from the OTHER end —
+        // "the policies have no standing behaviour, so parking them in front of
+        // a slow reference topples the robot in about a second". A tracking
+        // policy asked to stand still on a mid-stride single-support frame is
+        // outside everything it saw. Stopping a walking humanoid needs a
+        // controller that can STEP, which is what `stand_onnx_path` is for.
+        phase_ = Phase::SETTLE;
+        settle_t_ = 0.0;
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack: clip over, freezing the reference for %.2fs to take the "
+                    "speed off before the rest state takes it", exit_hold_);
+    }
+    else if (exit_ramp_ > 0.0 && !exit_when_finished_)
+    {
+        // Stay in POLICY for the ramp — control_mode_ is what decides whether
+        // policy_control() is called at all, and exit_control() lives inside it.
+        //
+        // ALSO OFF BY DEFAULT, and for the same reason the freeze is: every
+        // tick of it is a tick spent NOT balancing. Measured on unitree_mujoco
+        // with the SONIC stand as the rest state, g1_walk, 8 s budget:
+        //
+        //   exit_hold 1.0, exit_ramp 0.5   the stand gets the robot 1.5 s and
+        //                                  0.92 m/s late — on the floor
+        //   exit_hold 0,   exit_ramp 0     standing at 0.785 m ten seconds
+        //                                  later, twice in a row
+        //
+        // A gain ramp is the right idea for a PASSIVE rest state receiving a
+        // robot that is already still. It is the wrong idea for handing a
+        // MOVING robot to something that can catch it, and the stand engine
+        // brings its own gains (out of its manifest) so there is no jump to
+        // ramp away in the first place.
+        phase_ = Phase::EXIT;
+        exit_t_ = 0.0;
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack: clip over, fading the gains to the hold gains over "
+                    "%.2fs before the rest state takes it", exit_ramp_);
     }
     else
     {
-        // No stand engine configured. The tracking policy has no standing
-        // behaviour of its own, so hold the nominal pose: on its feet that keeps
-        // it up, and it is the posture the operator can take over from.
-        control_mode_ = ControlMode::NOMINAL_POSE;
-        alpha_ = 0.0f;
-        for (int m = 0; m < num_motors(); ++m)
-            pre_nominal_pos_[m] = robot_state_.joint_positions[m];
-        RCLCPP_INFO(this->get_logger(), "difftrack: handed back to the nominal pose");
+        enter_rest("clip over");
     }
+
     if (exit_when_finished_)
     {
+        // Unattended measurement: the SUMMARY is already out, so there is
+        // nothing for a ramp to be gentle about. Keeping this ahead of the ramp
+        // is also what makes a measured run bit-identical to what it was before
+        // the rest state existed.
         RCLCPP_INFO(this->get_logger(), "exit_when_finished: shutting down");
         rclcpp::shutdown();
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  The rest state
+// ══════════════════════════════════════════════════════════════
+
+void G1DiffTrackNode::enter_rest(const char* why)
+{
+    phase_ = Phase::FINISHED;
+    gain_blend_ = 0.0;
+
+    if (has_stand())
+    {
+        // An actively balancing policy, heading-aligned to the robot at engage.
+        // engage_stand() sets ControlMode::STAND itself.
+        engage_stand();
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack: %s -> REST on the SONIC stand policy. `A` runs the "
+                    "clip again.", why);
+        return;
+    }
+
+    // No stand engine configured: hold the nominal pose at the yaml's hold
+    // gains. Passive, but it is the configuration the hold-gain table in the
+    // yaml was measured on, and the tracking policy has no standing behaviour
+    // of its own to fall back on.
+    //
+    // Ramped from where the robot IS, not from where it was when the node
+    // started: after a clip the robot is nowhere near its boot pose, and
+    // nominal_pose_control() interpolates from pre_nominal_pos_.
+    control_mode_ = ControlMode::NOMINAL_POSE;
+    alpha_ = 0.0f;
+    for (int m = 0; m < num_motors(); ++m)
+        pre_nominal_pos_[m] = robot_state_.joint_positions[m];
+    RCLCPP_INFO(this->get_logger(),
+                "difftrack: %s -> REST on the nominal-pose hold (%.1fs ramp). `A` runs "
+                "the clip again.", why, settle_time_);
+}
+
+void G1DiffTrackNode::on_first_state()
+{
+    if (!start_in_stand_)
+        return;
+    // The first command this node publishes is this one. Before the hook
+    // existed the only options were a constructor (robot_state_ all zeros, so
+    // the ramp starts from a robot-shaped hole) or a timer (up to a tick of
+    // ZEROING — limp — reaching the robot first).
+    RCLCPP_INFO(this->get_logger(),
+                "start_in_stand: entering the rest state from the robot's measured "
+                "pose, before the first command goes out.");
+    enter_rest("start_in_stand");
+}
+
+RobotCommand G1DiffTrackNode::exit_control()
+{
+    const auto& cfg = builder_.config();
+    if (exit_t_ == 0.0)
+        exit_from_ = joint_target_;   // the policy's last target, once
+    exit_t_ += cfg.controlDt;
+    const double t = exit_ramp_ > 0.0 ? std::min(1.0, exit_t_ / exit_ramp_) : 1.0;
+    // Smoothstep, as the entry ramp uses: zero slope at both ends, so neither
+    // the start of the fade nor its end steps the commanded torque.
+    const double a = t * t * (3.0 - 2.0 * t);
+    gain_blend_ = 1.0 - a;
+
+    // The mirror image of entry_control(): that ramps the joints from wherever
+    // the robot is ONTO the clip, this ramps them off the clip and back to the
+    // pose the rest state is going to ask for.
+    //
+    // Holding the policy's last target instead — which is what this used to do
+    // — leaves the robot frozen mid-stride in single support while the gains
+    // change hands underneath it, and a clip does not end anywhere a humanoid
+    // can stand. Ramping to the nominal pose at least puts the feet under the
+    // body while there is still authority to do it with.
+    joint_target_ = (1.0 - a) * exit_from_ + a * default_policy_pose_;
+
+    const RobotCommand cmd = command_from_target(joint_target_, gain_blend_);
+    if (t >= 1.0)
+        enter_rest("exit ramp complete");
+    return cmd;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -636,6 +1067,8 @@ RobotCommand G1DiffTrackNode::policy_control()
 
     if (phase_ == Phase::ENTRY)
         return entry_control();
+    if (phase_ == Phase::EXIT)
+        return exit_control();
     if (phase_ == Phase::FINISHED)
         return hold_target();
 
@@ -652,10 +1085,13 @@ RobotCommand G1DiffTrackNode::policy_control()
     // comparable with one that started on frame 0; a lead-in shows as negative.
     const int clip_step = episode_step_ - lead_in_steps_;
 
-    if (clip_step >= play_steps_)
+    if (clip_step >= play_steps_ && phase_ == Phase::TRACK)
     {
         finish("clip_over");
-        return hold_target();
+        // finish() may have moved to SETTLE, which keeps the policy driving on
+        // a frozen clock — fall through to the inference below in that case.
+        if (phase_ != Phase::SETTLE)
+            return hold_target();
     }
 
     // ── inference ──
@@ -689,7 +1125,7 @@ RobotCommand G1DiffTrackNode::policy_control()
     Eigen::VectorXd ref_dof;
     builder_.referencePose(episode_step_, anchor_, ref_pos, ref_quat, ref_dof);
     const double err = (s.rootPos - ref_pos).norm();
-    if (clip_step >= 0)
+    if (clip_step >= 0 && phase_ == Phase::TRACK)
     {
         err_sum_ += err;
         err_max_ = std::max(err_max_, err);
@@ -710,8 +1146,36 @@ RobotCommand G1DiffTrackNode::policy_control()
         return hold_target();
     }
 
-    episode_step_++;
-    return command_from_target(joint_target_, true);
+    if (phase_ == Phase::SETTLE)
+    {
+        // The clock does NOT advance here; that is the whole mechanism.
+        settle_t_ += cfg.controlDt;
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                             "difftrack settling: %.2f/%.2fs, %.2f m/s, height %.3f m",
+                             settle_t_, exit_hold_, s.rootLinVelWorld.head<2>().norm(),
+                             s.rootPos.z());
+        if (settle_t_ >= exit_hold_)
+        {
+            RCLCPP_INFO(this->get_logger(),
+                        "difftrack: settled at %.2f m/s; fading the gains to the hold "
+                        "gains over %.2fs", s.rootLinVelWorld.head<2>().norm(), exit_ramp_);
+            if (exit_ramp_ > 0.0)
+            {
+                phase_ = Phase::EXIT;
+                exit_t_ = 0.0;
+            }
+            else
+            {
+                enter_rest("settle complete");
+            }
+        }
+    }
+    else
+    {
+        episode_step_++;
+    }
+    gain_blend_ = 1.0;
+    return command_from_target(joint_target_, 1.0);
 }
 
 // ══════════════════════════════════════════════════════════════

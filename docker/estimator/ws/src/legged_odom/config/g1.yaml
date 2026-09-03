@@ -1,0 +1,78 @@
+# G1 onboard base-state estimator.
+#
+# The filter parameters are BeyondMimic's, from
+# motion_tracking_controller/config/g1/controllers.yaml — the same numbers that
+# project runs on this robot. Everything not listed there is legged_control2's
+# own default and is left alone deliberately: these are the values the closed
+# binary was tuned with, and there is no source to read to find out what a
+# different one does.
+
+legged_odom:
+  ros__parameters:
+    # ── Model ─────────────────────────────────────────────────────────────────
+    # main.urdf is the self-contained one: robot.xacro pulls in a RealSense and
+    # a ros2_control block that this node has no use for and that would drag
+    # realsense2_description into the image.
+    urdf_path: "/opt/ros/jazzy/share/unitree_description/urdf/g1/main.urdf"
+    base_name: "pelvis"
+
+    # Six-DoF because a G1 foot is a SOLE, not a point: it carries a moment, and
+    # the filter's ZMP-within-the-footprint test is what keeps a foot that is
+    # rolling onto its toe from being called a fixed contact point.
+    six_dof_contact_names: ["LL_FOOT", "LR_FOOT"]
+
+    # unitree_hg MOTOR ORDER — index i is what LowState.motor_state[i] reports.
+    # Resolved by name against the URDF at startup; an unplaceable name is fatal.
+    # Identical to the list in config/tracker/g1_difftrack*.yaml, and it has to
+    # stay identical.
+    joint_names:
+      [left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint,
+       left_knee_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+       right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint,
+       right_knee_joint, right_ankle_pitch_joint, right_ankle_roll_joint,
+       waist_yaw_joint, waist_roll_joint, waist_pitch_joint,
+       left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+       left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+       right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+       right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+    # ── I/O ───────────────────────────────────────────────────────────────────
+    lowstate_topic: "/lowstate"
+    odom_topic: "/odom"
+    odom_frame: "odom"
+
+    # One Odometry per LowState — 500 Hz on the robot and under unitree_mujoco.
+    # The control loop runs at 50 Hz and takes the freshest message, so this is
+    # about staleness, not about rate: raise it only if the DDS traffic is a
+    # problem, and never above 10 (a 50 Hz publish is already at the control
+    # period, which puts a whole control step of age on the newest sample).
+    publish_decimation: 1
+
+    # /tf is off. Nothing in this deployment consumes it, and a second publisher
+    # on /tf is a good way to fight whatever else in the lab thinks it owns the
+    # odom -> pelvis edge. Turn it on for rviz.
+    publish_tf: false
+
+    # The integration step comes from the MEASURED interval between LowState
+    # messages. nominal_dt is used for the first message only, and whenever the
+    # measured gap exceeds max_dt — a pause, a reconnect, a scheduling hiccup —
+    # because integrating the IMU over a gap the robot did not spend falling is
+    # how an estimator ends up metres away in one step.
+    nominal_dt: 0.002    # 500 Hz
+    max_dt: 0.05
+
+    # ── Filter ────────────────────────────────────────────────────────────────
+    estimation:
+      gm_cutoff_frequency: 10.0
+
+      position:
+        # BeyondMimic's G1 value. Only relevant with an external position
+        # source (LIDAR odometry) feeding updatePositionMeasurement, which this
+        # node does not wire up — there is no camera or LIDAR in this setup.
+        noise: 1.0e-2
+
+      # contact.*: left at legged_control2's defaults, which is what
+      # motion_tracking_controller runs. force_threshold is in NEWTONS on the
+      # momentum observer's estimated contact wrench, so it scales with the
+      # robot's weight — 150 N against a 35 kg G1 is roughly "this foot is
+      # carrying more than half the robot".

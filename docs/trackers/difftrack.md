@@ -115,21 +115,38 @@ gains        policy kp 14-99 kd 0.9-6.3 | hold kp 60-400
 
 ## control pacing
 
-`state_decimation: 10` in the task yaml ticks the control loop off the **state
-stream** rather than the wall clock: one control step every ten `G1State`
-messages.
+**What ships is `state_decimation: 0`.** `g1_difftrack_unitree.yaml` and
+`g1_difftrack_hw.yaml` both carry it: `unitree_mujoco`'s bridge publishes
+`LowState` from a wall-clock thread with no relationship to the physics thread,
+so decimating against it guarantees nothing, and on the robot the plant really
+is real time. The rest of this section is the **retired mj_sim** plant, where
+decimation was an exact physics-per-control-step guarantee — kept because it is
+what the reference numbers in
+[difftrack_running.md](difftrack_running.md) §2 were taken under.
 
-mj_sim does not run in real time — it steps as fast as its loop goes, measured
-~1.7x here, and that moves with machine load. A 50 Hz wall-clock controller then
+`state_decimation: 10` in the retired `g1_difftrack.yaml` ticks the control loop
+off the **state stream** rather than the wall clock: one control step every ten
+`G1State` messages.
+
+Upstream mj_sim does not run in real time — its loop is paced by an rclpy rate
+at 1000 Hz against a 2 ms (500 Hz) physics step, so it steps as fast as it can
+get to, measured 1.4x-1.8x here, and that moves with machine load.
+(`scripts/run_mj_sim.py` paces to the wall clock instead and reports the
+achieved factor; `--speed 0` restores the free-running behaviour.) A 50 Hz
+wall-clock controller against a free-running plant then
 hands the robot 40 ms of physics per 20 ms control step, i.e. the policy is
 asked to control a plant running 1.7x fast. Since mj_sim publishes exactly one
 state per 2 ms physics step, a decimation of 10 fixes the ratio at the 20 ms the
 policy trained with, whatever the wall clock is doing.
 
-On hardware set it to (state publish rate x control_dt), or to `0` to go back to
-the wall timer — there the plant really is real time.
+On a plant that publishes one state per physics step, set it to
+(state publish rate x control_dt); on `unitree_mujoco` and on hardware it is
+`0`, the wall timer.
 
 ## usage
+
+**Step-by-step, including hardware: [difftrack_running.md](difftrack_running.md).**
+This section is the summary.
 
 ```bash
 source workflows/conda_env/runenv.sh          # or your own ROS 2 humble env
@@ -138,16 +155,36 @@ source workflows/conda_env/runenv.sh          # or your own ROS 2 humble env
 ./build/cpp_control/difftrack_selftest \
     $(ros2 pkg prefix cpp_control)/share/cpp_control/models/tracker/difftrack/g1_walk
 
-# 2. sim2sim, unattended, one SUMMARY line per run
-bash scripts/run_difftrack_sim2sim.sh -d 30 g1_walk
+# 2. sim2sim — the script starts BOTH processes, in the order that keeps the
+#    robot standing, and the viewer camera follows the robot
+bash scripts/run_difftrack_sim2sim.sh -w -e stand g1_walk   # watch, until Ctrl-C
+bash scripts/run_difftrack_sim2sim.sh -d 30 -r 3 g1_walk    # measure
 
-# 3. by hand: sim in one terminal, controller in another
-ros2 run mj_sim main -- --cfgpath .../mj_sim/config/G1.yml    # press Y then space
-ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk
+# 3. by hand: CONTROLLER first, wait for `difftrack loaded`, THEN the simulator.
+#    The launch file has no viewer in it; a simulator with no controller is a
+#    limp robot on the floor.
+ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
+    entry:=pose auto_engage:=true play_duration:=-1.0
+SIM_ASSETS_PATH=/tmp/difftrack_scene \
+    python3 scripts/run_mj_sim.py --cfgpath /tmp/difftrack_scene/G1.yml
+
+# 4. hardware: different config, and a world pose that is not the robot's
+ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
+    config_path:=$(ros2 pkg prefix cpp_control)/share/cpp_control/config/tracker/g1_difftrack_hw.yaml \
+    optitrack_topic:=/optitrack_adaptor/mocap_frame optitrack_rigid_body_id:=1
 ```
 
 Buttons: `X` nominal pose (the policy's own default pose) → `A` track from clip
-frame 0 (`A` again restarts) · `B` zero · `Y` damp.
+frame 0 (`A` again restarts) · `B` zero · `Y` damp · `R1` the stand engine.
+
+**The rest state.** These policies have no standing behaviour, so the node keeps
+a resting controller either side of a clip: `start_in_stand` boots into it,
+`play_duration` ends the clip on a clock, and `A` runs it again. Which engine
+backs it is a config choice — `stand_onnx_path` gives the actively balancing
+SONIC stand, unset gives the nominal-pose PD hold — and it is the difference
+between the robot standing after a walk clip and the robot on the floor. The
+measurements are in
+[`difftrack_running.md` §2c](difftrack_running.md#2c-the-stand-cycle--the-session-an-operator-actually-runs).
 
 Launch arguments:
 
@@ -160,10 +197,18 @@ Launch arguments:
 | `anchor_motion_to_robot` | `true` | place the clip at the robot when tracking starts |
 | `anchor_yaw_to_robot` | `true` | also turn it onto the robot's heading (only safe with the next one) |
 | `observe_in_reference_frame` | `true` | build the observation in the clip's frame |
+| `start_in_stand` | `false` | enter the rest state on the first state message, so the first command holds the robot |
+| `stand_onnx_path` | `''` | SONIC stand export backing the rest state; relative names resolve under `models/` |
+| `exit_hold` | `0.0` | seconds with the reference frozen at the end of a clip — **measured harmful** |
+| `exit_ramp` | `0.0` | seconds fading the gains back to the hold gains at the end of a clip |
 | `play_duration` | `-1` | seconds; ≤0 is the whole clip, or forever if it loops |
 | `lead_in_duration` | `0.0` | ramp the reference from the robot's velocity onto the clip's |
 | `fall_height` | export's | root height below which the run is called a fall |
-| `mocap_pose_topic` | — | world state on hardware |
+| `optitrack_topic` | — | world state on hardware, straight off the lab adaptor (`optitrack_msgs/MocapFrameData`) |
+| `optitrack_rigid_body_id` | `1` | which rigid body in the frame is the pelvis |
+| `optitrack_offset` | `[0,0,0]` | added to the OptiTrack position, **in the rigid body's own frame** |
+| `mocap_pose_topic` | — | world state on hardware from any `geometry_msgs/PoseStamped` source instead |
+| `mocap_timeout` | `0.2` | seconds without a pose before the node refuses to run |
 | `auto_engage` | `false` | drive the FSM without a joystick — **simulation only** |
 
 ## entry: how to start a clip
@@ -283,9 +328,15 @@ src/tasks/tracker/g1_difftrack.cpp    level-2 node over G1Node
 config/tracker/g1_difftrack.yaml      plumbing + hold gains
 launch/g1_difftrack.launch.py
 tests/difftrack_selftest.cpp          parity against the golden trace
+config/tracker/g1_difftrack_hw.yaml    hardware: workflow=unitree, wall-clock loop
 scripts/make_sim2sim_scene.py         mj_sim scene with the robot on the GROUND
-scripts/run_difftrack_sim2sim.sh      unattended sim2sim
+scripts/run_difftrack_sim2sim.sh      sim2sim, measured and -w watched
+scripts/run_mj_sim.py                 mj_sim + a camera that follows the robot
 ```
+
+`optitrack_msgs` is found the same way and is what compiles the OptiTrack input
+in; without it the node still builds and `mocap_pose_topic` still works, but
+`optitrack_topic:=` raises at startup rather than quietly doing nothing.
 
 Eigen is found with `find_package(Eigen3 QUIET)` and only this task needs it —
 everything else in the package uses plain arrays and `common/math_utils.hpp`.

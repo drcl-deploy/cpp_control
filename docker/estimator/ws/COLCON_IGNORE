@@ -1,0 +1,10 @@
+legged_odom is built INSIDE the estimator container, against ROS 2 Jazzy and
+legged_control2's debs. This workspace is ROS 2 Humble and has neither, so a
+colcon run that found this package would fail on `find_package(legged_model)`.
+
+In practice colcon already stops at cpp_control/package.xml and never descends
+this far — package discovery treats a package as a leaf. This file says so on
+purpose rather than relying on that, because the day cpp_control stops being a
+package directory is the day the build breaks somewhere unrelated.
+
+Build it with:  bash docker/estimator/build.sh

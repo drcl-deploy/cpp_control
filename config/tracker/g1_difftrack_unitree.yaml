@@ -1,0 +1,179 @@
+# G1 difftrack tracker — UNITREE workflow, simulation (unitree_mujoco).
+#
+# The third config in this family, and the point of it is that it is the SAME
+# message path as the robot:
+#
+#   g1_difftrack.yaml          drcl_deploy + mj_sim   (messages/G1State)
+#   g1_difftrack_unitree.yaml  unitree + unitree_mujoco  (unitree_hg LowState)  <- this
+#   g1_difftrack_hw.yaml       unitree + the G1          (unitree_hg LowState)
+#
+# The drcl_deploy config is the reference measurement — every number in
+# docs/trackers/difftrack_running.md was taken with it. This one exercises the
+# path the ROBOT uses: unitree_hg LowCmd with its CRC and mode_machine, the
+# motor order the hg IDL fixes, /lowcmd and /lowstate over CycloneDDS. Anything
+# that is wrong in that half shows up here rather than on the robot.
+#
+# It differs from g1_difftrack_hw.yaml in exactly one line — the world-state
+# source — and that line is the one thing simulation can do and hardware cannot.
+#
+# Everything the policy defines still comes out of the export's
+# difftrack_config.json; the kps/kds/default_angles below are pre-load fallbacks
+# for the zeroing/nominal modes and are overwritten at startup.
+
+control_dt: 0.02   # must equal the export's control_dt (asserted at startup)
+
+# Wall clock, exactly as on hardware, and NOT the 10 that the mj_sim config
+# uses. The two simulators publish state on completely different clocks:
+#
+#   mj_sim          one /robot_state per physics step, from the physics loop.
+#                   Decimation there fixes the physics-per-control-step ratio
+#                   exactly, however fast the loop runs.
+#   unitree_mujoco  a bridge thread on its own 1 kHz WALL clock, independent of
+#                   the physics thread. 20 messages is 20 ms of wall time, not
+#                   20 ms of simulated time, so decimation guarantees nothing —
+#                   what makes the physics right here is the simulator running
+#                   at 1x, which MuJoCo's simulate UI does by default and
+#                   reports in its own panel.
+state_decimation: 0
+
+msg_type: "hg"
+imu_type: "pelvis"
+
+workflow: "unitree"
+
+# The world pose, which LowState cannot supply. Under unitree_mujoco the
+# SportModeState position/velocity are MuJoCo's `frame_pos` / `frame_vel`
+# sensors and the IMU quaternion is `imu_quat`, all on a site coincident with
+# the pelvis origin — ground truth, and the same state mj_sim puts in G1State.
+#
+# THIS LINE IS THE ONE THING THAT MUST NOT BE COPIED TO HARDWARE. On the robot
+# SportModeState is not published with the motion service off, and when it is on
+# its position is legged odometry and the IMU yaw drifts with it. g1_difftrack_hw.yaml
+# leaves this at "none" and takes mocap on the launch line instead.
+# Ground truth from the SIMULATOR (SportModeState position/velocity + IMU
+# attitude). Correct here and unreachable on a robot.
+#
+# It writes the same robot_state_.base_* fields the onboard estimator writes, so
+# the two must not both be on: with `odom_topic` set as well the base state
+# becomes whichever message arrived last, and nothing reports it. Override it
+# from the launch line when using the estimator —
+# `run_difftrack_sim2sim.sh -E estimator` passes `unitree_world_state:=none`.
+unitree_world_state: "sportmode_imu"
+
+lowcmd_topic: "/lowcmd"
+lowstate_topic: "/lowstate"
+
+# The G1's MJCF joint order; equals the unitree_hg motor order and mj_sim's
+# command2actuator map. Resolved against the export's policy_joint_names BY
+# NAME at startup — an unplaceable name is fatal.
+joint_names: [
+  left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_joint,
+  left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_joint,
+  right_ankle_pitch_joint, right_ankle_roll_joint,
+  waist_yaw_joint, waist_roll_joint, waist_pitch_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+# HOLD gains: used for zeroing, damping, the nominal pose and the entry ramp —
+# every mode except the policy, which uses the checkpoint's own (much softer)
+# trained gains out of difftrack_config.json.
+#
+# They are separate on purpose. The trained gains (kp 14-99 on the shipped
+# export) are what the POLICY drives through, and a policy commanding targets
+# well away from the measured pose gets ample authority from them. A static PD
+# hold does not: holding a humanoid upright needs enough joint stiffness to pay
+# for the gravity torque about the ankle without deflecting past the point of no
+# return. Measured in mj_sim, ramping from the model's reset pose to the default
+# pose and holding, as (hip, knee, ankle, waist, arm) kp:
+#
+#   (100, 150,  40, 100, 40)  falls        <- the package's other g1 yamls
+#   (150, 200, 100, 150, 40)  falls
+#   (200, 300, 150, 200, 40)  falls
+#   (200, 300, 200, 200, 40)  falls
+#   (300, 400, 300, 300, 60)  holds        <- these values
+#
+# kd is kp/20. This is a measurement of THIS simulated plant from THIS starting
+# pose, not the robot's own tuning — check it against your hardware before using
+# the stand entry on a real robot.
+kps: [300.0, 300.0, 300.0, 400.0, 300.0, 300.0,
+      300.0, 300.0, 300.0, 400.0, 300.0, 300.0,
+      300.0, 300.0, 300.0,
+      60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0,
+      60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+
+# kd = kp/40, NOT the kp/20 the other two configs use, and this is a measured
+# difference between the plants rather than a preference.
+#
+# Where the PD loop lives is the whole of it:
+#
+#   mj_sim           rewrites MuJoCo's actuator gainprm/biasprm, i.e. the PD is
+#                    a POSITION SERVO inside the solver, and MuJoCo integrates
+#                    its damping implicitly. kd/kp = 1/20 is fine there and
+#                    every documented number was taken with it.
+#   unitree_mujoco   computes tau = kp(q*-q) + kd(dq*-dq) on its own 1 kHz
+#                    thread and writes it into `ctrl`. That damping is EXPLICIT,
+#                    and it is not even synchronous with the physics: the
+#                    simulator steps in bursts to keep up with the wall clock,
+#                    so within a burst the damping term is held constant while
+#                    dq changes underneath it. THE ROBOT'S OWN MOTOR CONTROLLER
+#                    IS THE SECOND KIND, not the first.
+#
+# Measured on unitree_mujoco, ramping into the nominal pose from the model's
+# reset pose (probe: hold at the default pose, 8 s, 29 joints):
+#
+#   kd = kp/20   FELL. Twelve leg joints pinned at FULL torque with the sign
+#                flipping between samples, while the position errors were still
+#                ~0.06 rad -- an oscillating loop, not a balance failure.
+#   kd = kp/30   held, zero saturation
+#   kd = kp/40   held, zero saturation, tracking within 0.03 rad   <- these
+#   kd = kp/100  held, indistinguishable from kp/40
+#
+# The boundary is between /20 and /30; /40 is the margin. If you are taking the
+# hold gains to HARDWARE, this is the number to carry, not the mj_sim one: the
+# robot's motor controller applies the PD the way unitree_mujoco does.
+kds: [7.5, 7.5, 7.5, 10.0, 7.5, 7.5,
+      7.5, 7.5, 7.5, 10.0, 7.5, 7.5,
+      7.5, 7.5, 7.5,
+      1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5,
+      1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5]
+
+# Overwritten at startup with the export's default pose (the posture the policy
+# expects to be handed).
+default_angles: [-0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 -0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,
+                 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+action_scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+num_actions: 29
+
+# ── The rest state ────────────────────────────────────────────────────────────
+#
+# What holds the robot up between clips. These tracking policies have no
+# standing behaviour of their own, and every shipped clip is a walk that ENDS
+# mid-stride at about 1 m/s, so this is not decoration: with the nominal-pose PD
+# hold above as the rest state the robot is on the floor seconds after the clip;
+# with an actively balancing stand policy it is standing at 0.785 m ten seconds
+# later. Measured on unitree_mujoco, g1_walk. See
+# docs/trackers/difftrack_running.md section 2c.
+#
+# Set it on the LAUNCH LINE rather than here, because the path has to resolve
+# against the installed share/models and the launch file is what knows where
+# that is:
+#
+#     ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \\
+#         stand_onnx_path:=tracker/sonic/g1_sonic_base.onnx \\
+#         start_in_stand:=true play_duration:=10.0
+#
+# scripts/run_difftrack_sim2sim.sh -s does that for you, and falls back to the
+# nominal-pose hold with an explanation if the weights are not fetched (every
+# .onnx under models/ is git-lfs-tracked).

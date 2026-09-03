@@ -1,0 +1,288 @@
+diff --git a/simulate/src/main.cc b/simulate/src/main.cc
+index 0aae9b5..b346519 100755
+--- a/simulate/src/main.cc
++++ b/simulate/src/main.cc
+@@ -28,6 +28,9 @@
+ #include <new>
+ #include <string>
+ #include <thread>
++#include <atomic>
++#include <ctime>
++#include <vector>
+ 
+ #include <mujoco/mujoco.h>
+ #include "simulate.h"
+@@ -644,6 +647,218 @@ __attribute__((used, visibility("default"))) extern "C" void _mj_rosettaError(co
+ }
+ #endif
+ 
++// LOCAL PATCH (cpp_control): F9 video recording.
++//
++// unitree_mujoco's viewer is MuJoCo's stock `simulate`, which has no recorder --
++// the drcl plant's equivalent lives in cpp_control/scripts/frame_recorder.py,
++// and went with that plant. This is the same design in C++, and the same
++// reasoning: the scene is rendered a SECOND time into an offscreen buffer and
++// the raw RGB is piped to ffmpeg, rather than screen-grabbing the window.
++// Offscreen because the video resolution is then independent of the window
++// size, the capture is unaffected by occlusion or minimisation, and it does not
++// care what the compositor reports the drawable size to be (this rig runs
++// XWayland, where that goes wrong).
++//
++// WHAT IS IN THE VIDEO: the scene as the viewer is showing it. The camera and
++// the visualisation options are read from the live `sim->cam` / `sim->opt`
++// every frame, so the follow camera, an orbit with the mouse and a toggled
++// visualisation all show up. MuJoCo's on-screen UI panels are drawn straight to
++// the window and never reach here.
++//
++// THE CLOCK: frames are emitted on a schedule driven by SIMULATION time and the
++// last render is duplicated to fill a gap, so the file is a constant-rate
++// stream at `fps` whatever the loop does -- it plays back at 1x and pauses are
++// cut out. DRCL_RECORD_CLOCK=wall records what you watched instead.
++//
++// THREADING: the key callback runs on the UI thread, which owns the window's GL
++// context; this thread owns its own (a hidden window created on the main
++// thread, because GLFW requires window creation there). So F9 only sets an
++// atomic and every GL call stays on one thread. `mjv_updateScene` needs `m` and
++// `d` alive, so it runs under sim->mtx; the render and the readback do not, and
++// stay outside it.
++namespace rec {
++
++std::atomic_bool toggle_request{false};   // set by the UI thread on F9
++std::atomic_bool is_recording{false};
++
++std::string Env(const char* primary, const char* fallback, const char* dflt) {
++  if (const char* v = std::getenv(primary)) { if (*v) return v; }
++  if (const char* v = std::getenv(fallback)) { if (*v) return v; }
++  return dflt;
++}
++
++int EnvInt(const char* primary, const char* fallback, int dflt) {
++  try {
++    return std::stoi(Env(primary, fallback, std::to_string(dflt).c_str()));
++  } catch (...) {
++    return dflt;
++  }
++}
++
++std::string Stamp() {
++  std::time_t t = std::time(nullptr);
++  char buf[32];
++  std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", std::localtime(&t));
++  return std::string(buf);
++}
++
++void CaptureThread(mj::Simulate* sim, GLFWwindow* window) {
++  glfwMakeContextCurrent(window);
++
++  // Settings, read once. Same names frame_recorder.py reads, so a shell set up
++  // for the mj_sim recorder drives this one unchanged.
++  const std::string dir = Env("DRCL_RECORD_DIR", "CRL_RECORD_DIR", "recordings");
++  const std::string size = Env("DRCL_RECORD_SIZE", "CRL_RECORD_SIZE", "1280x720");
++  const std::string encoder = Env("DRCL_RECORD_ENCODER", "CRL_RECORD_ENCODER", "libx264");
++  const std::string ffmpeg = Env("DRCL_RECORD_FFMPEG", "CRL_RECORD_FFMPEG", "ffmpeg");
++  const std::string prefix = Env("DRCL_RECORD_PREFIX", "CRL_RECORD_PREFIX", "unitree_mujoco");
++  const bool sim_clock = Env("DRCL_RECORD_CLOCK", "CRL_RECORD_CLOCK", "sim") != std::string("wall");
++  const int fps = EnvInt("DRCL_RECORD_FPS", "CRL_RECORD_FPS", 30);
++  const int crf = EnvInt("DRCL_RECORD_CRF", "CRL_RECORD_CRF", 23);
++  int W = 1280, H = 720;
++  if (std::sscanf(size.c_str(), "%dx%d", &W, &H) != 2) { W = 1280; H = 720; }
++
++  mjvScene scn;
++  mjv_defaultScene(&scn);
++  mjrContext con;
++  mjr_defaultContext(&con);
++  const mjModel* built_for = nullptr;
++
++  // DRCL_RECORD_AUTOSTART=1 is F9 pressed for you on the first loaded model:
++  // it is what an unattended run needs (run_difftrack_sim2sim.sh -R), and it
++  // means a recording can be taken on a machine with no keyboard on the window.
++  bool autostart = Env("DRCL_RECORD_AUTOSTART", "CRL_RECORD_AUTOSTART", "0") == std::string("1");
++
++  std::vector<unsigned char> rgb;
++  FILE* pipe = nullptr;
++  std::string path;
++  double next_frame = 0.0;
++  const double frame_dt = 1.0 / fps;
++  auto wall0 = std::chrono::steady_clock::now();
++
++  auto stop = [&]() {
++    if (pipe) {
++      pclose(pipe);
++      pipe = nullptr;
++      std::printf("[record] stopped: %s\n", path.c_str());
++      std::fflush(stdout);
++    }
++    is_recording.store(false);
++  };
++
++  while (!sim->exitrequest.load()) {
++    std::this_thread::sleep_for(std::chrono::milliseconds(2));
++
++    // ---- act on F9 -----------------------------------------------------
++    if (toggle_request.exchange(false)) {
++      if (pipe) {
++        stop();
++      } else if (built_for) {
++        std::filesystem::create_directories(dir);
++        path = dir + "/" + prefix + "_" + Stamp() + ".mp4";
++        // -vf vflip: mjr_readPixels hands back rows bottom-up.
++        char cmd[2048];
++        std::snprintf(cmd, sizeof(cmd),
++                      "%s -y -loglevel error -f rawvideo -pix_fmt rgb24 "
++                      "-s %dx%d -r %d -i - -vf vflip -an -c:v %s -preset fast "
++                      "-crf %d -pix_fmt yuv420p '%s'",
++                      ffmpeg.c_str(), W, H, fps, encoder.c_str(), crf, path.c_str());
++        pipe = popen(cmd, "w");
++        if (!pipe) {
++          std::printf("[record] could not start '%s'\n", ffmpeg.c_str());
++        } else {
++          is_recording.store(true);
++          next_frame = 0.0;   // seeded from the first frame below
++          wall0 = std::chrono::steady_clock::now();
++          std::printf("[record] recording %dx%d@%d to %s\n", W, H, fps, path.c_str());
++        }
++        std::fflush(stdout);
++      } else {
++        std::printf("[record] no model loaded yet\n");
++        std::fflush(stdout);
++      }
++    }
++
++    // ---- snapshot the scene (needs m and d alive) -----------------------
++    double now = 0.0;
++    {
++      const mj::MutexLock lock(sim->mtx);
++      if (!m || !d) continue;
++      if (built_for != m) {
++        if (built_for) {
++          mjv_freeScene(&scn);
++          mjr_freeContext(&con);
++        }
++        mjv_defaultScene(&scn);
++        mjv_makeScene(m, &scn, 2000);
++        mjr_defaultContext(&con);
++        mjr_makeContext(m, &con, mjFONTSCALE_100);
++        built_for = m;
++        // The offscreen buffer is a MODEL property (visual/global offwidth,
++        // offheight, default 640x480). A viewport bigger than it is silently
++        // clipped, so clamp and say why rather than write a cropped video.
++        if (W > con.offWidth || H > con.offHeight) {
++          std::printf("[record] scene offscreen buffer is %dx%d; clamping the "
++                      "recording from %dx%d. Raise <visual><global offwidth= "
++                      "offheight=> in the scene for more.\n",
++                      con.offWidth, con.offHeight, W, H);
++          W = std::min(W, con.offWidth);
++          H = std::min(H, con.offHeight);
++        }
++        rgb.assign(static_cast<size_t>(3) * W * H, 0);
++        if (autostart) {
++          autostart = false;
++          toggle_request.store(true);
++        }
++      }
++      if (!pipe) continue;
++      mjv_updateScene(m, d, &sim->opt, nullptr, &sim->cam, mjCAT_ALL, &scn);
++      now = sim_clock ? d->time
++                      : std::chrono::duration<double>(
++                            std::chrono::steady_clock::now() - wall0).count();
++    }
++
++    // ---- how many frames does this render owe? -------------------------
++    if (next_frame == 0.0) next_frame = now;
++    int due = 0;
++    while (next_frame <= now && due < 4 * fps) {
++      due++;
++      next_frame += frame_dt;
++    }
++    if (due == 0) continue;
++
++    // ---- render offscreen and write ------------------------------------
++    const mjrRect viewport = {0, 0, W, H};
++    mjr_setBuffer(mjFB_OFFSCREEN, &con);
++    mjr_render(viewport, &scn, &con);
++    mjr_readPixels(rgb.data(), nullptr, viewport, &con);
++    for (int i = 0; i < due && pipe; i++) {
++      if (std::fwrite(rgb.data(), 1, rgb.size(), pipe) != rgb.size()) {
++        std::printf("[record] ffmpeg went away; stopping\n");
++        stop();
++      }
++    }
++  }
++
++  stop();
++  if (built_for) {
++    mjv_freeScene(&scn);
++    mjr_freeContext(&con);
++  }
++}
++
++}  // namespace rec
++
++// LOCAL PATCH (cpp_control): the key callback MuJoCo installed, so its own keys
++// keep working. glfwSetKeyCallback allows exactly ONE callback per window, and
++// the line at the bottom of main() replaced GlfwAdapter's -- which is the whole
++// of MuJoCo's keyboard UI. Everything documented for `simulate` (space to
++// pause, `[` / `]` to cycle cameras, Esc for the free camera, F1 help, Ctrl+P
++// screenshot, backspace reset) has therefore been dead in unitree_mujoco, and
++// silently: keys that do nothing look like keys you are pressing wrong.
++// Chaining restores all of it and costs nothing.
++static GLFWkeyfun prev_key_cb = nullptr;
++
+ // user keyboard callback
+ void user_key_cb(GLFWwindow* window, int key, int scancode, int act, int mods) {
+   if (act==GLFW_PRESS)
+@@ -661,6 +876,19 @@ void user_key_cb(GLFWwindow* window, int key, int scancode, int act, int mods) {
+       mj_resetData(m, d);
+       mj_forward(m, d);
+     }
++    // LOCAL PATCH (cpp_control): F9 starts/stops an mp4. Only an atomic is set
++    // here -- this is the UI thread, and the recorder owns a GL context and an
++    // ffmpeg pipe that belong to its own. F9 is free: MuJoCo's UI takes F1-F5.
++    if(key==GLFW_KEY_F9) {
++      rec::toggle_request.store(true);
++    }
++  }
++  // LOCAL PATCH (cpp_control): hand every key to MuJoCo's own handler, which
++  // this callback displaced. Unconditional and after ours, so a key we consume
++  // still reaches it -- none of the keys above (7/8/9, backspace, F9) is one
++  // simulate binds.
++  if (prev_key_cb) {
++    prev_key_cb(window, key, scancode, act, mods);
+   }
+ }
+ 
+@@ -751,9 +979,33 @@ int main(int argc, char **argv)
+ 
+   // start physics thread
+   std::thread physicsthreadhandle(&PhysicsThread, sim.get(), param::config.robot_scene.c_str());
++
++  // LOCAL PATCH (cpp_control): F9 recording.
++  //
++  // The recorder's GL context has to be a window, and GLFW requires windows to
++  // be created on the main thread -- so it is made here, hidden, and handed to
++  // the capture thread, which is where it is made current. Not shared with the
++  // visible window's context: the two are used concurrently from two threads,
++  // and an unshared context is the arrangement that makes that safe.
++  GLFWwindow* main_window =
++      static_cast<mj::GlfwAdapter*>(sim->platform_ui.get())->window_;
++  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
++  GLFWwindow* rec_window = glfwCreateWindow(64, 64, "recorder", nullptr, nullptr);
++  glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
++  std::thread recorderthreadhandle;
++  if (rec_window) {
++    recorderthreadhandle = std::thread(&rec::CaptureThread, sim.get(), rec_window);
++    std::printf("F9: start/stop video recording\n");
++  } else {
++    std::printf("could not create the recorder window; F9 recording disabled\n");
++  }
++
+   // start simulation UI loop (blocking call)
+-  glfwSetKeyCallback(static_cast<mj::GlfwAdapter*>(sim->platform_ui.get())->window_,user_key_cb);
++  prev_key_cb = glfwSetKeyCallback(main_window, user_key_cb);
+   sim->RenderLoop();
++  if (recorderthreadhandle.joinable()) {
++    recorderthreadhandle.join();
++  }
+   physicsthreadhandle.join();
+ 
+   pthread_exit(NULL);

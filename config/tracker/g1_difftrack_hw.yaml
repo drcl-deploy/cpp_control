@@ -1,0 +1,166 @@
+# G1 difftrack tracker — HARDWARE.
+#
+# The sibling of g1_difftrack.yaml, which is the SIMULATION config. Everything
+# the policy defines still comes out of the export's difftrack_config.json; the
+# only things that differ from sim are the two below, and both are wrong in the
+# other direction:
+#
+#   workflow: unitree      the robot speaks unitree_hg LowState/LowCmd. This
+#                          requires the unitree_hg package at BUILD time — the
+#                          node throws "Requested workflow backend not compiled"
+#                          otherwise, at startup, before it touches the robot.
+#
+#   state_decimation: 0    the control loop runs on the wall clock, because on
+#                          hardware the plant really is real time. The value of
+#                          10 in the sim config exists only because mj_sim runs
+#                          free-running at 1.4x-1.8x; using it here would tie the 50 Hz loop to
+#                          the robot's state rate and run the policy at the wrong
+#                          period.
+#
+# The world pose does NOT come from the robot under this workflow — LowState has
+# no world position and an IMU cannot supply one. Pass a source on the launch
+# line; there are two, and which one you have depends on the room.
+#
+# MOTION CAPTURE, if the lab has it:
+#
+#   ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
+#       config_path:=$(ros2 pkg prefix cpp_control)/share/cpp_control/config/tracker/g1_difftrack_hw.yaml \
+#       optitrack_topic:=/optitrack_adaptor/mocap_frame optitrack_rigid_body_id:=<id>
+#
+# ONBOARD STATE ESTIMATION, if it does not — legged_control2's contact-aided
+# Kalman filter over the robot's own IMU and encoders, in a container, which is
+# what docker/estimator builds:
+#
+#   bash docker/estimator/run.sh -i eth0            # publishes /odom
+#   ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
+#       config_path:=$(ros2 pkg prefix cpp_control)/share/cpp_control/config/tracker/g1_difftrack_hw.yaml \
+#       odom_topic:=/odom
+#
+# Nothing needs turning OFF here the way it does under the simulator config:
+# `unitree_world_state` is left at its default of "none", because the robot has
+# no ground truth to conflict with. Its x, y and heading DRIFT — see
+# docs/trackers/difftrack_state_estimation.md before relying on it, and run
+# `run_difftrack_sim2sim.sh -E compare` on your clip first.
+#
+# See docs/trackers/difftrack_running.md for the full bring-up order.
+
+control_dt: 0.02   # must equal the export's control_dt (asserted at startup)
+
+# Wall clock. On the robot the plant is real time, so the 50 Hz timer is
+# correct and pacing off the state stream would only couple the control period
+# to however fast LowState happens to arrive.
+state_decimation: 0
+
+msg_type: "hg"
+imu_type: "pelvis"
+
+# The robot. Needs unitree_hg at build time; check the configure output for
+#   "Found unitree_hg -- Unitree HG backend enabled"
+# before taking this near a robot, because the failure is at startup.
+workflow: "unitree"
+
+lowcmd_topic: "/lowcmd"
+lowstate_topic: "/lowstate"
+
+# The G1's MJCF joint order; equals the unitree_hg motor order and mj_sim's
+# command2actuator map. Resolved against the export's policy_joint_names BY
+# NAME at startup — an unplaceable name is fatal.
+joint_names: [
+  left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_joint,
+  left_ankle_pitch_joint, left_ankle_roll_joint,
+  right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_joint,
+  right_ankle_pitch_joint, right_ankle_roll_joint,
+  waist_yaw_joint, waist_roll_joint, waist_pitch_joint,
+  left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint,
+  left_elbow_joint, left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+  right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint,
+  right_elbow_joint, right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+# HOLD gains: used for zeroing, damping, the nominal pose and the entry ramp —
+# every mode except the policy, which uses the checkpoint's own (much softer)
+# trained gains out of difftrack_config.json.
+#
+# MEASURED IN mj_sim, ON THE SIMULATED PLANT. They are a starting point on
+# hardware, not a tuning: check them on the real robot, on the ground, in
+# NOMINAL_POSE, before anything else.
+#
+# They are separate on purpose. The trained gains (kp 14-99 on the shipped
+# export) are what the POLICY drives through, and a policy commanding targets
+# well away from the measured pose gets ample authority from them. A static PD
+# hold does not: holding a humanoid upright needs enough joint stiffness to pay
+# for the gravity torque about the ankle without deflecting past the point of no
+# return. Measured in mj_sim, ramping from the model's reset pose to the default
+# pose and holding, as (hip, knee, ankle, waist, arm) kp:
+#
+#   (100, 150,  40, 100, 40)  falls        <- the package's other g1 yamls
+#   (150, 200, 100, 150, 40)  falls
+#   (200, 300, 150, 200, 40)  falls
+#   (200, 300, 200, 200, 40)  falls
+#   (300, 400, 300, 300, 60)  holds        <- these values
+#
+# kd is kp/20. This is a measurement of THIS simulated plant from THIS starting
+# pose, not the robot's own tuning — check it against your hardware before using
+# the stand entry on a real robot.
+#
+# AND THE kd IS THE PART TO CHECK FIRST. mj_sim, where kp/20 was measured,
+# implements the PD as a MuJoCo POSITION SERVO, whose damping the solver
+# integrates implicitly. A motor controller does not: it computes
+# tau = kp(q*-q) + kd(dq*-dq) and applies it — EXPLICIT damping. Measured on
+# unitree_mujoco, which applies it the second way, kp/20 does not hold the robot
+# at all: twelve leg joints pin at FULL torque with the sign alternating between
+# samples while the position errors are still ~0.06 rad, and it is on the floor
+# in a second. kp/30 and below are clean; g1_difftrack_unitree.yaml ships kp/40.
+#
+#   bash scripts/run_difftrack_sim2sim.sh -W unitree -e stand g1_walk
+#
+# is the run that shows it, and it is worth doing before the robot is the thing
+# that shows it. See docs/trackers/difftrack_running.md section 2b.
+kps: [300.0, 300.0, 300.0, 400.0, 300.0, 300.0,
+      300.0, 300.0, 300.0, 400.0, 300.0, 300.0,
+      300.0, 300.0, 300.0,
+      60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0,
+      60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+
+kds: [15.0, 15.0, 15.0, 20.0, 15.0, 15.0,
+      15.0, 15.0, 15.0, 20.0, 15.0, 15.0,
+      15.0, 15.0, 15.0,
+      3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+      3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+
+# Overwritten at startup with the export's default pose (the posture the policy
+# expects to be handed).
+default_angles: [-0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 -0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,
+                 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+action_scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+num_actions: 29
+
+# ── The rest state ────────────────────────────────────────────────────────────
+#
+# What holds the robot up between clips. These tracking policies have no
+# standing behaviour of their own, and every shipped clip is a walk that ENDS
+# mid-stride at about 1 m/s, so this is not decoration: with the nominal-pose PD
+# hold above as the rest state the robot is on the floor seconds after the clip;
+# with an actively balancing stand policy it is standing at 0.785 m ten seconds
+# later. Measured on unitree_mujoco, g1_walk. See
+# docs/trackers/difftrack_running.md section 2c.
+#
+# Set it on the LAUNCH LINE rather than here, because the path has to resolve
+# against the installed share/models and the launch file is what knows where
+# that is:
+#
+#     ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \\
+#         stand_onnx_path:=tracker/sonic/g1_sonic_base.onnx \\
+#         start_in_stand:=true play_duration:=10.0
+#
+# scripts/run_difftrack_sim2sim.sh -s does that for you, and falls back to the
+# nominal-pose hold with an explanation if the weights are not fetched (every
+# .onnx under models/ is git-lfs-tracked).

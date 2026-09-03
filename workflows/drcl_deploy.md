@@ -1,5 +1,22 @@
 ## install 
 
+> [!IMPORTANT]
+> **RETIRED.** This workflow's three packages — `drcl-deploy/messages`,
+> `drcl-deploy/mj_sim` and `drcl-deploy/assets` — lived in a `drcl/` colcon
+> workspace that `cpp_control` no longer sits in. The package is now
+> `unitree_ros2/cyclonedds_ws/src/cpp_control` and builds against `unitree_hg`
+> alone; CMake reports `messages NOT found -- DRCL deploy backend disabled` and
+> the `mini_pi` nodes drop out of the build.
+>
+> Nothing here was deleted. `find_package(messages QUIET)` still guards every
+> drcl code path, `run_difftrack_sim2sim.sh` still carries its plant, and
+> cloning the three packages into `cyclonedds_ws/src/` beside this one brings
+> the backend back — the reference numbers in
+> [`../docs/trackers/difftrack_running.md`](../docs/trackers/difftrack_running.md)
+> were all taken on it.
+>
+> The workflow that ships is [`unitree.md`](unitree.md).
+
 make a ros2 workspace 
 ```
 mkdir -p drcl_deploy/src

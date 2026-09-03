@@ -14,6 +14,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)   # difftrack world pose from an onboard state estimator
 find_package(yaml-cpp REQUIRED)
 find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
 
@@ -23,6 +24,7 @@ find_package(unitree_go QUIET)
 find_package(messages QUIET)
 find_package(vision_encoders QUIET)  # ImageTokens (vibe-sonic)
 find_package(Eigen3 QUIET)           # difftrack observation builder
+find_package(optitrack_msgs QUIET)   # difftrack world pose from the lab OptiTrack
 
 if(unitree_hg_FOUND)
   message(STATUS "Found unitree_hg -- Unitree HG backend enabled")
@@ -187,8 +189,25 @@ if(unitree_hg_FOUND OR messages_FOUND)
 
     add_executable(g1_difftrack_node src/tasks/tracker/g1_difftrack.cpp)
     target_link_libraries(g1_difftrack_node cpp_control_g1 cpp_control_difftrack)
+    # nav_msgs is REQUIRED, unlike optitrack_msgs: the onboard estimator is the
+    # world-pose source for a lab with no cameras, so a build that quietly
+    # dropped it would leave the only hardware option unavailable.
     ament_target_dependencies(g1_difftrack_node
-      rclcpp std_msgs sensor_msgs geometry_msgs yaml-cpp ${G1_DEPS})
+      rclcpp std_msgs sensor_msgs geometry_msgs nav_msgs yaml-cpp ${G1_DEPS})
+
+    # OPTIONAL, and deliberately so. optitrack_msgs is the lab's own interface
+    # package (crl_optitrack_ros); a deploy PC that has it gets the OptiTrack
+    # subscription compiled in, and everything else — sim2sim included — builds
+    # and runs exactly as before. Without it, `optitrack_topic:=` raises at
+    # startup instead of quietly doing nothing.
+    if(optitrack_msgs_FOUND)
+      target_compile_definitions(g1_difftrack_node PRIVATE HAS_OPTITRACK)
+      ament_target_dependencies(g1_difftrack_node optitrack_msgs)
+      message(STATUS "Found optitrack_msgs -- g1_difftrack_node OptiTrack input enabled")
+    else()
+      message(STATUS "optitrack_msgs NOT found -- g1_difftrack_node falls back to "
+                     "mocap_pose_topic (geometry_msgs/PoseStamped) for the world pose")
+    endif()
 
     list(APPEND INSTALL_TARGETS g1_difftrack_node)
   endif()
@@ -255,6 +274,8 @@ install(DIRECTORY launch config models include
 install(PROGRAMS
   scripts/make_sim2sim_scene.py
   scripts/run_difftrack_sim2sim.sh
+  scripts/probe_hold_gains.py
+  scripts/run_mj_sim.py
   scripts/npz_motion_publisher.py
   # scripts/viser_ghost_g1_residual.py   # LEGACY (vibe v1) — reference only
   scripts/attn_viewer.py

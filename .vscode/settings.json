@@ -1,0 +1,8 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/dyuman/miniconda3/envs/drclros/lib/python3.11/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/dyuman/miniconda3/envs/drclros/lib/python3.11/site-packages"
+    ]
+}

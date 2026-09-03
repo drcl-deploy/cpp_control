@@ -125,15 +125,20 @@ EPs become a session option when a policy actually needs them.
 
 ## usage
 
+One source per shell — `runenv.sh` sets the distro, the overlay, the RMW, the
+domain and the interface (`lo`) together. Do not use `unitree_ros2/setup.sh` or
+`setup_local.sh`: as shipped they source `/opt/ros/foxy` and `$HOME/unitree_ros2`
+(see [workflows/unitree.md](../../workflows/unitree.md#usage)).
+
 ```bash
+WS=/path/to/unitree_ros2/cyclonedds_ws
+
 # terminal 1 — sim (empty-ground g1 scene)
-cd ~/unitree_ros2 && source setup_local.sh
-sudo ./unitree_mujoco/simulate/build/unitree_mujoco -i 0 -n lo -r g1
+cd $WS && source src/cpp_control/workflows/conda_env/runenv.sh
+env -u LD_LIBRARY_PATH $UNITREE_MUJOCO/simulate/build/unitree_mujoco -i 0 -n lo -r g1 -c
 
 # terminal 2 — tracker
-cd ~/unitree_ros2 && source setup_local.sh
-source venv/bin/activate            # see workflows/unitree.md#python-venv
-cd cyclonedds_ws && source install/setup.bash
+cd $WS && source src/cpp_control/workflows/conda_env/runenv.sh
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=/path/to/g1_sonic_base.onnx \
     motion_path:=/tmp/mjlab_cache/lafan1_dance1_subject1_demo_motion.npz
@@ -141,6 +146,10 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
 # pre-flight any export without the robot/sim:
 ./build/cpp_control/deploy_selftest /path/to/policy.onnx
 ```
+
+No `sudo` (only needed to bind a real NIC; this is `lo`, and `sudo` would drop
+the conda env), and `env -u LD_LIBRARY_PATH` is not optional under the conda
+toolchain — see [workflows/unitree.md](../../workflows/unitree.md#usage) for why.
 
 IL-ordered clips (see [joint orderings](#joint-orderings--read-this-before-loading-any-clip))
 need the flag; MJ-native clips don't:

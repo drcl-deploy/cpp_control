@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/dyuman/Documents/ETH/rsl/unitree_ros2/cyclonedds_ws/install/unitree_hg/include/**",
+        "/home/dyuman/Documents/ETH/rsl/unitree_ros2/cyclonedds_ws/install/unitree_go/include/**",
+        "/home/dyuman/Documents/ETH/rsl/unitree_ros2/cyclonedds_ws/install/unitree_api/include/**",
+        "/home/dyuman/Documents/ETH/rsl/unitree_ros2/cyclonedds_ws/install/optitrack_msgs/include/**",
+        "/home/dyuman/Documents/ETH/rsl/unitree_ros2/cyclonedds_ws/src/cpp_control/include/**",
+        "/home/dyuman/Documents/ETH/rsl/unitree_ros2/cyclonedds_ws/src/cpp_control/thirdparty/onnxruntime-linux-x64-1.22.0/include/**",
+        "/home/dyuman/miniconda3/envs/drclros/include/**",
+        "/home/dyuman/miniconda3/envs/drclros/include/eigen3/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++17"
+    }
+  ],
+  "version": 4
+}

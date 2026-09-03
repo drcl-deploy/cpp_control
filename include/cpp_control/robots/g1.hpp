@@ -92,7 +92,41 @@ namespace cpp_control
         // --- SportModeState (odometry: position + velocity) ---
         void subscribe_sport_mode_state(unitree_go::msg::SportModeState::SharedPtr msg);
         rclcpp::Subscription<unitree_go::msg::SportModeState>::SharedPtr sportmode_sub_;
+
+        // --- Full world base state from SportModeState + the IMU ---
+        // Opt-in (config `unitree_world_state: sportmode_imu`), because what
+        // those fields mean depends on who publishes them: ground truth under
+        // unitree_mujoco, drifting odometry on the robot. See config_loader.hpp.
+        //
+        // Both halves have to have arrived before the state is announced valid:
+        // SportModeState carries no orientation and LowState no position, so
+        // either one alone would hand a world-frame policy a plausible-looking
+        // identity for the half that is missing.
+        bool world_state_from_sportmode_ = false;
+        bool have_sportmode_ = false;
+        bool have_imu_world_ = false;
+        void update_unitree_world_state_valid();
 #endif
+
+    protected:
+        /// Level 2 calls this when IT owns the world base pose — an onboard
+        /// estimator on `odom_topic`, OptiTrack, any mocap.
+        ///
+        /// It exists because SportModeState's callback writes base_pos_w and
+        /// base_lin_vel_w on EVERY message regardless of unitree_world_state:
+        /// those two fields predate the world-state flag and other tasks read
+        /// them as plain odometry. Under unitree_mujoco that write is the
+        /// simulator's GROUND TRUTH, so a task reading an estimator would
+        /// silently get ground-truth position interleaved with its own estimate
+        /// at 500 Hz — and would track well in sim for a reason that does not
+        /// exist on a robot. Which is the worst possible outcome: a green
+        /// sim2sim result that means nothing.
+        ///
+        /// Safe to call from a Level 2 constructor after init(): subscription
+        /// callbacks do not run until the executor spins.
+        void claim_world_pose() { world_pose_owned_externally_ = true; }
+
+        bool world_pose_owned_externally_ = false;
 
 #ifdef HAS_MESSAGES
         // --- drcl_deploy message backend ---

@@ -7,3 +7,10 @@ thirdparty/onnxruntime-linux-x64-*
 # Tripling the repo to carry them is not worth it; delete this line if you would
 # rather the artifacts travelled with the branch.
 models/tracker/difftrack/
+
+# F9 recordings from scripts/run_mj_sim.py — minutes of 720p video, none of it
+# reproducible from the repo and none of it worth carrying in it.
+recordings/
+
+# scripts/ is importable now (run_mj_sim.py imports frame_recorder).
+__pycache__/

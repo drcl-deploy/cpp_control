@@ -65,6 +65,17 @@ protected:
     virtual RobotCommand policy_control();
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
 
+    /// Called ONCE, from control_loop(), on the first tick that has a real
+    /// state message behind it — and before that tick publishes anything.
+    ///
+    /// This is the only place a task can choose a starting mode using the
+    /// robot's ACTUAL pose. A constructor cannot: `robot_state_` is all zeros
+    /// there, so a mode that ramps from the measured pose ramps from zero, and
+    /// a mode that holds the measured pose holds a robot-shaped hole. Doing it
+    /// on a timer instead leaves a window of whatever mode the node booted in —
+    /// ZEROING, i.e. limp — reaching the robot first.
+    virtual void on_first_state() {}
+
     // --- Robot-level stand mode (ControlMode::STAND) ---
     // Level 1 provides an engine (e.g. g1::SonicStand); base wires RB to it.
     // Tasks with their own stand semantics simply leave it unconfigured.
@@ -111,6 +122,27 @@ protected:
     /// `state_decimation` asked Level 1 to drive control_loop() itself.
     bool state_paced() const { return state_paced_; }
 
+    /// Level 1 calls this from its state callback, on every message.
+    ///
+    /// Until the first one arrives, `robot_state_` is zero-initialised — no
+    /// joint angles, no IMU, no world pose — and a control loop running against
+    /// it is not controlling this robot, it is controlling a robot-shaped hole.
+    /// Under state pacing that never happened, because the state message IS the
+    /// clock. Under the WALL timer it did, and it is not a harmless warm-up:
+    ///
+    ///   * `nominal_pose_control()` advances its ramp every tick. A node started
+    ///     two seconds before its plant finishes the whole 2 s settle against
+    ///     nothing, so the first command the robot ever receives is the END of
+    ///     the ramp — a step to the default pose at full hold gains, not the
+    ///     ramp onto it. Measured against unitree_mujoco: a G1 standing at
+    ///     0.788 m knocked to 0.467 m in one second.
+    ///   * `hold_measured()` holds the measured pose, and the measured pose is
+    ///     all zeros.
+    ///
+    /// So the loop does not run at all until the robot has said something.
+    void note_state_received() { state_received_ = true; }
+    bool state_received() const { return state_received_; }
+
 private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
 
@@ -118,6 +150,8 @@ private:
 
     bool init_done_ = false;
     bool state_paced_ = false;
+    bool state_received_ = false;
+    bool first_state_handled_ = false;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 };
