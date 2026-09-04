@@ -153,8 +153,15 @@ class ReposeNode : public rclcpp::Node {
             : "";
     const std::string approach =
         cfg_.approach_enabled
-            ? " | APPROACH >" + std::to_string(cfg_.approach_enter_m) + " m" +
-                  (approach_only_ ? " ONLY" : "")
+            ? " | APPROACH " +
+                  (cfg_.approach_anisotropic
+                       ? "|f|>" +
+                             std::to_string(cfg_.approach_enter_forward_m) +
+                             " or |l|>" +
+                             std::to_string(cfg_.approach_enter_lateral_m)
+                       : ">" + std::to_string(cfg_.approach_enter_m)) +
+                  " m, window >=" + std::to_string(cfg_.approach_min_window_m) +
+                  " m" + (approach_only_ ? " ONLY" : "")
             : "";
     RCLCPP_INFO(
         this->get_logger(),
@@ -545,8 +552,14 @@ class ReposeNode : public rclcpp::Node {
       // The ramp landed: its clip goes out next, not whatever the planner would
       // pick now. `candidate_` is a preview between acts, and the belief has
       // been cleared since the read that chose this clip.
-      if (controller_.finished)
-        in_enter_ ? commit_clip(pending_) : commit(candidate_);
+      if (controller_.finished) {
+        const bool keep_parked = cfg_.approach_latch_blocked &&
+                                 terminal_approach_hold(plan_) &&
+                                 terminal_approach_hold(candidate_) &&
+                                 plan_.label == candidate_.label;
+        if (!keep_parked)
+          in_enter_ ? commit_clip(pending_) : commit(candidate_);
+      }
     }
     publish_status();
   }
@@ -577,6 +590,7 @@ class ReposeNode : public rclcpp::Node {
     awaiting_approach_measurement_ = false;
     approach_before_m_ = 0.0f;
     approach_progress_m_ = 0.0f;
+    approach_last_window_ = -1;
     approach_measure_anchor_ = Plan{};
     approach_measure_target_yaw_ = 0.0f;
     clear_candidate_lock();
@@ -675,18 +689,20 @@ class ReposeNode : public rclcpp::Node {
                   approach_progress_m_, approach_attempts_,
                   cfg_.approach_max_attempts);
     }
-    const bool ready =
-        cfg_.approach_anisotropic
-            ? std::fabs(raw.entry_forward) <= cfg_.approach_enter_forward_m &&
-                  std::fabs(raw.entry_lateral) <= cfg_.approach_enter_lateral_m
-            : raw.entry_translation <= cfg_.approach_enter_m;
-    if (ready) {
+    if (approach_ready(raw, cfg_)) {
       // Inside the proven clip-correction band. This also makes an
       // approach-only drag test re-arm automatically once the robot arrives.
       approach_attempts_ = 0;
       approach_no_progress_ = 0;
       approach_rung_ = clips_->rung();
+      approach_last_window_ = -1;
     }
+  }
+
+  bool terminal_approach_hold(const Plan& p) const {
+    return p.mode == Mode::SETTLE && (p.label == "approach blocked" ||
+                                      p.label == "approach turn blocked" ||
+                                      p.label == "reposition required");
   }
 
   Plan parked_candidate(const Plan& raw, const char* label) const {
@@ -707,16 +723,16 @@ class ReposeNode : public rclcpp::Node {
     if (raw.mode != Mode::CLIP) return raw;
     if (!cfg_.approach_enabled)
       return approach_only_ ? parked_candidate(raw, "approach off") : raw;
-    const bool ready =
-        cfg_.approach_anisotropic
-            ? std::fabs(raw.entry_forward) <= cfg_.approach_enter_forward_m &&
-                  std::fabs(raw.entry_lateral) <= cfg_.approach_enter_lateral_m
-            : raw.entry_translation <= cfg_.approach_enter_m;
-    if (ready)
+    if (approach_ready(raw, cfg_))
       return approach_only_ ? parked_candidate(raw, "approach ready") : raw;
     if (approach_attempts_ >= cfg_.approach_max_attempts ||
         approach_no_progress_ >= cfg_.approach_no_progress_limit)
       return parked_candidate(raw, "approach blocked");
+
+    // The source has no reverse gait. Once a stance outside the direct-clip
+    // band lies behind the robot, walking forward can only make it worse.
+    if (!approach_forward_reachable(raw, cfg_))
+      return parked_candidate(raw, "reposition required");
 
     const float turn_max =
         cfg_.approach_turn_max_deg * 3.14159265358979323846f / 180.0f;
@@ -741,7 +757,12 @@ class ReposeNode : public rclcpp::Node {
       p.label = "turn->approach";
       return p;
     }
-    return approach_->plan(raw);
+    const int minimum_window = cfg_.approach_escalate_window &&
+                                       approach_no_progress_ > 0 &&
+                                       approach_last_window_ >= 0
+                                   ? approach_last_window_ + 1
+                                   : 0;
+    return approach_->plan(raw, minimum_window);
   }
 
   void reset_scan() {
@@ -858,6 +879,7 @@ class ReposeNode : public rclcpp::Node {
           wrap(robot_yaw() + plan_.matched_entry_yaw);
       awaiting_approach_measurement_ = true;
       approach_rung_ = clips_->rung();
+      approach_last_window_ = plan_.approach_window;
       ++approach_attempts_;
       clear_candidate_lock();
       RCLCPP_INFO(this->get_logger(),
@@ -922,6 +944,7 @@ class ReposeNode : public rclcpp::Node {
       approach_measure_target_yaw_ = enter_matched_target_yaw_;
       awaiting_approach_measurement_ = true;
       approach_rung_ = clips_->rung();
+      approach_last_window_ = plan_.approach_window;
       ++approach_attempts_;
       clear_candidate_lock();
       RCLCPP_INFO(this->get_logger(),
@@ -1095,6 +1118,7 @@ class ReposeNode : public rclcpp::Node {
   bool armed_ = false, committed_ = false;
   bool approach_only_ = false;
   int approach_attempts_ = 0, approach_no_progress_ = 0;
+  int approach_last_window_ = -1;
   int approach_rung_ = -1;
   Plan candidate_anchor_;
   bool candidate_locked_ = false;

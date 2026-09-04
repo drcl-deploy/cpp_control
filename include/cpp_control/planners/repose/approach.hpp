@@ -25,13 +25,22 @@ struct ApproachWindow {
   float travel_from_root = 0;
 };
 
+/// Admission predicates shared by the node and the self-test. A visual
+/// robot-to-cube range is not this gate: these are residuals to the selected
+/// manipulation clip's entry stance.
+bool approach_ready(const Plan& candidate, const Cfg& cfg);
+bool approach_forward_reachable(const Plan& candidate, const Cfg& cfg);
+
 class ApproachSource {
  public:
   ApproachSource(const std::string& motion_path, const Cfg& cfg);
 
   /// Turn a winning clip candidate into an APPROACH plan. `entry_translation`
   /// and `entry_bearing` are measured in the live robot base frame.
-  Plan plan(const Plan& candidate) const;
+  /// `minimum_window` is the first vocabulary index this attempt may use. It
+  /// lets a measured failure escalate to the next complete gait; values past
+  /// the vocabulary clamp to its longest safe window.
+  Plan plan(const Plan& candidate, int minimum_window = 0) const;
 
   const float* span(int window) const;
   int frames(int window) const;

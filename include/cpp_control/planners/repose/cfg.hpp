@@ -156,6 +156,9 @@ struct Cfg {
   int approach_max_attempts = 2;
   /// ReachSource-compatible construction of the fixed walk vocabulary.
   float approach_window_step_m = 0.12f;
+  /// Ignore source prefixes shorter than one useful gait bout. Zero preserves
+  /// the v8.5--v9.1 vocabulary, including its 0.17 m partial stride.
+  float approach_min_window_m = 0.0f;
   int approach_window_snap = 4;
   float approach_still_speed_m_s = 0.05f;
   int approach_speed_smooth = 9;
@@ -175,6 +178,13 @@ struct Cfg {
   float approach_target_forward_m = 0.08f;
   int approach_no_progress_limit = 2;
   bool approach_net_windows = false;
+  /// After a no-progress measurement, require the next source window rather
+  /// than selecting the same short bout again.
+  bool approach_escalate_window = false;
+  /// A forward-only source may not repair an entry stance behind the robot.
+  bool approach_forward_only = false;
+  /// Keep one terminal stand engaged instead of recommitting it forever.
+  bool approach_latch_blocked = false;
 
   // A blind search is a sequence of relative turns, not a fresh reaction to
   // every noisy hint. +90,-180,-90 covers the full circle without the old
@@ -294,6 +304,19 @@ struct Cfg {
     c.min_visible = 0.55f;
     c.plane_color_pool_fallback = true;
     c.search_left_first = true;
+    return c;
+  }
+  /// v9.2 — repair the shared sim/hardware approach deadlock. Micro residuals
+  /// go directly to the manipulation policy; macro corrections use a complete
+  /// gait, get one longer retry, then stop safely.
+  static Cfg v9_2() {
+    Cfg c = v9_1();
+    c.approach_enter_forward_m = 0.25f;
+    c.approach_min_window_m = 0.30f;
+    c.approach_no_progress_limit = 2;
+    c.approach_escalate_window = true;
+    c.approach_forward_only = true;
+    c.approach_latch_blocked = true;
     return c;
   }
   static Cfg preset(const std::string& name);

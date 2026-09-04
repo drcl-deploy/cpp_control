@@ -281,6 +281,8 @@ if(OpenCV_FOUND)
              --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9.yaml)
     add_test(NAME repose_planner_v91_config_selftest COMMAND repose_planner_selftest
              --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9_1.yaml)
+    add_test(NAME repose_planner_v92_config_selftest COMMAND repose_planner_selftest
+             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9_2.yaml)
   endif()
   list(APPEND INSTALL_TARGETS repose_planner_selftest)
 

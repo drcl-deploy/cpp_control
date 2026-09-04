@@ -26,6 +26,19 @@ float yaw_of(const std::array<float, 4>& q) {
 
 }  // namespace
 
+bool approach_ready(const Plan& candidate, const Cfg& cfg) {
+  return cfg.approach_anisotropic
+             ? std::fabs(candidate.entry_forward) <=
+                       cfg.approach_enter_forward_m &&
+                   std::fabs(candidate.entry_lateral) <=
+                       cfg.approach_enter_lateral_m
+             : candidate.entry_translation <= cfg.approach_enter_m;
+}
+
+bool approach_forward_reachable(const Plan& candidate, const Cfg& cfg) {
+  return !cfg.approach_forward_only || candidate.entry_forward > 0.0f;
+}
+
 ApproachSource::ApproachSource(const std::string& motion_path, const Cfg& cfg)
     : motion_(g1::Motion::from_npz(motion_path, g1::MJ2IL, false)), cfg_(cfg) {
   if (motion_.num_joints != g1::NUM_JOINTS || motion_.num_bodies < 1 ||
@@ -113,6 +126,7 @@ ApproachSource::ApproachSource(const std::string& motion_path, const Cfg& cfg)
     // Size by NET displacement, not cumulative footpath. The opening weight
     // shift is real path length but closes no clip-entry residual.
     const float net = std::hypot(p1[0] - p0[0], p1[1] - p0[1]);
+    if (net + 1e-6f < cfg_.approach_min_window_m) continue;
     if (!windows_.empty() && net <= windows_.back().distance) continue;
     windows_.push_back({length, net, travel_from_root});
   }
@@ -146,7 +160,7 @@ ApproachSource::ApproachSource(const std::string& motion_path, const Cfg& cfg)
       windows_.back().distance, motion_path.c_str());
 }
 
-Plan ApproachSource::plan(const Plan& candidate) const {
+Plan ApproachSource::plan(const Plan& candidate, int minimum_window) const {
   if (candidate.mode != Mode::CLIP)
     throw std::runtime_error(
         "repose approach: only a clip has an entry stance");
@@ -156,9 +170,12 @@ Plan ApproachSource::plan(const Plan& candidate) const {
                      (cfg_.approach_anisotropic ? cfg_.approach_target_forward_m
                                                 : cfg_.approach_target_m),
                  0.0f, cfg_.approach_max_step_m);
-  int best = 0;
+  minimum_window =
+      std::clamp(minimum_window, 0, static_cast<int>(windows_.size()) - 1);
+  int best = minimum_window;
   float error = std::numeric_limits<float>::max();
-  for (size_t i = 0; i < windows_.size(); ++i) {
+  for (size_t i = static_cast<size_t>(minimum_window); i < windows_.size();
+       ++i) {
     const float e = std::fabs(windows_[i].distance - requested);
     if (e < error) {
       error = e;

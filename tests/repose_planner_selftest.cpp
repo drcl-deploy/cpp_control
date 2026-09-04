@@ -66,7 +66,7 @@ bool threw(F&& f) {
 void check_cfg() {
   std::puts("cfg");
   const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8(), v85 = Cfg::v8_5(),
-            v9 = Cfg::v9(), v91 = Cfg::v9_1();
+            v9 = Cfg::v9(), v91 = Cfg::v9_1(), v92 = Cfg::v9_2();
   check(!v6.nominal_stand && v7.nominal_stand,
         "v6 and v7 differ by the gaze fix and nothing else");
   check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
@@ -121,8 +121,19 @@ void check_cfg() {
             v91.omega_still == 0.25f && v91.settle_steps == 60 &&
             v91.min_visible == 0.55f &&
             v91.approach_enter_forward_m == v9.approach_enter_forward_m &&
-            v91.approach_window_step_m == v9.approach_window_step_m,
+            v91.approach_window_step_m == v9.approach_window_step_m &&
+            v91.approach_min_window_m == 0.0f &&
+            !v91.approach_escalate_window && !v91.approach_forward_only &&
+            !v91.approach_latch_blocked,
         "v9.1 changes observation/search admission without changing approach");
+  check(v92.approach_enter_forward_m == 0.25f &&
+            v92.approach_min_window_m == 0.30f &&
+            v92.approach_no_progress_limit == v92.approach_max_attempts &&
+            v92.approach_escalate_window && v92.approach_forward_only &&
+            v92.approach_latch_blocked &&
+            v92.plane_color_pool_fallback == v91.plane_color_pool_fallback &&
+            v92.omega_still == v91.omega_still,
+        "v9.2 changes bounded approach recovery, not v9.1 perception");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
@@ -136,6 +147,13 @@ void check_cfg() {
         "an enabled approach without a deployable motion is refused");
   check(refuses([](Cfg& c) { c.approach_target_m = c.approach_enter_m; }),
         "an approach target outside its admission gate is refused");
+  check(refuses([](Cfg& c) { c.approach_min_window_m = -0.01f; }),
+        "a negative minimum approach window is refused");
+  check(refuses([](Cfg& c) {
+          c.approach_escalate_window = true;
+          c.approach_no_progress_limit = 1;
+        }),
+        "an escalation policy with only one allowed failure is refused");
 }
 
 /// A depth-only scene for v8. The camera looks forward in +base-x; lower image
@@ -792,6 +810,10 @@ void check_approach_source(const std::string& path, const ClipTable& t,
     monotone = monotone &&
                source.windows()[i].distance > source.windows()[i - 1].distance;
   check(monotone, "approach windows increase monotonically in covered metres");
+  if (cfg.approach_min_window_m > 0.0f)
+    check(
+        source.windows().front().distance + 1e-6f >= cfg.approach_min_window_m,
+        "v9.2 removes every incomplete approach window");
 
   Plan clip;
   clip.mode = Mode::CLIP;
@@ -806,6 +828,29 @@ void check_approach_source(const std::string& path, const ClipTable& t,
         "the failed hardware residual becomes one bounded approach leg");
   check(p.approach_covered > 0.0f && p.frames > 1,
         "a real unscaled source window supplies the command");
+  if (cfg.approach_escalate_window) {
+    const Plan retry = source.plan(clip, p.approach_window + 1);
+    check(retry.approach_window > p.approach_window &&
+              retry.approach_covered > p.approach_covered,
+          "one failed complete gait escalates to the next longer window");
+    const Plan longest = source.plan(clip, 1000000);
+    check(longest.approach_window ==
+              static_cast<int>(source.windows().size()) - 1,
+          "escalation past the vocabulary clamps to its longest safe gait");
+  }
+
+  Plan near = clip;
+  near.entry_translation = 0.24f;
+  near.entry_forward = 0.24f;
+  near.entry_lateral = 0.01f;
+  check(approach_ready(near, cfg),
+        "the observed 0.24 m residual goes directly to manipulation");
+  Plan behind = clip;
+  behind.entry_forward = -0.30f;
+  behind.entry_lateral = 0.0f;
+  check(
+      !approach_ready(behind, cfg) && !approach_forward_reachable(behind, cfg),
+      "a forward-only gait refuses an entry stance behind the robot");
 
   LiveState live;
   live.joint_pos_il.assign(g1::NUM_JOINTS, 0.0f);
@@ -999,11 +1044,19 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   check(!threw([&] { Cfg::from_yaml(root); }),
         "the config loads and validates");
   const Cfg loaded = Cfg::from_yaml(root);
-  if (named == "v9.1") {
+  if (named == "v9.1" || named == "v9.2") {
     check(loaded.plane_color_pool_fallback && loaded.search_left_first &&
               loaded.omega_still == 0.25f && loaded.settle_steps == 60 &&
               loaded.min_visible == 0.55f,
           "the shipped v9.1 hardware-evidence knobs survive yaml parsing");
+  }
+  if (named == "v9.2") {
+    check(loaded.approach_enter_forward_m == 0.25f &&
+              loaded.approach_min_window_m == 0.30f &&
+              loaded.approach_no_progress_limit == 2 &&
+              loaded.approach_escalate_window && loaded.approach_forward_only &&
+              loaded.approach_latch_blocked,
+          "the shipped v9.2 bounded-approach knobs survive yaml parsing");
   }
 
   // Parity is asserted only for a file that CLAIMS to be untuned — the shipped

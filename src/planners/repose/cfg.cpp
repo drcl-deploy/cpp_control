@@ -20,9 +20,10 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v8.5") return Cfg::v8_5();
   if (name == "v9") return Cfg::v9();
   if (name == "v9.1") return Cfg::v9_1();
+  if (name == "v9.2") return Cfg::v9_2();
   throw std::runtime_error(
       "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5 | v9 | "
-      "v9.1, got '" +
+      "v9.1 | v9.2, got '" +
       name + "'");
 }
 
@@ -224,16 +225,31 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_l("scan_yaw_accel_deg", c.scan_yaw_accel_deg);
 
   const YAML::Node a = root["approach"];
-  reject_unknown(a, "approach", {"enabled",           "motion",
-                                 "enter_m",           "target_m",
-                                 "max_step_m",        "turn_max_deg",
-                                 "turn_max_attempts", "min_progress_m",
-                                 "max_attempts",      "window_step_m",
-                                 "window_snap",       "still_speed_m_s",
-                                 "speed_smooth",      "window_heading_max_deg",
-                                 "anisotropic",       "enter_forward_m",
-                                 "enter_lateral_m",   "target_forward_m",
-                                 "no_progress_limit", "net_windows"});
+  reject_unknown(a, "approach",
+                 {"enabled",
+                  "motion",
+                  "enter_m",
+                  "target_m",
+                  "max_step_m",
+                  "turn_max_deg",
+                  "turn_max_attempts",
+                  "min_progress_m",
+                  "max_attempts",
+                  "window_step_m",
+                  "min_window_m",
+                  "window_snap",
+                  "still_speed_m_s",
+                  "speed_smooth",
+                  "window_heading_max_deg",
+                  "anisotropic",
+                  "enter_forward_m",
+                  "enter_lateral_m",
+                  "target_forward_m",
+                  "no_progress_limit",
+                  "net_windows",
+                  "escalate_window",
+                  "forward_only",
+                  "latch_blocked"});
   Reader r_a{a};
   r_a("enabled", c.approach_enabled);
   r_a("motion", c.approach_motion);
@@ -245,6 +261,7 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_a("min_progress_m", c.approach_min_progress_m);
   r_a("max_attempts", c.approach_max_attempts);
   r_a("window_step_m", c.approach_window_step_m);
+  r_a("min_window_m", c.approach_min_window_m);
   r_a("window_snap", c.approach_window_snap);
   r_a("still_speed_m_s", c.approach_still_speed_m_s);
   r_a("speed_smooth", c.approach_speed_smooth);
@@ -255,6 +272,9 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_a("target_forward_m", c.approach_target_forward_m);
   r_a("no_progress_limit", c.approach_no_progress_limit);
   r_a("net_windows", c.approach_net_windows);
+  r_a("escalate_window", c.approach_escalate_window);
+  r_a("forward_only", c.approach_forward_only);
+  r_a("latch_blocked", c.approach_latch_blocked);
 
   const YAML::Node s = root["seam"];
   reject_unknown(s, "seam",
@@ -316,6 +336,7 @@ bool Cfg::operator==(const Cfg& o) const {
          approach_min_progress_m == o.approach_min_progress_m &&
          approach_max_attempts == o.approach_max_attempts &&
          approach_window_step_m == o.approach_window_step_m &&
+         approach_min_window_m == o.approach_min_window_m &&
          approach_window_snap == o.approach_window_snap &&
          approach_still_speed_m_s == o.approach_still_speed_m_s &&
          approach_speed_smooth == o.approach_speed_smooth &&
@@ -326,6 +347,9 @@ bool Cfg::operator==(const Cfg& o) const {
          approach_target_forward_m == o.approach_target_forward_m &&
          approach_no_progress_limit == o.approach_no_progress_limit &&
          approach_net_windows == o.approach_net_windows &&
+         approach_escalate_window == o.approach_escalate_window &&
+         approach_forward_only == o.approach_forward_only &&
+         approach_latch_blocked == o.approach_latch_blocked &&
          blend_frames == o.blend_frames && lead_in_rate == o.lead_in_rate &&
          lead_in_min_s == o.lead_in_min_s && lead_in_max_s == o.lead_in_max_s &&
          enter_yaw_rate_deg == o.enter_yaw_rate_deg &&
@@ -386,15 +410,18 @@ void Cfg::validate() const {
     throw std::runtime_error(
         "repose planner: approach needs min_progress_m >= 0 and max_attempts "
         ">= 1");
-  if (approach_window_step_m <= 0.0f || approach_window_snap < 0 ||
-      approach_still_speed_m_s <= 0.0f || approach_speed_smooth < 1 ||
-      approach_speed_smooth % 2 == 0 ||
+  if (approach_window_step_m <= 0.0f || approach_min_window_m < 0.0f ||
+      approach_min_window_m >
+          approach_max_step_m + approach_window_step_m + 1e-6f ||
+      approach_window_snap < 0 || approach_still_speed_m_s <= 0.0f ||
+      approach_speed_smooth < 1 || approach_speed_smooth % 2 == 0 ||
       approach_window_heading_max_deg <= 0.0f ||
       approach_window_heading_max_deg > 180.0f)
     throw std::runtime_error(
         "repose planner: approach window_step/still_speed must be positive, "
-        "window_snap non-negative, speed_smooth a positive odd number, and "
-        "window_heading_max_deg in (0, 180]");
+        "min_window in [0, max_step + window_step], window_snap non-negative, "
+        "speed_smooth a positive odd number, and window_heading_max_deg in "
+        "(0, 180]");
   if (approach_enter_forward_m <= 0.0f || approach_enter_lateral_m <= 0.0f ||
       approach_target_forward_m < 0.0f ||
       approach_target_forward_m >= approach_enter_forward_m ||
@@ -402,6 +429,11 @@ void Cfg::validate() const {
     throw std::runtime_error(
         "repose planner: v9 approach needs positive forward/lateral gates, "
         "0 <= target_forward_m < enter_forward_m, and no_progress_limit >= 1");
+  if (approach_escalate_window &&
+      (approach_max_attempts < 2 || approach_no_progress_limit < 2))
+    throw std::runtime_error(
+        "repose planner: approach window escalation needs at least two "
+        "attempts and two no-progress results");
   if (near_reframe_range_m <= 0.0f || near_reframe_deg <= 0.0f ||
       near_reframe_deg > scan_sweep_deg)
     throw std::runtime_error(
