@@ -163,6 +163,36 @@ struct Cfg {
   /// heading warp on one of those would itself be an unsafe yaw step.
   float approach_window_heading_max_deg = 45.0f;
 
+  // ── v9 approach admission ──
+  // The walk can only pay a displacement along its heading. A radial gate
+  // hides whether the remaining error is in front of the robot or sideways,
+  // and was the reason v8.5 could declare a visibly distant stance "ready".
+  // v9 keeps the old radial fields for a bit-identical v8.5 A/B and enables
+  // these axis-wise gates only in its own preset.
+  bool approach_anisotropic = false;
+  float approach_enter_forward_m = 0.18f;
+  float approach_enter_lateral_m = 0.10f;
+  float approach_target_forward_m = 0.08f;
+  int approach_no_progress_limit = 2;
+  bool approach_net_windows = false;
+
+  // A blind search is a sequence of relative turns, not a fresh reaction to
+  // every noisy hint. +90,-180,-90 covers the full circle without the old
+  // +90,-90 cancellation. A partial, close top gets only the small reframe.
+  bool stateful_scan = false;
+  bool lock_candidate_identity = false;
+  bool smooth_scan = false;
+  float scan_yaw_rate_deg = 45.0f;
+  float scan_yaw_accel_deg = 180.0f;
+  float near_reframe_range_m = 0.70f;
+  float near_reframe_deg = 12.0f;
+
+  // Once PLANE has fitted the square from depth, classify the RGB projected
+  // through that known square rather than requiring those same pixels to have
+  // valid depth. This is the hole-tolerant half of v9 perception.
+  bool plane_color_pool = false;
+  float plane_color_inset_frac = 0.06f;
+
   // ── the seam (no sim twin: hardware has no teleport) ──
   int blend_frames = 12;  ///< live->reference offset decay; only if no lead-in
   float lead_in_rate =
@@ -227,6 +257,25 @@ struct Cfg {
     c.approach_enabled = true;
     c.approach_motion =
         "data/sys1_walk/walk_forward_amateur_001__A001/motion.npz";
+    return c;
+  }
+  /// v9 — retain the hardware-proven v8 localization and v8.5 locomotion,
+  /// then make the remaining seams explicit: axis-wise approach admission,
+  /// stable scan/candidate identity, RGB pooling inside fitted geometry, and
+  /// a bounded heading ramp on both locomotion and manipulation acts.
+  static Cfg v9() {
+    Cfg c = v8_5();
+    c.approach_anisotropic = true;
+    c.approach_no_progress_limit = 1;
+    c.approach_net_windows = true;
+    c.approach_window_step_m = 0.10f;
+    c.approach_window_heading_max_deg = 30.0f;
+    c.stateful_scan = true;
+    c.lock_candidate_identity = true;
+    c.smooth_scan = true;
+    c.plane_color_pool = true;
+    c.enter_yaw_rate_deg = 60.0f;
+    c.lead_in_max_s = 0.60f;
     return c;
   }
   static Cfg preset(const std::string& name);

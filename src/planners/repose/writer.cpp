@@ -74,7 +74,8 @@ void ReferenceWriter::push_stand(int count) {
 void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
                                    const LiveState& live) {
   if (cfg_.lead_in_rate <= 0.0f) return;
-  ramp_ = cfg_.enter_yaw_rate_deg > 0.0f && plan.mode == Mode::CLIP;
+  ramp_ = cfg_.enter_yaw_rate_deg > 0.0f &&
+          (plan.mode == Mode::CLIP || plan.mode == Mode::APPROACH);
 
   // v7.1 starts from what the controller was ACTUALLY commanded, so the ramp is
   // C0 with the still it leaves; v7 keeps the live pose it was measured with.
@@ -199,10 +200,24 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
   // did NOT pay rides `entry_yaw` on the message, as v7 always did, on an angle
   // the node has re-measured instead of assumed.
   if (stage == Stage::CLIP) {
-    const ClipRow& r = t_.rows()[plan.row];
-    const float* span = t_.span(plan.row);
-    rows_.assign(span, span + static_cast<size_t>(r.span_len) * cols_);
-    frames_ = r.span_len;
+    const float* span = nullptr;
+    int count = 0;
+    if (plan.mode == Mode::CLIP) {
+      const ClipRow& r = t_.rows()[plan.row];
+      span = t_.span(plan.row);
+      count = r.span_len;
+    } else if (plan.mode == Mode::APPROACH) {
+      if (!approach_)
+        throw std::runtime_error(
+            "the planner writer: bare APPROACH has no walk source");
+      span = approach_->span(plan.approach_window);
+      count = approach_->frames(plan.approach_window);
+    } else {
+      throw std::runtime_error(
+          "the planner writer: bare stage is only CLIP or APPROACH");
+    }
+    rows_.assign(span, span + static_cast<size_t>(count) * cols_);
+    frames_ = count;
     return rows_;
   }
 
@@ -217,6 +232,10 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     const float* span = approach_->span(plan.approach_window);
     const int count = approach_->frames(plan.approach_window);
     push_lead_in(plan, span, live);
+    if (stage == Stage::ENTER) {
+      frames_ = static_cast<int>(rows_.size() / cols_);
+      return rows_;
+    }
     const size_t at = rows_.size();
     rows_.resize(at + static_cast<size_t>(count) * cols_);
     std::memcpy(&rows_[at], span,
@@ -234,19 +253,60 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     // have reached, so the 6D row says "still turning", not "hold this
     // heading". A one-shot ask saturates the tracking error instead (28.5 deg
     // achieved per 90 asked).
-    const int hold = std::max(plan.frames, 1);
+    int hold = std::max(plan.frames, 1);
+    int ramp = std::max(hold - 2 * cfg_.hold_tail, 1);
+    if (cfg_.smooth_scan && plan.mode == Mode::SCAN &&
+        std::fabs(plan.yaw_offset) > 1e-6f) {
+      const float distance = std::fabs(plan.yaw_offset);
+      const float vmax = cfg_.scan_yaw_rate_deg * kPi / 180.0f;
+      const float accel = cfg_.scan_yaw_accel_deg * kPi / 180.0f;
+      const float accel_distance = vmax * vmax / accel;
+      const float seconds = distance <= accel_distance
+                                ? 2.0f * std::sqrt(distance / accel)
+                                : distance / vmax + vmax / accel;
+      ramp = std::max(2, static_cast<int>(std::ceil(seconds * t_.fps())));
+      hold = ramp + 2 * cfg_.hold_tail;
+    }
     push_lead_in(plan, t_.stand_row(), live);
     const size_t at = rows_.size();  // the sweep is over the HELD frames only
     push_stand(hold);
-    const int ramp = std::max(hold - 2 * cfg_.hold_tail, 1);
-    const float rate = plan.yaw_offset / ramp;  // rad per frame
+    const float seconds = static_cast<float>(ramp) / t_.fps();
     for (int f = 0; f < hold; ++f) {
-      const float frac = std::min(static_cast<float>(f) / ramp, 1.0f);
+      const float a = std::min(static_cast<float>(f) / ramp, 1.0f);
+      float angle = plan.yaw_offset * a;
+      float rate = f < ramp ? plan.yaw_offset / seconds : 0.0f;
+      if (cfg_.smooth_scan && plan.mode == Mode::SCAN) {
+        const float distance = std::fabs(plan.yaw_offset);
+        const float accel = cfg_.scan_yaw_accel_deg * kPi / 180.0f;
+        const float disc =
+            std::max(0.0f, seconds * seconds - 4.0f * distance / accel);
+        const float accel_time = 0.5f * (seconds - std::sqrt(disc));
+        const float peak = accel * accel_time;
+        const float time = std::min(static_cast<float>(f) / t_.fps(), seconds);
+        float travelled = distance;
+        float speed = 0.0f;
+        if (time < accel_time) {
+          travelled = 0.5f * accel * time * time;
+          speed = accel * time;
+        } else if (time < seconds - accel_time) {
+          travelled = 0.5f * accel * accel_time * accel_time +
+                      peak * (time - accel_time);
+          speed = peak;
+        } else if (time < seconds) {
+          const float left = seconds - time;
+          travelled = distance - 0.5f * accel * left * left;
+          speed = accel * left;
+        }
+        const float sign = std::copysign(1.0f, plan.yaw_offset);
+        angle = sign * travelled;
+        rate = sign * speed;
+      }
       float* row = &rows_[at + static_cast<size_t>(f) * cols_];
-      rotate_row(row, plan.yaw_offset * frac);
-      // The robot IS turning, so say so: zero here would lie to the adapter's
-      // robot_root_ang_vel_cmd for the whole sweep.
-      row[AANG + 2] = f < ramp ? rate * t_.fps() : 0.0f;
+      rotate_row(row, angle);
+      // Smooth position and its analytic velocity agree, with zero velocity at
+      // both ends. v8.5 stepped this channel to a constant at frame zero and
+      // back to zero at the tail — exactly the yaw jerk visible on hardware.
+      row[AANG + 2] = rate;
     }
     frames_ = static_cast<int>(rows_.size() / cols_);
     if (lead_ == 0 && cfg_.blend_frames > 0)

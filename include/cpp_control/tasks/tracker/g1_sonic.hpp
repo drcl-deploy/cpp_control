@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cpp_control/msg/motion_reference.hpp>
 #include <cpp_control/msg/controller_status.hpp>
+#include <cpp_control/msg/motion_reference.hpp>
 #include <functional>
 #include <memory>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -42,8 +42,9 @@ namespace cpp_control {
  * arms planner execution; RB returns to stand and disarms it. While armed,
  * references auto-commit on arrival and swaps keep observation histories (a
  * planner commits every couple of seconds, and resetting them that often would
- * starve every history term). ControllerStatus tells the planner what is ACTUALLY
- * playing. Default false — open-loop rollouts are bit-for-bit unchanged.
+ * starve every history term). ControllerStatus tells the planner what is
+ * ACTUALLY playing. Default false — open-loop rollouts are bit-for-bit
+ * unchanged.
  */
 class G1SonicNode : public G1Node {
  public:
@@ -75,7 +76,8 @@ class G1SonicNode : public G1Node {
   void make_stand_motion();
   void enter_stand();
   /// `reset_history` false = soft re-engage: re-point and re-align the clock
-  /// but keep observation histories and the last action (the planner reference swaps).
+  /// but keep observation histories and the last action (the planner reference
+  /// swaps).
   virtual void engage_reset(bool reset_history = true);
   void fill_tokenizer(float* dst);
   std::array<float, 4> reference_root_quat(int frame,
@@ -83,12 +85,21 @@ class G1SonicNode : public G1Node {
   bool stand_yaw_reference_active() const;
   bool stand_yaw_drive_active() const;
   float stand_yaw_rate() const;
+  enum class ManualWalkStage { IDLE, ENTER, WALK, EXIT, PAUSE };
+  void make_manual_walk_motion(const std::string& path);
+  void update_manual_walk(double now);
+  void start_manual_walk_stage(ManualWalkStage stage);
+  bool manual_walk_busy() const {
+    return manual_walk_stage_ != ManualWalkStage::IDLE;
+  }
+  bool manual_walk_input_fresh(double now) const;
   void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void on_reference(cpp_control::msg::MotionReference::SharedPtr msg);
   void commit_pending_motion();
   /// Point `active_*` at the live pair. Call after replacing ANY of the four
   /// owning pointers: replacing one frees what `active_*` may still name, and
-  /// the planner status timer reads them outside the policy tick that re-engages.
+  /// the planner status timer reads them outside the policy tick that
+  /// re-engages.
   void rebind_active();
   void publish_controller_status();
   virtual void on_button_a();  ///< commit staged motion (if any) + track
@@ -138,9 +149,32 @@ class G1SonicNode : public G1Node {
 
   // Right-stick X heading control, active only while SONIC owns nominal stand.
   g1::StandYaw stand_yaw_;
-  double stand_yaw_settle_rate_ = 0.03490658503988659;  // 2 deg/s
-  double stand_yaw_settle_gyro_ = 0.08726646259971647;  // 5 deg/s
+  double stand_yaw_settle_rate_ = 0.03490658503988659;   // 2 deg/s
+  double stand_yaw_settle_gyro_ = 0.08726646259971647;   // 5 deg/s
   double stand_yaw_settle_error_ = 0.08726646259971647;  // 5 deg
+
+  // Left-stick forward positioning while the planner is disarmed. This is a
+  // sequence of finite, re-engaged references, never a gait-loop rewind:
+  // nominal -> lead-in -> one bounded walk -> lead-out -> nominal. Holding the
+  // stick repeats only after the nominal pause has completed.
+  bool manual_walk_enabled_ = false;
+  ManualWalkStage manual_walk_stage_ = ManualWalkStage::IDLE;
+  std::unique_ptr<g1::Motion> manual_walk_motion_;
+  std::unique_ptr<g1::Motion> manual_walk_enter_motion_;
+  std::unique_ptr<g1::Motion> manual_walk_exit_motion_;
+  std::unique_ptr<g1::MotionClock> manual_walk_clock_;
+  double manual_walk_deadband_ = 0.20;
+  double manual_walk_timeout_ = 0.25;
+  double manual_walk_pause_s_ = 0.35;
+  double manual_walk_distance_m_ = 0.32;
+  double manual_walk_lead_s_ = 0.35;
+  double manual_walk_exit_s_ = 0.45;
+  double manual_walk_input_ = 0.0;
+  double manual_walk_last_input_ = 0.0;
+  double manual_walk_pause_until_ = 0.0;
+  bool manual_walk_have_input_ = false;
+  bool manual_walk_wants_ = false;
+  bool manual_walk_require_release_ = false;
 
   // obs state
   std::vector<std::unique_ptr<obs::HistoryTerm>> histories_;

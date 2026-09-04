@@ -218,6 +218,14 @@ def _launch_runtime(context, encoder_pkg):
                 'stand_yaw_settle_gyro_deg_s'),
             'stand_yaw_settle_error_deg': LaunchConfiguration(
                 'stand_yaw_settle_error_deg'),
+            'stand_walk_teleop': LaunchConfiguration('stand_walk_teleop'),
+            'stand_walk_motion': LaunchConfiguration('stand_walk_motion'),
+            'stand_walk_distance_m': LaunchConfiguration('stand_walk_distance_m'),
+            'stand_walk_lead_s': LaunchConfiguration('stand_walk_lead_s'),
+            'stand_walk_exit_s': LaunchConfiguration('stand_walk_exit_s'),
+            'stand_walk_pause_s': LaunchConfiguration('stand_walk_pause_s'),
+            'stand_walk_deadband': LaunchConfiguration('stand_walk_deadband'),
+            'stand_walk_timeout_s': LaunchConfiguration('stand_walk_timeout_s'),
         }],
         on_exit=Shutdown(reason='Vibe controller exited'),
     )
@@ -321,6 +329,16 @@ def generate_launch_description():
         DeclareLaunchArgument('stand_yaw_settle_rate_deg_s', default_value='2.0'),
         DeclareLaunchArgument('stand_yaw_settle_gyro_deg_s', default_value='5.0'),
         DeclareLaunchArgument('stand_yaw_settle_error_deg', default_value='5.0'),
+        DeclareLaunchArgument(
+            'stand_walk_teleop', default_value='false',
+            description='left-stick forward runs bounded walk bouts in planner stand'),
+        DeclareLaunchArgument('stand_walk_motion', default_value=''),
+        DeclareLaunchArgument('stand_walk_distance_m', default_value='0.32'),
+        DeclareLaunchArgument('stand_walk_lead_s', default_value='0.35'),
+        DeclareLaunchArgument('stand_walk_exit_s', default_value='0.45'),
+        DeclareLaunchArgument('stand_walk_pause_s', default_value='0.35'),
+        DeclareLaunchArgument('stand_walk_deadband', default_value='0.20'),
+        DeclareLaunchArgument('stand_walk_timeout_s', default_value='0.25'),
 
         OpaqueFunction(function=_launch_runtime, args=[encoder_pkg]),
     ])

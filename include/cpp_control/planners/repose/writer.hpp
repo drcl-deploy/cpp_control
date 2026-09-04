@@ -30,11 +30,13 @@ struct LiveState {
 
 class ReferenceWriter {
  public:
-  /// Which half of a v7.1 clip act to emit. FULL is v7 and every still: one
-  /// reference, lead-in and clip together. v7.1 splits a clip in two so the
+  /// Which half of a ramped dynamic act to emit. FULL is v7 and every still:
+  /// one reference, lead-in and clip together. v7.1 splits a clip in two so the
   /// clip RE-ENGAGES on the pose the ramp actually reached instead of dead
   /// reckoning from the pose it started at (docs/planners/repose/planner.md
   /// §7.1).
+  /// `CLIP` is retained as the wire-compatible name for the bare second half;
+  /// in v9 it may carry either a manipulation clip or an APPROACH walk.
   enum class Stage { FULL, ENTER, CLIP };
 
   ReferenceWriter(const ClipTable& table, const Cfg& cfg,

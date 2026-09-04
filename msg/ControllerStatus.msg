@@ -19,6 +19,10 @@ uint32 frame            # playback position within it
 uint32 frames
 bool finished           # holding the last frame
 
+# v9 disarmed-stand positioning. 0 idle, 1 enter, 2 walk, 3 exit, 4 pause.
+uint8 manual_walk_stage
+bool manual_walk_requested
+
 # The robot's NOMINAL STANCE, MJ order — the manifest's `default_joint_pos`,
 # which is what the controller actually holds in NOMINAL_POSE. the planner builds its v7 still
 # pose from this rather than parsing the manifest a second time: one source, so

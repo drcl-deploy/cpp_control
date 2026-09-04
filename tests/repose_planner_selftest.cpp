@@ -65,7 +65,8 @@ bool threw(F&& f) {
 
 void check_cfg() {
   std::puts("cfg");
-  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8(), v85 = Cfg::v8_5();
+  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8(), v85 = Cfg::v8_5(),
+            v9 = Cfg::v9();
   check(!v6.nominal_stand && v7.nominal_stand,
         "v6 and v7 differ by the gaze fix and nothing else");
   check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
@@ -88,8 +89,9 @@ void check_cfg() {
         "a SCAN that never goes quiet is refused");
   check(refuses([](Cfg& c) { c.belief_min_votes = c.belief_window + 1; }),
         "a vote that can never carry is refused");
-  check(refuses([](Cfg& c) { c.approach_turn_max_attempts = 0; }),
-        "a preparatory turn without a finite positive attempt budget is refused");
+  check(
+      refuses([](Cfg& c) { c.approach_turn_max_attempts = 0; }),
+      "a preparatory turn without a finite positive attempt budget is refused");
   const Cfg r = Cfg::v7_1();
   check(r.enter_yaw_rate_deg > 0.0f && v7.enter_yaw_rate_deg == 0.0f,
         "v7.1 is v7 plus one rate; 0 is the ramp off");
@@ -105,8 +107,15 @@ void check_cfg() {
             v8.enter_yaw_rate_deg == v7.enter_yaw_rate_deg,
         "v8 changes the observation read, not planning or control");
   check(v85.read == v8.read && v85.approach_enabled && !v8.approach_enabled &&
-            v85.approach_enter_m == 0.25f,
+            v85.approach_enter_m == 0.25f && !v85.approach_anisotropic &&
+            !v85.approach_net_windows && !v85.stateful_scan &&
+            !v85.lock_candidate_identity && !v85.smooth_scan &&
+            !v85.plane_color_pool && v85.enter_yaw_rate_deg == 0.0f &&
+            v85.approach_no_progress_limit == 2,
         "v8.5 is v8 plus the guarded approach mode");
+  check(v9.approach_enabled && v9.approach_anisotropic && v9.stateful_scan &&
+            v9.plane_color_pool && v9.enter_yaw_rate_deg > 0.0f,
+        "v9 enables stable search, axis-wise approach and smooth dynamic acts");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
@@ -181,6 +190,17 @@ void check_plane_read() {
   check(
       unlabelled.ok && !unlabelled.color_ok && unlabelled.reason == "no_color",
       "rejected RGB cannot starve depth geometry");
+
+  cv::Mat hole_color(h, w, CV_8UC3, cv::Scalar(80, 80, 80));
+  for (int i = 0; i < h * w; ++i)
+    if (top.ptr<uint8_t>()[i] && !std::isfinite(depth.ptr<float>()[i]))
+      hole_color.ptr<cv::Vec3b>()[i] = {240, 90, 250};
+  Cfg v9 = Cfg::v9();
+  v9.min_visible = 0.70f;
+  CubeSight pooled(v9, half);
+  const Sight from_holes = pooled(hole_color, depth, intr, cam);
+  check(from_holes.ok && from_holes.color_ok && from_holes.color == 5,
+        "v9 pools RGB inside the square even where top depth is missing");
 
   cv::Mat floor_depth = depth.clone();
   for (int i = 0; i < h * w; ++i)
@@ -372,6 +392,33 @@ void check_approach_turn_continuity(const ClipTable& t) {
         "the same final sight makes unconstrained retrieval switch targets");
 }
 
+/// CubeSight's square angle is modulo 90 degrees. Crossing the fold must
+/// change only the integer symmetry label, not the physical entry heading.
+void check_fold_aware_lock(const ClipTable& t) {
+  std::puts("fold-aware candidate lock");
+  Cfg cfg = Cfg::v9();
+  Clips clips(t, cfg, 4);
+  constexpr float kPi = static_cast<float>(M_PI);
+  Sight before;
+  before.ok = before.color_ok = true;
+  before.color = 2;
+  before.pos = {0.85f, 0.08f, 0.3048f};
+  before.phi = 44.0f * kPi / 180.0f;
+  Belief belief(cfg);
+  for (int i = 0; i < cfg.belief_min_votes; ++i) belief.push(before);
+  const Plan anchor = clips.decide(belief);
+  const float target = anchor.entry_yaw;  // robot yaw is zero
+
+  Sight after = before;
+  after.phi = -44.0f * kPi / 180.0f;  // +2 deg physically, modulo 90
+  const Plan fixed = clips.retarget_heading_locked(anchor, after, 0.0f, target);
+  const float error = std::atan2(std::sin(fixed.entry_yaw - target),
+                                 std::cos(fixed.entry_yaw - target));
+  check(fixed.row == anchor.row && fixed.sym != anchor.sym &&
+            std::fabs(error) < 3.0f * kPi / 180.0f,
+        "a +/-45 degree fold changes symmetry without a 90 degree target jump");
+}
+
 /// THE v7 RESULT, asserted offline: a nominal stance has waist = 0, so the
 /// torso is vertical and the camera reads back its mount angle. The library's
 /// stand frame does not, which is why v5/v6 aimed at the near ground and saw
@@ -470,8 +517,9 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
   live.joint_vel_il.assign(g1::NUM_JOINTS, 0.0f);
   const auto& rows = w.build(p, live);
   const int cols = t.cols(), lead = w.lead_in_frames();
-  check(w.frames() == lead + cfg.scan_steps,
-        "one row per held frame, after the ramp onto the still pose");
+  const int held = w.frames() - lead;
+  check(held > 2 * cfg.hold_tail && (cfg.smooth_scan || held == cfg.scan_steps),
+        "the turn is followed by its full quiet read tail");
 
   // Only the yaw RELATIVE to frame 0 is a command: MotionClock::engage aligns
   // frame 0 onto the robot, so the stand pose's own recorded heading cancels.
@@ -486,10 +534,10 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
     return std::atan2(std::sin(yaw_of(f) - yaw_of(0)),
                       std::cos(yaw_of(f) - yaw_of(0)));
   };
-  const int ramp = cfg.scan_steps - 2 * cfg.hold_tail;
+  const int ramp = held - 2 * cfg.hold_tail;
   check(std::fabs(swept(0)) < 1e-5f, "frame 0 is the zero of the sweep");
   check(std::fabs(swept(ramp) - p.yaw_offset) < 1e-3f, "the sweep completes");
-  check(std::fabs(swept(cfg.scan_steps - 1) - p.yaw_offset) < 1e-3f,
+  check(std::fabs(swept(held - 1) - p.yaw_offset) < 1e-3f,
         "and holds through the read tail");
   check(swept(ramp / 2) > 0.1f && swept(ramp / 2) < p.yaw_offset,
         "and is monotone across the window, not a step");
@@ -498,8 +546,16 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
     return rows[static_cast<size_t>(lead + f) * cols + aang + 2];
   };
   check(ang_z(ramp / 2) > 0.0f, "a turning reference commands a turn rate");
-  check(std::fabs(ang_z(cfg.scan_steps - 1)) < 1e-6f,
-        "and zero once it is done turning");
+  check(std::fabs(ang_z(held - 1)) < 1e-6f, "and zero once it is done turning");
+  if (cfg.smooth_scan) {
+    float peak = 0.0f;
+    for (int f = 0; f < held; ++f) peak = std::max(peak, std::fabs(ang_z(f)));
+    check(peak <=
+              cfg.scan_yaw_rate_deg * static_cast<float>(M_PI) / 180.0f + 1e-4f,
+          "the planner turn obeys the stand-yaw rate bound");
+    check(std::fabs(ang_z(0)) < 1e-6f,
+          "the planner turn starts at zero yaw rate");
+  }
   float head = 0.0f;
   for (int j = 0; j < g1::NUM_JOINTS; ++j)
     head = std::max(head, std::fabs(rows[j] - live.joint_pos_il[j]));
@@ -721,6 +777,8 @@ void check_approach_source(const std::string& path, const ClipTable& t,
   clip.cost = 0.56f;
   clip.entry_translation = 0.556f;  // the failed R#53 hardware candidate
   clip.entry_bearing = -3.2f * static_cast<float>(M_PI) / 180.0f;
+  clip.entry_forward = clip.entry_translation * std::cos(clip.entry_bearing);
+  clip.entry_lateral = clip.entry_translation * std::sin(clip.entry_bearing);
   const Plan p = source.plan(clip);
   check(p.mode == Mode::APPROACH &&
             p.approach_requested <= cfg.approach_max_step_m + 1e-6f,
@@ -762,7 +820,8 @@ void check_approach_source(const std::string& path, const ClipTable& t,
   const g1::Motion motion = g1::Motion::from_wire(writer.frames(), rows.data(),
                                                   cols, true, true, t.fps());
   g1::MotionClock clock(motion, 0);
-  clock.engage({1.0f, 0.0f, 0.0f, 0.0f}, 0, p.entry_yaw);
+  clock.engage({1.0f, 0.0f, 0.0f, 0.0f}, 0,
+               writer.ramped() ? 0.0f : p.entry_yaw);
   const auto end = clock.aligned_root_pos(writer.frames() - 1);
   const float distance = std::hypot(end[0], end[1]);
   const float bearing = std::atan2(end[1], end[0]);
@@ -771,6 +830,15 @@ void check_approach_source(const std::string& path, const ClipTable& t,
   check(std::fabs(std::atan2(std::sin(bearing - clip.entry_bearing),
                              std::cos(bearing - clip.entry_bearing))) < 1e-4f,
         "and its net displacement points at the candidate entry bearing");
+  if (cfg.enter_yaw_rate_deg > 0.0f) {
+    writer.build(p, live, ReferenceWriter::Stage::ENTER);
+    check(writer.ramped() && writer.frames() == writer.lead_in_frames(),
+          "v9 APPROACH publishes its heading/joint ramp as a separate act");
+    writer.build(p, live, ReferenceWriter::Stage::CLIP);
+    check(!writer.ramped() && writer.lead_in_frames() == 0 &&
+              writer.frames() == p.frames,
+          "and re-engages the bare walk after that ramp finishes");
+  }
 }
 
 // ── Replay rig ───────────────────────────────────────────────────
@@ -918,7 +986,7 @@ void check_config_roundtrip(const std::string& path, bool parity) {
           "the shipped yaml round-trips to the preset it names");
     // `version:` is the ablation switch, so all three have to survive the same
     // file — that is the "one line A/Bs both" claim, tested.
-    for (const char* v : {"v6", "v7", "v7.1", "v8", "v8.5"}) {
+    for (const char* v : {"v6", "v7", "v7.1", "v8", "v8.5", "v9"}) {
       YAML::Node n = YAML::Clone(root);
       n["version"] = v;
       check(Cfg::from_yaml(n) == Cfg::preset(v),
@@ -927,7 +995,7 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   }
   check(threw([&] {
           YAML::Node n = YAML::Clone(root);
-          n["version"] = "v9";
+          n["version"] = "v10";
           Cfg::from_yaml(n);
         }),
         "an unknown version is refused rather than defaulted");
@@ -1038,6 +1106,7 @@ int main(int argc, char** argv) {
     check_enter_ramp(table);
     check_decide_is_pure(table);
     check_approach_turn_continuity(table);
+    check_fold_aware_lock(table);
     if (!approach_path.empty())
       check_approach_source(approach_path, table, cfg);
   }

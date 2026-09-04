@@ -214,6 +214,26 @@ Plan Clips::retarget(const Plan& anchor, const Sight& see) const {
   return candidate(see, anchor.row, anchor.sym, anchor.delta);
 }
 
+Plan Clips::retarget_heading_locked(const Plan& anchor, const Sight& see,
+                                    float robot_yaw,
+                                    float target_world_yaw) const {
+  if (anchor.row < 0 || anchor.row >= static_cast<int>(t_.rows().size()))
+    throw std::runtime_error(
+        "repose planner: cannot retarget an invalid heading lock");
+  const ClipRow& r = t_.rows()[anchor.row];
+  int best_sym = 0;
+  float best_error = std::numeric_limits<float>::max();
+  for (int sym = 0; sym < 4; ++sym) {
+    const float world = robot_yaw + r.qth + sym * (kPi / 2.0f) + see.phi;
+    const float error = std::fabs(wrap(world - target_world_yaw));
+    if (error < best_error) {
+      best_error = error;
+      best_sym = sym;
+    }
+  }
+  return candidate(see, anchor.row, best_sym, anchor.delta);
+}
+
 Plan Clips::candidate(const Sight& see, int row, int sym, char delta) const {
   const ClipRow& r = t_.rows()[row];
   // Robot SE(2) in the cube frame, as in retrieve(). Keeping this computation
@@ -237,6 +257,7 @@ Plan Clips::candidate(const Sight& see, int row, int sym, char delta) const {
   // scalar IS that rotation, and it is exactly the heading term the cost just
   // minimised.
   p.entry_yaw = wrap(r.qth + sym * (kPi / 2.0f) + see.phi);
+  p.matched_entry_yaw = p.entry_yaw;
   // The same translation term `se2()` ranked, now expressed in the robot base
   // frame. It is the physical displacement that would put the live robot at
   // this clip's recorded entry stance; no odometry or total-cost weights enter.
@@ -249,6 +270,8 @@ Plan Clips::candidate(const Sight& see, int row, int sym, char delta) const {
   const float ey = see.pos[1] + sp * rx + cp * ry;
   p.entry_translation = std::hypot(ex, ey);
   p.entry_bearing = std::atan2(ey, ex);
+  p.entry_forward = ex;
+  p.entry_lateral = ey;
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%c#%d", delta, r.clip);
   p.label = buf;

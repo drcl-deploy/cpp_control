@@ -17,6 +17,8 @@ float32 cost            # metres of stance residual the controller must self-cor
 float32 entry_yaw
 float32 entry_translation_m
 float32 entry_bearing_rad
+float32 entry_forward_m
+float32 entry_lateral_m
 float32 approach_requested_m
 float32 approach_covered_m
 int32 frames
@@ -30,6 +32,12 @@ string cand_label
 float32 cand_cost
 float32 cand_entry_translation_m
 float32 cand_entry_bearing_rad
+float32 cand_entry_forward_m
+float32 cand_entry_lateral_m
+bool candidate_locked
+int32 candidate_lock_row
+int32 candidate_lock_sym
+int32 search_phase             # -1 outside a stateful blind-search act
 
 # v8.5 approach outcome, evaluated from fresh RGB-D after the walk settles
 float32 approach_progress_m
@@ -67,5 +75,5 @@ float32 bearing_rad
 float32 phi_rad
 int32 n_px
 
-string version          # v6 | v7 | v7.1 | v8 | v8.5
+string version          # v6 | v7 | v7.1 | v8 | v8.5 | v9
 float32 observe_ms

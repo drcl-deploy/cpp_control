@@ -64,11 +64,13 @@ ApproachSource::ApproachSource(const std::string& motion_path, const Cfg& cfg)
         "repose approach: no moving segment above still_speed_m_s");
 
   const int seg_n = end - onset_;
-  std::vector<float> dist(seg_n, 0.0f);
+  std::vector<float> net(seg_n, 0.0f), path(seg_n, 0.0f);
+  const auto source_origin = motion_.root_pos(onset_);
   for (int k = 1; k < seg_n; ++k) {
     const auto a = motion_.root_pos(onset_ + k - 1);
     const auto b = motion_.root_pos(onset_ + k);
-    dist[k] = dist[k - 1] + std::hypot(b[0] - a[0], b[1] - a[1]);
+    net[k] = std::hypot(b[0] - source_origin[0], b[1] - source_origin[1]);
+    path[k] = path[k - 1] + std::hypot(b[0] - a[0], b[1] - a[1]);
   }
 
   // One extra grid point brackets max_step_m for nearest-window selection.
@@ -78,9 +80,16 @@ ApproachSource::ApproachSource(const std::string& motion_path, const Cfg& cfg)
   for (float goal = cfg_.approach_window_step_m;
        goal <= cfg_.approach_max_step_m + cfg_.approach_window_step_m + 1e-6f;
        goal += cfg_.approach_window_step_m) {
-    const auto at = std::lower_bound(dist.begin(), dist.end(), goal);
-    int k = static_cast<int>(at - dist.begin());
-    k = std::clamp(k, 1, seg_n - 1);
+    // The quantity the planner requests and later measures is NET robot
+    // displacement. v8.5 cut on cumulative foot-path length and then labelled
+    // the window by net displacement, so the opening weight shift consumed a
+    // large part of every nominally short step. Search the first crossing: the
+    // recording eventually turns home, so its full net-distance trace is not
+    // globally sorted even though this short outbound prefix is monotone.
+    const std::vector<float>& cut_metric =
+        cfg_.approach_net_windows ? net : path;
+    int k = 1;
+    while (k + 1 < seg_n && cut_metric[k] < goal) ++k;
     const int lo = std::max(1, k - cfg_.approach_window_snap);
     const int hi = std::min(seg_n - 1, k + cfg_.approach_window_snap + 1);
     if (hi <= lo) continue;
@@ -142,8 +151,11 @@ Plan ApproachSource::plan(const Plan& candidate) const {
     throw std::runtime_error(
         "repose approach: only a clip has an entry stance");
   const float requested =
-      std::clamp(candidate.entry_translation - cfg_.approach_target_m, 0.0f,
-                 cfg_.approach_max_step_m);
+      std::clamp((cfg_.approach_anisotropic ? candidate.entry_forward
+                                            : candidate.entry_translation) -
+                     (cfg_.approach_anisotropic ? cfg_.approach_target_forward_m
+                                                : cfg_.approach_target_m),
+                 0.0f, cfg_.approach_max_step_m);
   int best = 0;
   float error = std::numeric_limits<float>::max();
   for (size_t i = 0; i < windows_.size(); ++i) {
@@ -157,10 +169,16 @@ Plan ApproachSource::plan(const Plan& candidate) const {
   const ApproachWindow& w = windows_[best];
   Plan p;
   p.mode = Mode::APPROACH;
+  p.row = candidate.row;
+  p.sym = candidate.sym;
+  p.delta = candidate.delta;
   p.frames = w.length + 1;  // both endpoints
   p.cost = candidate.cost;
   p.entry_translation = candidate.entry_translation;
   p.entry_bearing = candidate.entry_bearing;
+  p.entry_forward = candidate.entry_forward;
+  p.entry_lateral = candidate.entry_lateral;
+  p.matched_entry_yaw = candidate.entry_yaw;
   p.approach_requested = requested;
   p.approach_covered = w.distance;
   p.approach_window = best;

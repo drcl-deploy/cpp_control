@@ -32,6 +32,7 @@ RGB = ((230, 51, 51), (242, 115, 26), (51, 230, 51),
        (230, 230, 51), (51, 51, 230), (204, 51, 166))
 MODES = ("init", "settle", "scan", "clip", "approach")
 CONTROLLER_MODES = ("zeroing", "damping", "nominal", "standing", "stand", "POLICY")
+MANUAL_WALK_STAGES = ("idle", "enter", "walk", "exit", "pause")
 
 CSI = "\033["
 DIM, BOLD, OFF = f"{CSI}2m", f"{CSI}1m", f"{CSI}0m"
@@ -115,13 +116,22 @@ class Console(Node):
                 f"   {s1.observe_ms:.1f} ms/read",
                 f"  plan    {s1.label:<10}cost {s1.cost:.2f} m   "
                 f"entry xy {s1.entry_translation_m:.2f} m "
-                f"@ {s1.entry_bearing_rad * 57.3:+.0f}°   frames {s1.frames}"
+                f"@ {s1.entry_bearing_rad * 57.3:+.0f}° "
+                f"(f {s1.entry_forward_m:+.2f}, l {s1.entry_lateral_m:+.2f})   "
+                f"frames {s1.frames}"
                 + (f" (+{s1.lead_in_frames} ramp)" if s1.lead_in_frames else ""),
                 f"  {DIM}next{OFF}    {s1.cand_label:<16}cost {s1.cand_cost:.2f} m"
                 f"   entry xy {s1.cand_entry_translation_m:.2f} m"
-                f" @ {s1.cand_entry_bearing_rad * 57.3:+.0f}°"
+                f" @ {s1.cand_entry_bearing_rad * 57.3:+.0f}° "
+                f"(f {s1.cand_entry_forward_m:+.2f}, "
+                f"l {s1.cand_entry_lateral_m:+.2f})"
                 f"   {DIM}(what a finished reference would commit to){OFF}",
             ]
+            if s1.candidate_locked or s1.search_phase >= 0:
+                lock = (f"row {s1.candidate_lock_row} sym {s1.candidate_lock_sym}"
+                        if s1.candidate_locked else "none")
+                phase = str(s1.search_phase) if s1.search_phase >= 0 else "—"
+                lines.append(f"  intent  lock {lock}   search phase {phase}")
             if s1.mode == PlannerStatus.APPROACH or s1.approach_attempts:
                 lines.append(
                     f"  walk    ask {s1.approach_requested_m:.2f} m  "
@@ -147,6 +157,12 @@ class Console(Node):
                 f"  ctrl    {BOLD}{mode:<8}{OFF}{what:<14}"
                 f"frame {s0.frame}/{s0.frames}"
                 f"   {'● engaged' if s0.accepting else f'{DIM}○ idle{OFF}'}")
+            if s0.manual_walk_requested or s0.manual_walk_stage:
+                stage = (MANUAL_WALK_STAGES[s0.manual_walk_stage]
+                         if s0.manual_walk_stage < len(MANUAL_WALK_STAGES) else "?")
+                lines.append(
+                    f"  manual  forward {'held' if s0.manual_walk_requested else 'released'}"
+                    f"   bout {stage}")
         lines += [rule,
                   f"  {DIM}0-5 / {'/'.join(KEYS)}  set target     R  re-arm (next trial)"
                   f"     q  quit{OFF}"]

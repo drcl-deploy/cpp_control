@@ -18,8 +18,9 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v7.1") return Cfg::v7_1();
   if (name == "v8") return Cfg::v8();
   if (name == "v8.5") return Cfg::v8_5();
+  if (name == "v9") return Cfg::v9();
   throw std::runtime_error(
-      "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5, got '" +
+      "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5 | v9, got '" +
       name + "'");
 }
 
@@ -147,9 +148,10 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_mk("erode", c.mask_erode);
 
   const YAML::Node pl = obs ? obs["plane"] : YAML::Node();
-  reject_unknown(pl, "observe.plane",
-                 {"floor_quantile", "ransac_dist_m", "top_band_m", "close_px",
-                  "fit_slack", "range_max_m"});
+  reject_unknown(
+      pl, "observe.plane",
+      {"floor_quantile", "ransac_dist_m", "top_band_m", "close_px", "fit_slack",
+       "range_max_m", "color_pool", "color_inset_frac"});
   Reader r_pl{pl};
   r_pl("floor_quantile", c.plane_floor_quantile);
   r_pl("ransac_dist_m", c.plane_ransac_dist_m);
@@ -157,6 +159,8 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_pl("close_px", c.plane_close_px);
   r_pl("fit_slack", c.plane_fit_slack);
   r_pl("range_max_m", c.plane_range_max_m);
+  r_pl("color_pool", c.plane_color_pool);
+  r_pl("color_inset_frac", c.plane_color_inset_frac);
 
   const YAML::Node g = obs ? obs["gates"] : YAML::Node();
   reject_unknown(g, "observe.gates",
@@ -189,10 +193,13 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_b("omega_still", c.omega_still);
 
   const YAML::Node l = root["loop"];
-  reject_unknown(l, "loop",
-                 {"nominal_stand", "pattern", "retry_limit", "arm_radius",
-                  "horizon_gain", "stance_band_m", "scan_sweep_deg",
-                  "settle_steps", "scan_steps", "hold_tail"});
+  reject_unknown(
+      l, "loop",
+      {"nominal_stand", "pattern", "retry_limit", "arm_radius", "horizon_gain",
+       "stance_band_m", "scan_sweep_deg", "settle_steps", "scan_steps",
+       "hold_tail", "stateful_scan", "near_reframe_range_m", "near_reframe_deg",
+       "lock_candidate_identity", "smooth_scan", "scan_yaw_rate_deg",
+       "scan_yaw_accel_deg"});
   Reader r_l{l};
   r_l("nominal_stand", c.nominal_stand);
   r_l("pattern", c.pattern);
@@ -204,14 +211,25 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_l("settle_steps", c.settle_steps);
   r_l("scan_steps", c.scan_steps);
   r_l("hold_tail", c.hold_tail);
+  r_l("stateful_scan", c.stateful_scan);
+  r_l("near_reframe_range_m", c.near_reframe_range_m);
+  r_l("near_reframe_deg", c.near_reframe_deg);
+  r_l("lock_candidate_identity", c.lock_candidate_identity);
+  r_l("smooth_scan", c.smooth_scan);
+  r_l("scan_yaw_rate_deg", c.scan_yaw_rate_deg);
+  r_l("scan_yaw_accel_deg", c.scan_yaw_accel_deg);
 
   const YAML::Node a = root["approach"];
-  reject_unknown(
-      a, "approach",
-      {"enabled", "motion", "enter_m", "target_m", "max_step_m", "turn_max_deg",
-       "turn_max_attempts", "min_progress_m", "max_attempts", "window_step_m",
-       "window_snap", "still_speed_m_s", "speed_smooth",
-       "window_heading_max_deg"});
+  reject_unknown(a, "approach", {"enabled",           "motion",
+                                 "enter_m",           "target_m",
+                                 "max_step_m",        "turn_max_deg",
+                                 "turn_max_attempts", "min_progress_m",
+                                 "max_attempts",      "window_step_m",
+                                 "window_snap",       "still_speed_m_s",
+                                 "speed_smooth",      "window_heading_max_deg",
+                                 "anisotropic",       "enter_forward_m",
+                                 "enter_lateral_m",   "target_forward_m",
+                                 "no_progress_limit", "net_windows"});
   Reader r_a{a};
   r_a("enabled", c.approach_enabled);
   r_a("motion", c.approach_motion);
@@ -227,6 +245,12 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_a("still_speed_m_s", c.approach_still_speed_m_s);
   r_a("speed_smooth", c.approach_speed_smooth);
   r_a("window_heading_max_deg", c.approach_window_heading_max_deg);
+  r_a("anisotropic", c.approach_anisotropic);
+  r_a("enter_forward_m", c.approach_enter_forward_m);
+  r_a("enter_lateral_m", c.approach_enter_lateral_m);
+  r_a("target_forward_m", c.approach_target_forward_m);
+  r_a("no_progress_limit", c.approach_no_progress_limit);
+  r_a("net_windows", c.approach_net_windows);
 
   const YAML::Node s = root["seam"];
   reject_unknown(s, "seam",
@@ -253,6 +277,8 @@ bool Cfg::operator==(const Cfg& o) const {
          plane_close_px == o.plane_close_px &&
          plane_fit_slack == o.plane_fit_slack &&
          plane_range_max_m == o.plane_range_max_m &&
+         plane_color_pool == o.plane_color_pool &&
+         plane_color_inset_frac == o.plane_color_inset_frac &&
          chroma_reject == o.chroma_reject && proc_width == o.proc_width &&
          min_area_frac == o.min_area_frac && min_px_floor == o.min_px_floor &&
          min_visible == o.min_visible &&
@@ -267,6 +293,13 @@ bool Cfg::operator==(const Cfg& o) const {
          horizon_gain == o.horizon_gain && stance_band_m == o.stance_band_m &&
          scan_sweep_deg == o.scan_sweep_deg && settle_steps == o.settle_steps &&
          scan_steps == o.scan_steps && hold_tail == o.hold_tail &&
+         stateful_scan == o.stateful_scan &&
+         lock_candidate_identity == o.lock_candidate_identity &&
+         smooth_scan == o.smooth_scan &&
+         scan_yaw_rate_deg == o.scan_yaw_rate_deg &&
+         scan_yaw_accel_deg == o.scan_yaw_accel_deg &&
+         near_reframe_range_m == o.near_reframe_range_m &&
+         near_reframe_deg == o.near_reframe_deg &&
          approach_enabled == o.approach_enabled &&
          approach_motion == o.approach_motion &&
          approach_enter_m == o.approach_enter_m &&
@@ -281,6 +314,12 @@ bool Cfg::operator==(const Cfg& o) const {
          approach_still_speed_m_s == o.approach_still_speed_m_s &&
          approach_speed_smooth == o.approach_speed_smooth &&
          approach_window_heading_max_deg == o.approach_window_heading_max_deg &&
+         approach_anisotropic == o.approach_anisotropic &&
+         approach_enter_forward_m == o.approach_enter_forward_m &&
+         approach_enter_lateral_m == o.approach_enter_lateral_m &&
+         approach_target_forward_m == o.approach_target_forward_m &&
+         approach_no_progress_limit == o.approach_no_progress_limit &&
+         approach_net_windows == o.approach_net_windows &&
          blend_frames == o.blend_frames && lead_in_rate == o.lead_in_rate &&
          lead_in_min_s == o.lead_in_min_s && lead_in_max_s == o.lead_in_max_s &&
          enter_yaw_rate_deg == o.enter_yaw_rate_deg &&
@@ -350,6 +389,21 @@ void Cfg::validate() const {
         "repose planner: approach window_step/still_speed must be positive, "
         "window_snap non-negative, speed_smooth a positive odd number, and "
         "window_heading_max_deg in (0, 180]");
+  if (approach_enter_forward_m <= 0.0f || approach_enter_lateral_m <= 0.0f ||
+      approach_target_forward_m < 0.0f ||
+      approach_target_forward_m >= approach_enter_forward_m ||
+      approach_no_progress_limit < 1)
+    throw std::runtime_error(
+        "repose planner: v9 approach needs positive forward/lateral gates, "
+        "0 <= target_forward_m < enter_forward_m, and no_progress_limit >= 1");
+  if (near_reframe_range_m <= 0.0f || near_reframe_deg <= 0.0f ||
+      near_reframe_deg > scan_sweep_deg)
+    throw std::runtime_error(
+        "repose planner: near reframe needs a positive range and an angle in "
+        "(0, scan_sweep_deg]");
+  if (scan_yaw_rate_deg <= 0.0f || scan_yaw_accel_deg <= 0.0f)
+    throw std::runtime_error(
+        "repose planner: scan yaw rate and acceleration must be positive");
 
   // ── the knobs the yaml only just gained a way to get wrong ──
   if (min_value < 0 || min_value > 255)
@@ -404,6 +458,9 @@ void Cfg::validate() const {
   if (plane_range_max_m <= 0.0f)
     throw std::runtime_error(
         "repose planner: observe.plane.range_max_m must be > 0");
+  if (plane_color_inset_frac < 0.0f || plane_color_inset_frac >= 0.5f)
+    throw std::runtime_error(
+        "repose planner: observe.plane.color_inset_frac must be in [0, 0.5)");
   for (float v : palette)
     if (!(v >= 0.0f && v <= 255.0f))
       throw std::runtime_error(

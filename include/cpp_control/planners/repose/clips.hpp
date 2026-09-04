@@ -34,11 +34,17 @@ struct Plan {
   int frames = 0;  ///< length of the reference this plan publishes
   float yaw_offset = 0.f;  ///< SCAN: the swept turn. CLIP: solved from the cube
   float entry_yaw = 0.f;   ///< CLIP: heading residual at entry (the warp, §5)
+  /// For APPROACH, `entry_yaw` becomes the walk heading. This retains the
+  /// selected manipulation stance's heading so post-walk progress can be
+  /// measured against the same row/symmetry rather than a fresh arg-min.
+  float matched_entry_yaw = 0.f;
   /// Winning clip entry translation in the live ROBOT base frame. These stay
   /// separate from `cost`: APPROACH may act on translation but not heading or
   /// the horizon penalty.
   float entry_translation = 0.f;
   float entry_bearing = 0.f;
+  float entry_forward = 0.f;  ///< desired base-frame displacement, +x forward
+  float entry_lateral = 0.f;  ///< desired base-frame displacement, +y left
   float approach_requested = 0.f;
   float approach_covered = 0.f;
   int approach_window = -1;
@@ -46,6 +52,8 @@ struct Plan {
   /// entry stance named by `row` and `sym`. The node keeps that identity stable
   /// until the turn is paid, while the cube pose itself is remeasured.
   bool approach_turn = false;
+  bool search_scan = false;
+  int search_phase = -1;
   float cost = 0.f;
   char delta = '-';
   std::string label = "init";
@@ -77,6 +85,14 @@ class Clips {
   /// This is the continuity seam for a preparatory turn: fresh geometry, same
   /// physical entry stance. It does not burn or otherwise mutate the ladder.
   Plan retarget(const Plan& anchor, const Sight& see) const;
+
+  /// Retarget one selected row while preserving the physical symmetry branch
+  /// across CubeSight's +/-45 degree fold. `target_world_yaw` is the absolute
+  /// entry heading chosen when the lock was acquired; `robot_yaw` is current.
+  /// The returned symmetry is whichever of the four equivalent square axes
+  /// keeps that target continuous.
+  Plan retarget_heading_locked(const Plan& anchor, const Sight& see,
+                               float robot_yaw, float target_world_yaw) const;
 
   void set_target_color(int c);
   int target_color() const { return target_; }

@@ -910,6 +910,44 @@ Sight CubeSight::read_plane(const cv::Mat& depth, int min_px, float edge,
     s.reason = rejected;
     return s;
   }
+  if (cfg_.plane_color_pool) {
+    // Geometry has already paid for the square. Project every image ray onto
+    // its known top plane and vote RGB inside the fitted footprint, including
+    // pixels whose D435i depth is missing at an edge or texture boundary.
+    // A small inset keeps side-face/background antialiasing out of the pool.
+    std::array<int, NUM_COLORS> vote{};
+    const float half = edge * (0.5f - cfg_.plane_color_inset_frac);
+    const float cp = std::cos(best.phi), sp = std::sin(best.phi);
+    const float camera_height = ground.n[0] * cam.t[0] +
+                                ground.n[1] * cam.t[1] +
+                                ground.n[2] * cam.t[2] + ground.d;
+    for (int pixel = 0; pixel < total; ++pixel) {
+      const int color = labels_.ptr<int16_t>()[pixel];
+      if (color < 0 || color >= NUM_COLORS) continue;
+      const float* ray = &rays_[static_cast<size_t>(pixel) * 3];
+      const float dx = R[0] * ray[0] + R[1] * ray[1] + R[2] * ray[2];
+      const float dy = R[3] * ray[0] + R[4] * ray[1] + R[5] * ray[2];
+      const float dz = R[6] * ray[0] + R[7] * ray[1] + R[8] * ray[2];
+      const float denom =
+          ground.n[0] * dx + ground.n[1] * dy + ground.n[2] * dz;
+      if (std::fabs(denom) < 1e-6f) continue;
+      const float lambda = (edge - camera_height) / denom;
+      if (lambda <= 0.0f) continue;
+      const float x = cam.t[0] + lambda * dx - best.cx;
+      const float y = cam.t[1] + lambda * dy - best.cy;
+      const float u = cp * x + sp * y;
+      const float v = -sp * x + cp * y;
+      if (std::fabs(u) <= half && std::fabs(v) <= half) ++vote[color];
+    }
+    const int pooled = static_cast<int>(
+        std::max_element(vote.begin(), vote.end()) - vote.begin());
+    best.color_px = vote[pooled];
+    best.color = best.color_px >= min_px ? pooled : -1;
+    for (int color = 0; color < NUM_COLORS; ++color)
+      if (vote[color] > 0)
+        last_.push_back({color, vote[color], best.up, best.vis, best.big,
+                         best.cx, best.cy});
+  }
   s.pos = {best.cx, best.cy, best.z};
   s.phi = best.phi;
   s.n_px = best.color >= 0 ? best.color_px : best.support;

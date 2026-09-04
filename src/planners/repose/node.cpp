@@ -525,9 +525,10 @@ class ReposeNode : public rclcpp::Node {
 
     clips_->observe(*belief_);
     Plan raw_candidate = clips_->decide(*belief_);
+    raw_candidate = hold_candidate_identity(raw_candidate);
     raw_candidate = hold_approach_turn_identity(raw_candidate);
     update_approach_feedback(raw_candidate);
-    candidate_ = admit_approach(raw_candidate);
+    candidate_ = shape_scan(admit_approach(raw_candidate));
 
     if (controller_.reference_id != reference_id_) {
       // the controller commits on arrival, so this is a dropped message, not a
@@ -576,7 +577,48 @@ class ReposeNode : public rclcpp::Node {
     awaiting_approach_measurement_ = false;
     approach_before_m_ = 0.0f;
     approach_progress_m_ = 0.0f;
+    approach_measure_anchor_ = Plan{};
+    approach_measure_target_yaw_ = 0.0f;
+    clear_candidate_lock();
+    reset_scan();
     clear_approach_turn();
+  }
+
+  void clear_candidate_lock() {
+    candidate_locked_ = false;
+    candidate_lock_rung_ = -1;
+    candidate_anchor_ = Plan{};
+    candidate_target_yaw_ = 0.0f;
+  }
+
+  /// A square pose is reported modulo 90 degrees. Near the +/-45 degree fold,
+  /// two equally valid frames can therefore change `phi` by 90 degrees. A
+  /// fresh global arg-min then changes row/symmetry and makes the desired
+  /// stance jump even though neither robot nor cube did. Lock the first
+  /// selected row and its absolute entry heading for this decision interval;
+  /// `retarget_heading_locked` changes the symmetry index when the fold moves.
+  Plan hold_candidate_identity(const Plan& raw) {
+    if (!cfg_.lock_candidate_identity) return raw;
+    if (clips_->done() ||
+        (candidate_locked_ && clips_->rung() != candidate_lock_rung_))
+      clear_candidate_lock();
+    if (approach_turn_locked_) return raw;
+    // A lost/partial sight ends this decision interval. Keeping the identity
+    // across a scan would resurrect a stale stance after the robot or cube had
+    // moved; reacquire from the full table when a placed cube returns.
+    if (raw.mode != Mode::CLIP) {
+      clear_candidate_lock();
+      return raw;
+    }
+    if (!candidate_locked_) {
+      candidate_locked_ = true;
+      candidate_lock_rung_ = clips_->rung();
+      candidate_anchor_ = raw;
+      candidate_target_yaw_ = wrap(robot_yaw() + raw.entry_yaw);
+      return raw;
+    }
+    return clips_->retarget_heading_locked(candidate_anchor_, belief_->pose(),
+                                           robot_yaw(), candidate_target_yaw_);
   }
 
   void clear_approach_turn() {
@@ -584,6 +626,7 @@ class ReposeNode : public rclcpp::Node {
     approach_turn_attempts_ = 0;
     approach_turn_rung_ = -1;
     approach_turn_anchor_ = Plan{};
+    approach_turn_target_yaw_ = 0.0f;
   }
 
   /// A robot-frame turn must not trigger a new global arg-min over clip rows
@@ -601,7 +644,11 @@ class ReposeNode : public rclcpp::Node {
     // partial observations keep their normal SETTLE/SCAN recovery; the lock is
     // merely waiting and never substitutes a stale pose.
     if (raw.mode != Mode::CLIP) return raw;
-    return clips_->retarget(approach_turn_anchor_, belief_->pose());
+    return cfg_.lock_candidate_identity
+               ? clips_->retarget_heading_locked(approach_turn_anchor_,
+                                                 belief_->pose(), robot_yaw(),
+                                                 approach_turn_target_yaw_)
+               : clips_->retarget(approach_turn_anchor_, belief_->pose());
   }
 
   /// Evaluate one completed leg only after SETTLE has rebuilt a valid pose.
@@ -612,7 +659,10 @@ class ReposeNode : public rclcpp::Node {
     if (approach_rung_ >= 0 && clips_->rung() != approach_rung_)
       reset_approach();
     if (awaiting_approach_measurement_) {
-      approach_progress_m_ = approach_before_m_ - raw.entry_translation;
+      const Plan measured = clips_->retarget_heading_locked(
+          approach_measure_anchor_, belief_->pose(), robot_yaw(),
+          approach_measure_target_yaw_);
+      approach_progress_m_ = approach_before_m_ - measured.entry_translation;
       awaiting_approach_measurement_ = false;
       if (approach_progress_m_ + 1e-6f < cfg_.approach_min_progress_m)
         ++approach_no_progress_;
@@ -621,11 +671,16 @@ class ReposeNode : public rclcpp::Node {
       RCLCPP_INFO(this->get_logger(),
                   "approach measured: %.3f -> %.3f m (progress %+.3f, "
                   "attempt %d/%d)",
-                  approach_before_m_, raw.entry_translation,
+                  approach_before_m_, measured.entry_translation,
                   approach_progress_m_, approach_attempts_,
                   cfg_.approach_max_attempts);
     }
-    if (raw.entry_translation <= cfg_.approach_enter_m) {
+    const bool ready =
+        cfg_.approach_anisotropic
+            ? std::fabs(raw.entry_forward) <= cfg_.approach_enter_forward_m &&
+                  std::fabs(raw.entry_lateral) <= cfg_.approach_enter_lateral_m
+            : raw.entry_translation <= cfg_.approach_enter_m;
+    if (ready) {
       // Inside the proven clip-correction band. This also makes an
       // approach-only drag test re-arm automatically once the robot arrives.
       approach_attempts_ = 0;
@@ -639,6 +694,8 @@ class ReposeNode : public rclcpp::Node {
     p.cost = raw.cost;
     p.entry_translation = raw.entry_translation;
     p.entry_bearing = raw.entry_bearing;
+    p.entry_forward = raw.entry_forward;
+    p.entry_lateral = raw.entry_lateral;
     p.label = label;
     return p;
   }
@@ -650,10 +707,15 @@ class ReposeNode : public rclcpp::Node {
     if (raw.mode != Mode::CLIP) return raw;
     if (!cfg_.approach_enabled)
       return approach_only_ ? parked_candidate(raw, "approach off") : raw;
-    if (raw.entry_translation <= cfg_.approach_enter_m)
+    const bool ready =
+        cfg_.approach_anisotropic
+            ? std::fabs(raw.entry_forward) <= cfg_.approach_enter_forward_m &&
+                  std::fabs(raw.entry_lateral) <= cfg_.approach_enter_lateral_m
+            : raw.entry_translation <= cfg_.approach_enter_m;
+    if (ready)
       return approach_only_ ? parked_candidate(raw, "approach ready") : raw;
     if (approach_attempts_ >= cfg_.approach_max_attempts ||
-        approach_no_progress_ >= 2)
+        approach_no_progress_ >= cfg_.approach_no_progress_limit)
       return parked_candidate(raw, "approach blocked");
 
     const float turn_max =
@@ -668,6 +730,10 @@ class ReposeNode : public rclcpp::Node {
       p.cost = raw.cost;
       p.entry_translation = raw.entry_translation;
       p.entry_bearing = raw.entry_bearing;
+      p.entry_forward = raw.entry_forward;
+      p.entry_lateral = raw.entry_lateral;
+      p.entry_yaw = raw.entry_yaw;
+      p.matched_entry_yaw = raw.entry_yaw;
       p.row = raw.row;
       p.sym = raw.sym;
       p.delta = raw.delta;
@@ -676,6 +742,52 @@ class ReposeNode : public rclcpp::Node {
       return p;
     }
     return approach_->plan(raw);
+  }
+
+  void reset_scan() {
+    search_scan_active_ = false;
+    search_scan_phase_ = 0;
+    search_scan_sign_ = 1.0f;
+    search_scan_rung_ = -1;
+  }
+
+  /// Turn a blind search into a non-cancelling sequence. Relative headings
+  /// +90,-180,-90 visit left, right, then back instead of oscillating between
+  /// the same two headings. A colour-bearing partial top is not blind: keep its
+  /// directed reframe, and make it smaller when the partial geometry is close.
+  Plan shape_scan(Plan raw) {
+    if (raw.mode != Mode::SCAN || raw.approach_turn) {
+      if (raw.mode == Mode::CLIP || raw.mode == Mode::APPROACH) reset_scan();
+      return raw;
+    }
+    if (!cfg_.stateful_scan) return raw;
+    if (belief_->valid()) {
+      reset_scan();
+      const Sight& partial = belief_->newest();
+      if (partial.range_m() > 0.0f &&
+          partial.range_m() < cfg_.near_reframe_range_m) {
+        const float limit =
+            cfg_.near_reframe_deg * 3.14159265358979323846f / 180.0f;
+        raw.yaw_offset = std::clamp(raw.yaw_offset, -limit, limit);
+        if (std::fabs(raw.yaw_offset) < 0.25f * limit)
+          raw.yaw_offset = std::copysign(0.25f * limit, raw.yaw_offset);
+        raw.label = "near reframe";
+      }
+      return raw;
+    }
+    if (!search_scan_active_ || search_scan_rung_ != clips_->rung()) {
+      search_scan_active_ = true;
+      search_scan_phase_ = 0;
+      search_scan_rung_ = clips_->rung();
+      search_scan_sign_ = raw.yaw_offset < 0.0f ? -1.0f : 1.0f;
+    }
+    static constexpr float kScale[3] = {1.0f, -2.0f, -1.0f};
+    const float sweep = cfg_.scan_sweep_deg * 3.14159265358979323846f / 180.0f;
+    raw.yaw_offset = search_scan_sign_ * kScale[search_scan_phase_] * sweep;
+    raw.search_scan = true;
+    raw.search_phase = search_scan_phase_;
+    raw.label = "search " + std::to_string(search_scan_phase_ + 1) + "/3";
+    return raw;
   }
 
   /// v7.1 only. A clip is entered through a ramp, and the ramp is its OWN act:
@@ -690,25 +802,37 @@ class ReposeNode : public rclcpp::Node {
   /// at the clip's own commit (vibe docs/sys1_v7.md §7.1, `_maybe_enter`); here
   /// the equivalent is to re-engage, and to carry the heading across the seam
   /// as an absolute target rather than a residual that goes stale.
-  bool ramping() const { return cfg_.enter_yaw_rate_deg > 0.0f; }
+  bool ramping(const Plan& p) const {
+    return cfg_.enter_yaw_rate_deg > 0.0f &&
+           (p.mode == Mode::CLIP || p.mode == Mode::APPROACH);
+  }
 
   void commit(const Plan& plan) {
-    if (ramping() && plan.mode == Mode::CLIP) return commit_enter(plan);
+    if (ramping(plan)) return commit_enter(plan);
     stage_ = ReferenceWriter::Stage::FULL;
     live_.held_row.clear();
     plan_ = plan;
     clips_->commit(plan_);  // burn the clip, count the roll
+    if (plan_.search_scan) {
+      search_scan_phase_ = plan_.search_phase + 1;
+      if (search_scan_phase_ >= 3) {
+        search_scan_phase_ = 0;
+        search_scan_sign_ = -search_scan_sign_;
+      }
+    }
     if (plan_.approach_turn) {
       if (!approach_turn_locked_) {
         approach_turn_locked_ = true;
         approach_turn_anchor_ = plan_;
         approach_turn_anchor_.mode = Mode::CLIP;
         approach_turn_rung_ = clips_->rung();
+        approach_turn_target_yaw_ = wrap(robot_yaw() + plan_.entry_yaw);
         RCLCPP_INFO(this->get_logger(),
-                    "approach turn locked: row %d sym %d at rung %d",
-                    plan_.row, plan_.sym, approach_turn_rung_);
+                    "approach turn locked: row %d sym %d at rung %d", plan_.row,
+                    plan_.sym, approach_turn_rung_);
       }
       ++approach_turn_attempts_;
+      clear_candidate_lock();
       RCLCPP_INFO(this->get_logger(),
                   "approach turn commit: entry %.3f m at %+.1f deg "
                   "(attempt %d/%d)",
@@ -723,9 +847,13 @@ class ReposeNode : public rclcpp::Node {
       // identity lock crosses only the in-place turn, never locomotion.
       clear_approach_turn();
       approach_before_m_ = plan_.entry_translation;
+      approach_measure_anchor_ = plan_;
+      approach_measure_target_yaw_ =
+          wrap(robot_yaw() + plan_.matched_entry_yaw);
       awaiting_approach_measurement_ = true;
       approach_rung_ = clips_->rung();
       ++approach_attempts_;
+      clear_candidate_lock();
       RCLCPP_INFO(this->get_logger(),
                   "approach commit: entry %.3f m at %+.1f deg, ask %.3f m, "
                   "window %.3f m (attempt %d/%d)",
@@ -733,6 +861,7 @@ class ReposeNode : public rclcpp::Node {
                   plan_.approach_requested, plan_.approach_covered,
                   approach_attempts_, cfg_.approach_max_attempts);
     } else if (plan_.mode == Mode::CLIP) {
+      clear_candidate_lock();
       reset_approach();
     }
     reference_id_ = "the planner-" + std::to_string(++seq_);
@@ -750,6 +879,7 @@ class ReposeNode : public rclcpp::Node {
     // base-frame residual, so it goes stale the instant the robot turns; the
     // absolute target it implies does not.
     enter_target_yaw_ = wrap(robot_yaw() + clip.entry_yaw);
+    enter_matched_target_yaw_ = wrap(robot_yaw() + clip.matched_entry_yaw);
     // Start the ramp from what the controller is being TOLD, not from where it
     // is.
     if (const float* held = writer_->final_row())
@@ -778,7 +908,26 @@ class ReposeNode : public rclcpp::Node {
     in_enter_ = false;
     live_.held_row.clear();
     plan_ = clip;
-    clips_->commit(plan_);  // the clip burns here, once — the ramp burned none
+    clips_->commit(plan_);  // APPROACH is ignored; a CLIP burns exactly once
+    if (plan_.mode == Mode::APPROACH) {
+      clear_approach_turn();
+      approach_before_m_ = plan_.entry_translation;
+      approach_measure_anchor_ = plan_;
+      approach_measure_target_yaw_ = enter_matched_target_yaw_;
+      awaiting_approach_measurement_ = true;
+      approach_rung_ = clips_->rung();
+      ++approach_attempts_;
+      clear_candidate_lock();
+      RCLCPP_INFO(this->get_logger(),
+                  "approach commit after ramp: entry %.3f m at %+.1f deg, "
+                  "ask %.3f m, window %.3f m (attempt %d/%d)",
+                  plan_.entry_translation, plan_.entry_bearing * 57.2958f,
+                  plan_.approach_requested, plan_.approach_covered,
+                  approach_attempts_, cfg_.approach_max_attempts);
+    } else {
+      clear_candidate_lock();
+      reset_approach();
+    }
     reference_id_ = "the planner-" + std::to_string(++seq_);
     waiting_ = 0;
     committed_ = true;
@@ -822,6 +971,8 @@ class ReposeNode : public rclcpp::Node {
     m.entry_yaw = plan_.entry_yaw;
     m.entry_translation_m = plan_.entry_translation;
     m.entry_bearing_rad = plan_.entry_bearing;
+    m.entry_forward_m = plan_.entry_forward;
+    m.entry_lateral_m = plan_.entry_lateral;
     m.approach_requested_m = plan_.approach_requested;
     m.approach_covered_m = plan_.approach_covered;
     m.frames = writer_->frames();
@@ -834,6 +985,14 @@ class ReposeNode : public rclcpp::Node {
     m.cand_cost = candidate_.cost;
     m.cand_entry_translation_m = candidate_.entry_translation;
     m.cand_entry_bearing_rad = candidate_.entry_bearing;
+    m.cand_entry_forward_m = candidate_.entry_forward;
+    m.cand_entry_lateral_m = candidate_.entry_lateral;
+    m.candidate_locked = candidate_locked_ || approach_turn_locked_;
+    const Plan& lock =
+        approach_turn_locked_ ? approach_turn_anchor_ : candidate_anchor_;
+    m.candidate_lock_row = m.candidate_locked ? lock.row : -1;
+    m.candidate_lock_sym = m.candidate_locked ? lock.sym : -1;
+    m.search_phase = plan_.search_phase;
     m.approach_progress_m = approach_progress_m_;
     m.approach_attempts = approach_attempts_;
     m.approach_no_progress = approach_no_progress_;
@@ -921,6 +1080,8 @@ class ReposeNode : public rclcpp::Node {
   ReferenceWriter::Stage stage_ = ReferenceWriter::Stage::FULL;
   bool in_enter_ = false;
   float enter_target_yaw_ = 0.f;  ///< absolute heading, frozen at the ramp
+  float enter_matched_target_yaw_ =
+      0.f;  ///< manipulation stance retained while an APPROACH ramp turns
   std::string reference_id_;
   uint64_t seq_ = 0;
   int waiting_ = 0;
@@ -929,11 +1090,21 @@ class ReposeNode : public rclcpp::Node {
   bool approach_only_ = false;
   int approach_attempts_ = 0, approach_no_progress_ = 0;
   int approach_rung_ = -1;
+  Plan candidate_anchor_;
+  bool candidate_locked_ = false;
+  int candidate_lock_rung_ = -1;
+  float candidate_target_yaw_ = 0.0f;
   Plan approach_turn_anchor_;
   bool approach_turn_locked_ = false;
   int approach_turn_attempts_ = 0, approach_turn_rung_ = -1;
+  float approach_turn_target_yaw_ = 0.0f;
   bool awaiting_approach_measurement_ = false;
+  Plan approach_measure_anchor_;
+  float approach_measure_target_yaw_ = 0.0f;
   float approach_before_m_ = 0.0f, approach_progress_m_ = 0.0f;
+  bool search_scan_active_ = false;
+  int search_scan_phase_ = 0, search_scan_rung_ = -1;
+  float search_scan_sign_ = 1.0f;
   float observe_ms_ = 0.f;
 
   rclcpp::Publisher<msg::MotionReference>::SharedPtr reference_pub_;
