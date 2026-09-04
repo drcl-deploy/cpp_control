@@ -16,9 +16,7 @@ namespace {
 constexpr float kPi = static_cast<float>(M_PI);
 
 /// Angle into [-pi, pi).
-float wrap(float a) {
-  return std::atan2(std::sin(a), std::cos(a));
-}
+float wrap(float a) { return std::atan2(std::sin(a), std::cos(a)); }
 
 /// v5's escape when a delta keeps failing — swap the ROLL AXIS, not the sign.
 char other_axis(char d) {
@@ -48,10 +46,16 @@ float se2(const ClipRow& r, const float q[3], int m, float arm_radius) {
 
 const char* mode_name(Mode m) {
   switch (m) {
-    case Mode::SETTLE: return "settle";
-    case Mode::SCAN:   return "scan";
-    case Mode::CLIP:   return "clip";
-    default:           return "init";
+    case Mode::SETTLE:
+      return "settle";
+    case Mode::SCAN:
+      return "scan";
+    case Mode::CLIP:
+      return "clip";
+    case Mode::APPROACH:
+      return "approach";
+    default:
+      return "init";
   }
 }
 
@@ -154,14 +158,15 @@ void Clips::commit(const Plan& p) {
 
 // ── THE ONE RANKING SCALAR ───────────────────────────────────────
 //
-// The warp is cube-exact, so what the controller must self-correct is exactly the stance
-// residual: the robot's SE(2) pose in the CUBE's frame, ours minus the
-// recording's. The cube's 4-fold symmetry gives four free warps, so take the
-// best. Range, bearing and spin all fold into this one distance.
+// The warp is cube-exact, so what the controller must self-correct is exactly
+// the stance residual: the robot's SE(2) pose in the CUBE's frame, ours minus
+// the recording's. The cube's 4-fold symmetry gives four free warps, so take
+// the best. Range, bearing and spin all fold into this one distance.
 //
 // Deliberately UNCAPPED. A clip committed with half a metre of residual is not
-// a planner bug, it is the experiment: whatever closes that gap is the controller's
-// implicit localisation, and `cost` is published so the bag can price it.
+// a planner bug, it is the experiment: whatever closes that gap is the
+// controller's implicit localisation, and `cost` is published so the bag can
+// price it.
 
 Plan Clips::retrieve(const Sight& see) const {
   const char d = delta();
@@ -198,20 +203,54 @@ Plan Clips::retrieve(const Sight& see) const {
     }
   }
 
-  const ClipRow& r = t_.rows()[best_row];
+  return candidate(see, best_row, best_sym, d);
+}
+
+Plan Clips::retarget(const Plan& anchor, const Sight& see) const {
+  if (anchor.row < 0 || anchor.row >= static_cast<int>(t_.rows().size()) ||
+      anchor.sym < 0 || anchor.sym >= 4)
+    throw std::runtime_error(
+        "repose planner: cannot retarget an invalid approach-turn anchor");
+  return candidate(see, anchor.row, anchor.sym, anchor.delta);
+}
+
+Plan Clips::candidate(const Sight& see, int row, int sym, char delta) const {
+  const ClipRow& r = t_.rows()[row];
+  // Robot SE(2) in the cube frame, as in retrieve(). Keeping this computation
+  // here makes a locked candidate differ from a global retrieval in identity
+  // only; its cost and entry geometry are always based on the newest sight.
+  const float c = std::cos(-see.phi), s = std::sin(-see.phi);
+  const float x = -see.pos[0], y = -see.pos[1];
+  const float q[3] = {c * x - s * y, s * x + c * y, -see.phi};
+  const float horizon =
+      cfg_.horizon_gain * std::fabs(r.exit_range - cfg_.stance_band_m);
+
   Plan p;
   p.mode = Mode::CLIP;
-  p.row = best_row;
-  p.sym = best_sym;
+  p.row = row;
+  p.sym = sym;
   p.frames = r.span_len;
-  p.cost = best;
-  p.delta = d;
+  p.cost = se2(r, q, sym, cfg_.arm_radius) + horizon;
+  p.delta = delta;
   // Anchor on the cube, never the robot: rotating the reference about the cube
-  // puts the residual on the reference ROBOT, which the controller tracks. This scalar IS
-  // that rotation, and it is exactly the heading term the cost just minimised.
-  p.entry_yaw = wrap(r.qth + best_sym * (kPi / 2.0f) + see.phi);
+  // puts the residual on the reference ROBOT, which the controller tracks. This
+  // scalar IS that rotation, and it is exactly the heading term the cost just
+  // minimised.
+  p.entry_yaw = wrap(r.qth + sym * (kPi / 2.0f) + see.phi);
+  // The same translation term `se2()` ranked, now expressed in the robot base
+  // frame. It is the physical displacement that would put the live robot at
+  // this clip's recorded entry stance; no odometry or total-cost weights enter.
+  const float a = sym * (kPi / 2.0f);
+  const float ca = std::cos(a), sa = std::sin(a);
+  const float rx = ca * r.qx - sa * r.qy;
+  const float ry = sa * r.qx + ca * r.qy;
+  const float cp = std::cos(see.phi), sp = std::sin(see.phi);
+  const float ex = see.pos[0] + cp * rx - sp * ry;
+  const float ey = see.pos[1] + sp * rx + cp * ry;
+  p.entry_translation = std::hypot(ex, ey);
+  p.entry_bearing = std::atan2(ey, ex);
   char buf[32];
-  std::snprintf(buf, sizeof(buf), "%c#%d", d, r.clip);
+  std::snprintf(buf, sizeof(buf), "%c#%d", delta, r.clip);
   p.label = buf;
   return p;
 }

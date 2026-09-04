@@ -257,6 +257,7 @@ if(OpenCV_FOUND)
     src/planners/repose/cfg.cpp
     src/planners/repose/sight.cpp
     src/planners/repose/clips.cpp
+    src/planners/repose/approach.cpp
     src/planners/repose/table.cpp
     src/planners/repose/writer.cpp)
   target_include_directories(cpp_control_repose_planner PUBLIC ${OpenCV_INCLUDE_DIRS})
@@ -274,6 +275,8 @@ if(OpenCV_FOUND)
              --check-preset-parity)
     add_test(NAME repose_planner_v8_config_selftest COMMAND repose_planner_selftest
              --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_real_v8.yaml)
+    add_test(NAME repose_planner_v85_config_selftest COMMAND repose_planner_selftest
+             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v8_5.yaml)
   endif()
   list(APPEND INSTALL_TARGETS repose_planner_selftest)
 

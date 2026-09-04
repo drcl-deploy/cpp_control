@@ -8,12 +8,17 @@ uint8 INIT=0
 uint8 SETTLE=1
 uint8 SCAN=2
 uint8 CLIP=3
+uint8 APPROACH=4
 
 # what the controller is playing right now (the last committed plan)
 uint8 mode
 string label            # 'settle' | 'scan' | '<delta>#<clip>'
 float32 cost            # metres of stance residual the controller must self-correct
 float32 entry_yaw
+float32 entry_translation_m
+float32 entry_bearing_rad
+float32 approach_requested_m
+float32 approach_covered_m
 int32 frames
 int32 lead_in_frames
 bool committed          # this tick is the one that published the reference
@@ -23,6 +28,18 @@ bool committed          # this tick is the one that published the reference
 uint8 cand_mode
 string cand_label
 float32 cand_cost
+float32 cand_entry_translation_m
+float32 cand_entry_bearing_rad
+
+# v8.5 approach outcome, evaluated from fresh RGB-D after the walk settles
+float32 approach_progress_m
+int32 approach_attempts
+int32 approach_no_progress
+bool approach_only
+bool approach_turn_locked     # selected row/sym held across an in-place turn
+int32 approach_turn_attempts  # hard-capped; cannot oscillate forever
+int32 approach_turn_row
+int32 approach_turn_sym
 
 # the ladder
 uint8 delta             # ascii rung letter being asked for
@@ -50,5 +67,5 @@ float32 bearing_rad
 float32 phi_rad
 int32 n_px
 
-string version          # v6 | v7 | v7.1 | v8
+string version          # v6 | v7 | v7.1 | v8 | v8.5
 float32 observe_ms

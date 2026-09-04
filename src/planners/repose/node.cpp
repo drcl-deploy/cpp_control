@@ -1,5 +1,6 @@
 /**
- * Repose planner — level 3, above the controller. Camera in, MotionReference out.
+ * Repose planner — level 3, above the controller. Camera in, MotionReference
+ * out.
  *
  * Soft real-time and a separate process on purpose: it must never sit in the
  * 50 Hz loop, and the controller has to stay runnable without it (open-loop
@@ -30,10 +31,14 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cpp_control/msg/controller_status.hpp>
+#include <cpp_control/msg/motion_reference.hpp>
+#include <cpp_control/msg/planner_status.hpp>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -43,26 +48,22 @@
 #include <std_msgs/msg/int32.hpp>
 #include <string>
 #include <thread>
-#include <vector>
-#include <yaml-cpp/yaml.h>
-
-#include <cpp_control/msg/motion_reference.hpp>
-#include <cpp_control/msg/controller_status.hpp>
-#include <cpp_control/msg/planner_status.hpp>
 #include <unitree_hg/msg/low_state.hpp>
+#include <vector>
 #include <vision_encoders/frame_wire.hpp>
 
+#include "common/asset_path.hpp"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
 #include "common/math_utils.hpp"
-#include "cpp_control/tasks/vibe/task_profile.hpp"
+#include "cpp_control/planners/repose/approach.hpp"
 #include "cpp_control/planners/repose/belief.hpp"
-#include "common/asset_path.hpp"
 #include "cpp_control/planners/repose/clips.hpp"
 #include "cpp_control/planners/repose/kinematics.hpp"
 #include "cpp_control/planners/repose/sight.hpp"
 #include "cpp_control/planners/repose/table.hpp"
 #include "cpp_control/planners/repose/writer.hpp"
+#include "cpp_control/tasks/vibe/task_profile.hpp"
 
 namespace cpp_control {
 namespace planners {
@@ -94,6 +95,10 @@ class ReposeNode : public rclcpp::Node {
     if (config_path.empty())
       throw std::runtime_error("repose planner: config_path is required");
     load_config(config_path);
+    approach_only_ = this->declare_parameter("approach_only", false);
+    if (approach_only_ && !cfg_.approach_enabled)
+      throw std::runtime_error(
+          "repose planner: approach_only needs an approach-enabled config");
     // The experiment environment owns the camera address — setup.sh picks it,
     // the launch passes the same `camera_ip` to the encoder and to here, so the
     // two halves of one run cannot look at different cameras. Empty keeps the
@@ -103,21 +108,23 @@ class ReposeNode : public rclcpp::Node {
 
     // The goal colour conditions the POLICY's one-hot and steers the PLANNER's
     // ladder, and the two must not boot disagreeing: the topic keeps them in
-    // step afterwards, but nothing did until the first message. g1_repose_planner
-    // hands its `goal_color` here as well as to the controller, so one launch argument
-    // sets both. Out of range (the default) keeps the yaml, which is what a
-    // standalone `ros2 run` gets.
-    const auto target = static_cast<int>(
-        this->declare_parameter("target_color", -1));
+    // step afterwards, but nothing did until the first message.
+    // g1_repose_planner hands its `goal_color` here as well as to the
+    // controller, so one launch argument sets both. Out of range (the default)
+    // keeps the yaml, which is what a standalone `ros2 run` gets.
+    const auto target =
+        static_cast<int>(this->declare_parameter("target_color", -1));
     if (target >= 0 && target < vibe::NUM_CUBE_COLORS)
       clips_->set_target_color(target);
 
     reference_pub_ = this->create_publisher<msg::MotionReference>(
         this->declare_parameter("reference_topic", "/tracker/reference"), 10);
     status_pub_ = this->create_publisher<msg::PlannerStatus>(
-        this->declare_parameter("planner_status_topic", "/vibe/planner/status"), 10);
+        this->declare_parameter("planner_status_topic", "/vibe/planner/status"),
+        10);
     controller_sub_ = this->create_subscription<msg::ControllerStatus>(
-        this->declare_parameter("controller_status_topic", "/vibe/controller/status"),
+        this->declare_parameter("controller_status_topic",
+                                "/vibe/controller/status"),
         rclcpp::QoS(1).best_effort().durability_volatile(),
         [this](msg::ControllerStatus::SharedPtr m) {
           controller_ = *m;
@@ -144,16 +151,22 @@ class ReposeNode : public rclcpp::Node {
                   std::to_string(static_cast<int>(cfg_.enter_yaw_rate_deg)) +
                   " deg/s"
             : "";
-    RCLCPP_INFO(this->get_logger(),
-                "the planner %s ready: %zu clips (F%zu B%zu L%zu R%zu) | pattern %s | "
-                "target %s | belief %d/%d reads under %.2f rad/s%s | camera "
-                "%s:%u @ %.0f Hz",
-                version_.c_str(), table_.rows().size(), table_.pool('F').size(),
-                table_.pool('B').size(), table_.pool('L').size(),
-                table_.pool('R').size(), cfg_.pattern.c_str(),
-                vibe::cube_color_name(clips_->target_color()),
-                cfg_.belief_min_votes, cfg_.belief_window, cfg_.omega_still,
-                ramp.c_str(), camera_ip_.c_str(), camera_port_, rate_hz_);
+    const std::string approach =
+        cfg_.approach_enabled
+            ? " | APPROACH >" + std::to_string(cfg_.approach_enter_m) + " m" +
+                  (approach_only_ ? " ONLY" : "")
+            : "";
+    RCLCPP_INFO(
+        this->get_logger(),
+        "the planner %s ready: %zu clips (F%zu B%zu L%zu R%zu) | pattern %s | "
+        "target %s | belief %d/%d reads under %.2f rad/s%s%s | "
+        "camera %s:%u @ %.0f Hz",
+        version_.c_str(), table_.rows().size(), table_.pool('F').size(),
+        table_.pool('B').size(), table_.pool('L').size(),
+        table_.pool('R').size(), cfg_.pattern.c_str(),
+        vibe::cube_color_name(clips_->target_color()), cfg_.belief_min_votes,
+        cfg_.belief_window, cfg_.omega_still, ramp.c_str(), approach.c_str(),
+        camera_ip_.c_str(), camera_port_, rate_hz_);
   }
 
   ~ReposeNode() override {
@@ -176,12 +189,13 @@ class ReposeNode : public rclcpp::Node {
     const auto source = frames["source"].as<std::string>();
     const auto frames_path = asset_path(frames["path"].as<std::string>());
     if (source == "retargeted")
-      table_.load_frames_retargeted(asset_path(frames["library"].as<std::string>()),
-                                    frames_path);
+      table_.load_frames_retargeted(
+          asset_path(frames["library"].as<std::string>()), frames_path);
     else if (source == "baked")
       table_.load_frames_baked(frames_path);
     else
-      throw std::runtime_error("repose planner: frames.source must be retargeted | baked");
+      throw std::runtime_error(
+          "repose planner: frames.source must be retargeted | baked");
 
     const auto cam = root["camera"];
     camera_ip_ = cam["host"] ? cam["host"].as<std::string>() : "127.0.0.1";
@@ -195,19 +209,24 @@ class ReposeNode : public rclcpp::Node {
       mount_.quat = {q[0].as<float>(), q[1].as<float>(), q[2].as<float>(),
                      q[3].as<float>()};
 
-    const int target = root["target_color"] ? root["target_color"].as<int>() : 4;
+    const int target =
+        root["target_color"] ? root["target_color"].as<int>() : 4;
     clips_ = std::make_unique<Clips>(table_, cfg_, target);
     eye_ = std::make_unique<CubeSight>(cfg_, table_.half_extent());
     belief_ = std::make_unique<Belief>(cfg_);
-    writer_ = std::make_unique<ReferenceWriter>(table_, cfg_);
+    if (cfg_.approach_enabled)
+      approach_ = std::make_unique<ApproachSource>(
+          asset_path(cfg_.approach_motion), cfg_);
+    writer_ = std::make_unique<ReferenceWriter>(table_, cfg_, approach_.get());
 
     for (int i = 0; i < 3; ++i) {
       static const char* kWaist[3] = {"waist_yaw_joint", "waist_roll_joint",
                                       "waist_pitch_joint"};
-      const auto it = std::find(g1::MJ_JOINTS.begin(), g1::MJ_JOINTS.end(),
-                                kWaist[i]);
+      const auto it =
+          std::find(g1::MJ_JOINTS.begin(), g1::MJ_JOINTS.end(), kWaist[i]);
       if (it == g1::MJ_JOINTS.end())
-        throw std::runtime_error("repose planner: G1 joint table has no waist chain");
+        throw std::runtime_error(
+            "repose planner: G1 joint table has no waist chain");
       waist_[i] = static_cast<int>(it - g1::MJ_JOINTS.begin());
     }
     live_.joint_pos_il.assign(g1::NUM_JOINTS, 0.0f);
@@ -244,8 +263,8 @@ class ReposeNode : public rclcpp::Node {
 
   // ── The v7 still pose ──────────────────────────────────────────
   //
-  // Taken from the controller rather than parsed here: `default_joint_pos` is the
-  // manifest's, which is the pose the controller actually holds in
+  // Taken from the controller rather than parsed here: `default_joint_pos` is
+  // the manifest's, which is the pose the controller actually holds in
   // NOMINAL_POSE and the same array mjlab FKs. One source, so the stance the
   // planner commands and the stance the robot stands in cannot disagree.
   // Arrives on the first ControllerStatus, which the planner already waits for.
@@ -279,7 +298,8 @@ class ReposeNode : public rclcpp::Node {
 
   void on_goal_color(std_msgs::msg::Int32::SharedPtr m) {
     if (m->data < 0 || m->data >= vibe::NUM_CUBE_COLORS) {
-      RCLCPP_WARN(this->get_logger(), "ignoring invalid goal_color %d", m->data);
+      RCLCPP_WARN(this->get_logger(), "ignoring invalid goal_color %d",
+                  m->data);
       return;
     }
     // Re-picking the colour already selected is the operator saying "go again":
@@ -288,12 +308,14 @@ class ReposeNode : public rclcpp::Node {
     if (m->data == clips_->target_color()) {
       clips_->reset();
       belief_->clear();
+      reset_approach();
       RCLCPP_INFO(this->get_logger(), "re-armed on %s — episode %d",
                   vibe::cube_color_name(m->data), clips_->episode());
       return;
     }
     clips_->set_target_color(m->data);
     belief_->clear();
+    reset_approach();
     RCLCPP_INFO(this->get_logger(), "target -> %d (%s), episode %d", m->data,
                 vibe::cube_color_name(m->data), clips_->episode());
   }
@@ -318,9 +340,10 @@ class ReposeNode : public rclcpp::Node {
       addr.sin_family = AF_INET;
       addr.sin_port = htons(camera_port_);
       inet_pton(AF_INET, camera_ip_.c_str(), &addr.sin_addr);
-      if (fd < 0 || ::connect(fd, reinterpret_cast<sockaddr*>(&addr),
-                              sizeof(addr)) < 0) {
-        RCLCPP_WARN(this->get_logger(), "repose planner: cannot reach %s:%u, retrying",
+      if (fd < 0 ||
+          ::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "repose planner: cannot reach %s:%u, retrying",
                     camera_ip_.c_str(), camera_port_);
         if (fd >= 0) ::close(fd);
         std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -349,14 +372,16 @@ class ReposeNode : public rclcpp::Node {
       if (!depth_warned_ && ++colour_only_ > 200) {
         depth_warned_ = true;
         RCLCPP_ERROR(this->get_logger(),
-                     "repose planner: 200 frames with no depth plane — start the streamer "
+                     "repose planner: 200 frames with no depth plane — start "
+                     "the streamer "
                      "with --depth (or set camera_depth: 1 in the sim config)");
       }
       return;
     }
     if (!depth->has_intrinsics()) {
-      RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                            "repose planner: depth plane carries no intrinsics");
+      RCLCPP_ERROR_THROTTLE(
+          this->get_logger(), *this->get_clock(), 5000,
+          "repose planner: depth plane carries no intrinsics");
       return;
     }
 
@@ -397,14 +422,14 @@ class ReposeNode : public rclcpp::Node {
   /// measuring the camera's own rate is both simpler and the true condition, so
   /// a SCAN's sweep rejects itself and a SETTLE's whole hold is readable.
   ///
-  /// A CLIP is excluded outright rather than left to the gate. A clip has quiet
-  /// moments, but it spends them in an arbitrary exit pose whose waist aims the
-  /// head wherever the recording left it — that is precisely the v6 gaze the
-  /// nominal stance exists to escape, so those reads are quiet and still wrong.
-  /// The mandatory settle after every clip is what this produces: a clip ends
-  /// with an empty belief, and an empty belief plans the stance.
+  /// A CLIP/APPROACH is excluded outright rather than left to the gate. A clip
+  /// has quiet moments, but it spends them in an arbitrary exit pose whose
+  /// waist aims the head wherever the recording left it — that is precisely the
+  /// v6 gaze the nominal stance exists to escape, so those reads are quiet and
+  /// still wrong. The mandatory settle after every clip is what this produces:
+  /// a clip ends with an empty belief, and an empty belief plans the stance.
   void observe() {
-    if (plan_.mode == Mode::CLIP) return;
+    if (plan_.mode == Mode::CLIP || plan_.mode == Mode::APPROACH) return;
     const uint64_t seq = frame_seq_.load(std::memory_order_acquire);
     if (seq == seen_seq_) return;  // no new frame; the camera is slower than us
     seen_seq_ = seq;
@@ -424,7 +449,8 @@ class ReposeNode : public rclcpp::Node {
     const auto t0 = std::chrono::steady_clock::now();
     belief_->push((*eye_)(bgr, depth, intr, camera_pose()));
     observe_ms_ = std::chrono::duration<float, std::milli>(
-                      std::chrono::steady_clock::now() - t0).count();
+                      std::chrono::steady_clock::now() - t0)
+                      .count();
     ++frames_read_;
   }
 
@@ -451,14 +477,18 @@ class ReposeNode : public rclcpp::Node {
     // ── GUARD ──────────────────────────────────────────────
     if (!controller_seen_ || !controller_.accepting) {
       if (armed_)
-        RCLCPP_INFO(this->get_logger(),
-                    "repose planner: controller left POLICY — idle, still observing");
+        RCLCPP_INFO(
+            this->get_logger(),
+            "repose planner: controller left POLICY — idle, still observing");
       armed_ = false;
-      in_enter_ = false;  // a ramp is only valid against the yaw it was frozen at
+      in_enter_ =
+          false;  // a ramp is only valid against the yaw it was frozen at
+      reset_approach();
       // decide() is PURE, so an idle planner can still show what it WOULD do.
       // Only once the stance is known, or the preview would be solved against
       // the library's stand frame — v6's gaze, and a quietly wrong answer.
-      if (state_fresh && stance_known) candidate_ = clips_->decide(*belief_);
+      if (state_fresh && stance_known)
+        candidate_ = admit_approach(clips_->decide(*belief_));
       publish_status();
       return;
     }
@@ -467,10 +497,10 @@ class ReposeNode : public rclcpp::Node {
     // clip returns the robot to its feet instead of freezing it in the exit
     // pose of a half-finished turn.
     if (!state_fresh || !stance_known) {
-      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                           "repose planner: waiting for %s%s",
-                           state_fresh ? "" : "lowstate ",
-                           stance_known ? "" : "the controller's nominal stance");
+      RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(), 2000,
+          "repose planner: waiting for %s%s", state_fresh ? "" : "lowstate ",
+          stance_known ? "" : "the controller's nominal stance");
       publish_status();
       return;
     }
@@ -483,9 +513,10 @@ class ReposeNode : public rclcpp::Node {
       in_enter_ = false;
       clips_->reset();
       belief_->clear();
-      RCLCPP_INFO(this->get_logger(), "repose planner: armed, target %s, episode %d",
-                  vibe::cube_color_name(clips_->target_color()),
-                  clips_->episode());
+      reset_approach();
+      RCLCPP_INFO(
+          this->get_logger(), "repose planner: armed, target %s, episode %d",
+          vibe::cube_color_name(clips_->target_color()), clips_->episode());
       candidate_ = clips_->decide(*belief_);
       commit(candidate_);
       publish_status();
@@ -493,12 +524,17 @@ class ReposeNode : public rclcpp::Node {
     }
 
     clips_->observe(*belief_);
-    candidate_ = clips_->decide(*belief_);
+    Plan raw_candidate = clips_->decide(*belief_);
+    raw_candidate = hold_approach_turn_identity(raw_candidate);
+    update_approach_feedback(raw_candidate);
+    candidate_ = admit_approach(raw_candidate);
 
     if (controller_.reference_id != reference_id_) {
-      // the controller commits on arrival, so this is a dropped message, not a race.
+      // the controller commits on arrival, so this is a dropped message, not a
+      // race.
       if (++waiting_ > 3) {
-        RCLCPP_WARN(this->get_logger(), "repose planner: '%s' never engaged — resending",
+        RCLCPP_WARN(this->get_logger(),
+                    "repose planner: '%s' never engaged — resending",
                     reference_id_.c_str());
         republish();
         waiting_ = 0;  // one resend per 4 ticks, not one per tick forever
@@ -508,7 +544,8 @@ class ReposeNode : public rclcpp::Node {
       // The ramp landed: its clip goes out next, not whatever the planner would
       // pick now. `candidate_` is a preview between acts, and the belief has
       // been cleared since the read that chose this clip.
-      if (controller_.finished) in_enter_ ? commit_clip(pending_) : commit(candidate_);
+      if (controller_.finished)
+        in_enter_ ? commit_clip(pending_) : commit(candidate_);
     }
     publish_status();
   }
@@ -520,10 +557,10 @@ class ReposeNode : public rclcpp::Node {
   /// The robot's heading off the pelvis IMU. Yaw is the only channel of it the
   /// seam ever needs, and the only one the hardware gives without odometry.
   float robot_yaw() const {
-    return std::atan2(2.0f * (imu_quat_[0] * imu_quat_[3] +
-                              imu_quat_[1] * imu_quat_[2]),
-                      1.0f - 2.0f * (imu_quat_[2] * imu_quat_[2] +
-                                     imu_quat_[3] * imu_quat_[3]));
+    return std::atan2(
+        2.0f * (imu_quat_[0] * imu_quat_[3] + imu_quat_[1] * imu_quat_[2]),
+        1.0f -
+            2.0f * (imu_quat_[2] * imu_quat_[2] + imu_quat_[3] * imu_quat_[3]));
   }
 
   bool camera_fresh() const {
@@ -532,18 +569,127 @@ class ReposeNode : public rclcpp::Node {
            (this->now() - rclcpp::Time(ns, RCL_ROS_TIME)).seconds() < stale_s_;
   }
 
+  void reset_approach() {
+    approach_attempts_ = 0;
+    approach_no_progress_ = 0;
+    approach_rung_ = -1;
+    awaiting_approach_measurement_ = false;
+    approach_before_m_ = 0.0f;
+    approach_progress_m_ = 0.0f;
+    clear_approach_turn();
+  }
+
+  void clear_approach_turn() {
+    approach_turn_locked_ = false;
+    approach_turn_attempts_ = 0;
+    approach_turn_rung_ = -1;
+    approach_turn_anchor_ = Plan{};
+  }
+
+  /// A robot-frame turn must not trigger a new global arg-min over clip rows
+  /// and cube symmetries. That makes the target itself discontinuous: the
+  /// newly cheapest entry can lie on the other side of the robot, even though
+  /// the cube did not move. Keep only the chosen identity across this turn and
+  /// re-evaluate all of its geometry from the newest pose.
+  Plan hold_approach_turn_identity(const Plan& raw) {
+    if (!approach_turn_locked_) return raw;
+    if (clips_->done() || clips_->rung() != approach_turn_rung_) {
+      clear_approach_turn();
+      return raw;
+    }
+    // A CLIP answer proves that this belief has a valid, placed cube. Blind or
+    // partial observations keep their normal SETTLE/SCAN recovery; the lock is
+    // merely waiting and never substitutes a stale pose.
+    if (raw.mode != Mode::CLIP) return raw;
+    return clips_->retarget(approach_turn_anchor_, belief_->pose());
+  }
+
+  /// Evaluate one completed leg only after SETTLE has rebuilt a valid pose.
+  /// There is deliberately no odometry estimate: this is the observed entry
+  /// residual before minus after, which is the outcome the walk exists to buy.
+  void update_approach_feedback(const Plan& raw) {
+    if (raw.mode != Mode::CLIP) return;
+    if (approach_rung_ >= 0 && clips_->rung() != approach_rung_)
+      reset_approach();
+    if (awaiting_approach_measurement_) {
+      approach_progress_m_ = approach_before_m_ - raw.entry_translation;
+      awaiting_approach_measurement_ = false;
+      if (approach_progress_m_ + 1e-6f < cfg_.approach_min_progress_m)
+        ++approach_no_progress_;
+      else
+        approach_no_progress_ = 0;
+      RCLCPP_INFO(this->get_logger(),
+                  "approach measured: %.3f -> %.3f m (progress %+.3f, "
+                  "attempt %d/%d)",
+                  approach_before_m_, raw.entry_translation,
+                  approach_progress_m_, approach_attempts_,
+                  cfg_.approach_max_attempts);
+    }
+    if (raw.entry_translation <= cfg_.approach_enter_m) {
+      // Inside the proven clip-correction band. This also makes an
+      // approach-only drag test re-arm automatically once the robot arrives.
+      approach_attempts_ = 0;
+      approach_no_progress_ = 0;
+      approach_rung_ = clips_->rung();
+    }
+  }
+
+  Plan parked_candidate(const Plan& raw, const char* label) const {
+    Plan p = clips_->still(0.0f);
+    p.cost = raw.cost;
+    p.entry_translation = raw.entry_translation;
+    p.entry_bearing = raw.entry_bearing;
+    p.label = label;
+    return p;
+  }
+
+  /// Insert APPROACH around the unchanged retrieval algorithm. This function
+  /// does not mutate the clip ladder or freeze the candidate: after walking,
+  /// the mandatory settle builds a new belief and retrieves again.
+  Plan admit_approach(const Plan& raw) const {
+    if (raw.mode != Mode::CLIP) return raw;
+    if (!cfg_.approach_enabled)
+      return approach_only_ ? parked_candidate(raw, "approach off") : raw;
+    if (raw.entry_translation <= cfg_.approach_enter_m)
+      return approach_only_ ? parked_candidate(raw, "approach ready") : raw;
+    if (approach_attempts_ >= cfg_.approach_max_attempts ||
+        approach_no_progress_ >= 2)
+      return parked_candidate(raw, "approach blocked");
+
+    const float turn_max =
+        cfg_.approach_turn_max_deg * 3.14159265358979323846f / 180.0f;
+    if (std::fabs(raw.entry_bearing) > turn_max) {
+      if (approach_turn_attempts_ >= cfg_.approach_turn_max_attempts)
+        return parked_candidate(raw, "approach turn blocked");
+      Plan p = clips_->still(
+          std::clamp(raw.entry_bearing,
+                     -cfg_.scan_sweep_deg * 3.14159265358979323846f / 180.0f,
+                     cfg_.scan_sweep_deg * 3.14159265358979323846f / 180.0f));
+      p.cost = raw.cost;
+      p.entry_translation = raw.entry_translation;
+      p.entry_bearing = raw.entry_bearing;
+      p.row = raw.row;
+      p.sym = raw.sym;
+      p.delta = raw.delta;
+      p.approach_turn = true;
+      p.label = "turn->approach";
+      return p;
+    }
+    return approach_->plan(raw);
+  }
+
   /// v7.1 only. A clip is entered through a ramp, and the ramp is its OWN act:
-  /// the controller engages it, plays it, reports finished, and only THEN does the clip
-  /// go out — re-engaged on the pose the ramp actually reached.
+  /// the controller engages it, plays it, reports finished, and only THEN does
+  /// the clip go out — re-engaged on the pose the ramp actually reached.
   ///
   /// This is not cosmetic. `MotionClock::engage` stamps the reference's world
   /// anchor from row 0 and never re-measures it, so every frame between that
-  /// stamp and the clip's first frame is dead reckoning. v7's lead-in was ~0.5 s
-  /// of it; a 1.2 s ramp is 5x, and the drift lands as a cube miss. Python does
-  /// not have this problem because its warp is cube-absolute and re-solved at
-  /// the clip's own commit (vibe docs/sys1_v7.md §7.1, `_maybe_enter`); here the
-  /// equivalent is to re-engage, and to carry the heading across the seam as an
-  /// absolute target rather than a residual that goes stale.
+  /// stamp and the clip's first frame is dead reckoning. v7's lead-in was ~0.5
+  /// s of it; a 1.2 s ramp is 5x, and the drift lands as a cube miss. Python
+  /// does not have this problem because its warp is cube-absolute and re-solved
+  /// at the clip's own commit (vibe docs/sys1_v7.md §7.1, `_maybe_enter`); here
+  /// the equivalent is to re-engage, and to carry the heading across the seam
+  /// as an absolute target rather than a residual that goes stale.
   bool ramping() const { return cfg_.enter_yaw_rate_deg > 0.0f; }
 
   void commit(const Plan& plan) {
@@ -552,6 +698,43 @@ class ReposeNode : public rclcpp::Node {
     live_.held_row.clear();
     plan_ = plan;
     clips_->commit(plan_);  // burn the clip, count the roll
+    if (plan_.approach_turn) {
+      if (!approach_turn_locked_) {
+        approach_turn_locked_ = true;
+        approach_turn_anchor_ = plan_;
+        approach_turn_anchor_.mode = Mode::CLIP;
+        approach_turn_rung_ = clips_->rung();
+        RCLCPP_INFO(this->get_logger(),
+                    "approach turn locked: row %d sym %d at rung %d",
+                    plan_.row, plan_.sym, approach_turn_rung_);
+      }
+      ++approach_turn_attempts_;
+      RCLCPP_INFO(this->get_logger(),
+                  "approach turn commit: entry %.3f m at %+.1f deg "
+                  "(attempt %d/%d)",
+                  plan_.entry_translation, plan_.entry_bearing * 57.2958f,
+                  approach_turn_attempts_, cfg_.approach_turn_max_attempts);
+    } else if (approach_only_ && plan_.label == "approach ready") {
+      // The unit-test launch parks here. Once aligned, release the old identity
+      // so dragging the cube starts a completely fresh approach trial.
+      clear_approach_turn();
+    } else if (plan_.mode == Mode::APPROACH) {
+      // A walk is intentionally followed by a global fresh retrieval. The
+      // identity lock crosses only the in-place turn, never locomotion.
+      clear_approach_turn();
+      approach_before_m_ = plan_.entry_translation;
+      awaiting_approach_measurement_ = true;
+      approach_rung_ = clips_->rung();
+      ++approach_attempts_;
+      RCLCPP_INFO(this->get_logger(),
+                  "approach commit: entry %.3f m at %+.1f deg, ask %.3f m, "
+                  "window %.3f m (attempt %d/%d)",
+                  plan_.entry_translation, plan_.entry_bearing * 57.2958f,
+                  plan_.approach_requested, plan_.approach_covered,
+                  approach_attempts_, cfg_.approach_max_attempts);
+    } else if (plan_.mode == Mode::CLIP) {
+      reset_approach();
+    }
     reference_id_ = "the planner-" + std::to_string(++seq_);
     waiting_ = 0;
     committed_ = true;
@@ -567,7 +750,8 @@ class ReposeNode : public rclcpp::Node {
     // base-frame residual, so it goes stale the instant the robot turns; the
     // absolute target it implies does not.
     enter_target_yaw_ = wrap(robot_yaw() + clip.entry_yaw);
-    // Start the ramp from what the controller is being TOLD, not from where it is.
+    // Start the ramp from what the controller is being TOLD, not from where it
+    // is.
     if (const float* held = writer_->final_row())
       live_.held_row.assign(held, held + writer_->cols());
     else
@@ -586,9 +770,9 @@ class ReposeNode : public rclcpp::Node {
   }
 
   void commit_clip(Plan clip) {
-    // What the ramp FAILED to pay, measured. The controller tracks a swept heading with a
-    // lag, so this is small but never zero, and assuming zero is exactly the
-    // error the split exists to remove.
+    // What the ramp FAILED to pay, measured. The controller tracks a swept
+    // heading with a lag, so this is small but never zero, and assuming zero is
+    // exactly the error the split exists to remove.
     clip.entry_yaw = wrap(enter_target_yaw_ - robot_yaw());
     stage_ = ReferenceWriter::Stage::CLIP;
     in_enter_ = false;
@@ -618,7 +802,10 @@ class ReposeNode : public rclcpp::Node {
     m.has_object_goal = false;
     // v7.1 ramps the heading inside the rows, and engage() would compose the
     // two: the residual is claimed exactly once, by whoever carried it.
-    m.entry_yaw_offset = writer_->ramped() ? 0.0f : plan_.entry_yaw;
+    const bool heading_act =
+        plan_.mode == Mode::CLIP || plan_.mode == Mode::APPROACH;
+    m.entry_yaw_offset =
+        heading_act && !writer_->ramped() ? plan_.entry_yaw : 0.0f;
     m.mode = static_cast<uint8_t>(plan_.mode);
     m.data = rows;
     reference_pub_->publish(m);
@@ -633,6 +820,10 @@ class ReposeNode : public rclcpp::Node {
     m.label = plan_.label;
     m.cost = plan_.cost;
     m.entry_yaw = plan_.entry_yaw;
+    m.entry_translation_m = plan_.entry_translation;
+    m.entry_bearing_rad = plan_.entry_bearing;
+    m.approach_requested_m = plan_.approach_requested;
+    m.approach_covered_m = plan_.approach_covered;
     m.frames = writer_->frames();
     m.lead_in_frames = writer_->lead_in_frames();
     m.committed = committed_;
@@ -641,6 +832,18 @@ class ReposeNode : public rclcpp::Node {
     m.cand_mode = static_cast<uint8_t>(candidate_.mode);
     m.cand_label = candidate_.label;
     m.cand_cost = candidate_.cost;
+    m.cand_entry_translation_m = candidate_.entry_translation;
+    m.cand_entry_bearing_rad = candidate_.entry_bearing;
+    m.approach_progress_m = approach_progress_m_;
+    m.approach_attempts = approach_attempts_;
+    m.approach_no_progress = approach_no_progress_;
+    m.approach_only = approach_only_;
+    m.approach_turn_locked = approach_turn_locked_;
+    m.approach_turn_attempts = approach_turn_attempts_;
+    m.approach_turn_row =
+        approach_turn_locked_ ? approach_turn_anchor_.row : -1;
+    m.approach_turn_sym =
+        approach_turn_locked_ ? approach_turn_anchor_.sym : -1;
 
     m.delta = static_cast<uint8_t>(clips_->delta());
     m.rung = clips_->rung();
@@ -681,12 +884,14 @@ class ReposeNode : public rclcpp::Node {
   std::unique_ptr<Clips> clips_;
   std::unique_ptr<CubeSight> eye_;
   std::unique_ptr<Belief> belief_;
+  std::unique_ptr<ApproachSource> approach_;
   std::unique_ptr<ReferenceWriter> writer_;
   std::string camera_ip_;
   uint16_t camera_port_ = 5555;
   double rate_hz_ = 20.0, stale_s_ = 1.0;
   Mount mount_;
-  bool stand_ready_ = false;  ///< v7: the nominal stance has arrived from the controller
+  bool stand_ready_ =
+      false;  ///< v7: the nominal stance has arrived from the controller
   std::array<int, 3> waist_{};
 
   // live state
@@ -721,6 +926,14 @@ class ReposeNode : public rclcpp::Node {
   int waiting_ = 0;
   uint64_t frames_offered_ = 0, frames_read_ = 0;
   bool armed_ = false, committed_ = false;
+  bool approach_only_ = false;
+  int approach_attempts_ = 0, approach_no_progress_ = 0;
+  int approach_rung_ = -1;
+  Plan approach_turn_anchor_;
+  bool approach_turn_locked_ = false;
+  int approach_turn_attempts_ = 0, approach_turn_rung_ = -1;
+  bool awaiting_approach_measurement_ = false;
+  float approach_before_m_ = 0.0f, approach_progress_m_ = 0.0f;
   float observe_ms_ = 0.f;
 
   rclcpp::Publisher<msg::MotionReference>::SharedPtr reference_pub_;

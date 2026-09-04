@@ -62,6 +62,9 @@ def generate_launch_description():
             description='TCP camera source selected by setup.sh/setup_local.sh'),
         DeclareLaunchArgument('enable_bridge', default_value='true'),
         DeclareLaunchArgument(
+            'approach_only', default_value='false',
+            description='v8.5 smoke gate: allow approach/turn/settle but suppress clips'),
+        DeclareLaunchArgument(
             'stand_yaw_teleop', default_value='true',
             description='right-stick heading control while RB stand is active'),
         DeclareLaunchArgument(
@@ -109,6 +112,7 @@ def generate_launch_description():
                 # The same argument the controller gets: one colour, both halves, from
                 # boot rather than from the first console keypress.
                 'target_color': LaunchConfiguration('goal_color'),
+                'approach_only': LaunchConfiguration('approach_only'),
             }],
             # A planner without its controller is a robot holding its last
             # reference. Tear the run down together, like its siblings.

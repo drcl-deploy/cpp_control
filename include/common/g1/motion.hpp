@@ -32,8 +32,8 @@ inline const std::vector<std::string> CONTACT_GRAPH_BODIES = {
 
 /// Motion-topic row widths (IL-ordered, scripts/npz_motion_publisher.py):
 ///   MIN   jp29 | jv29 | anchor_pos3 | anchor_quat4                  (textop
-///   era) FULL  ... | anchor_lin_vel3 | anchor_ang_vel3 | contact12       (the planner
-///   cmds)
+///   era) FULL  ... | anchor_lin_vel3 | anchor_ang_vel3 | contact12       (the
+///   planner cmds)
 /// A MIN clip streams with zero twist AND zero contact — the whole adapter
 /// augmentation port goes dead, so publish FULL for anything adapter-driven.
 constexpr int WIRE_COLS_MIN = 2 * NUM_JOINTS + 3 + 4;
@@ -80,9 +80,12 @@ struct Motion {
       bodywise_contact;  ///< (T*K) {0,1}, CONTACT_GRAPH_BODIES order
 
   /// joint_perm: source column for each output joint (empty = identity;
-  /// g1::MJ2IL for IL-ordered clips). Body arrays load as-is.
+  /// g1::MJ2IL for IL-ordered clips). Body arrays load as-is. A source with no
+  /// object (for example APPROACH) sets load_companions=false so an unrelated
+  /// sibling contact/object file cannot become part of its command contract.
   static Motion from_npz(const std::string& path,
-                         const std::vector<int>& joint_perm = {});
+                         const std::vector<int>& joint_perm = {},
+                         bool load_companions = true);
   /// Wire rows, IL-ordered, `cols` wide — WIRE_COLS_MIN or WIRE_COLS_FULL.
   static Motion from_wire(int num_frames, const float* rows,
                           int cols = WIRE_COLS_MIN);

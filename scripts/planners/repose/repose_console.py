@@ -30,7 +30,7 @@ NAMES = ("red", "orange", "green", "yellow", "blue", "pink")
 KEYS = "rogybp"
 RGB = ((230, 51, 51), (242, 115, 26), (51, 230, 51),
        (230, 230, 51), (51, 51, 230), (204, 51, 166))
-MODES = ("init", "settle", "scan", "clip")
+MODES = ("init", "settle", "scan", "clip", "approach")
 CONTROLLER_MODES = ("zeroing", "damping", "nominal", "standing", "stand", "POLICY")
 
 CSI = "\033["
@@ -114,11 +114,28 @@ class Console(Node):
                 f"   read {s1.accept_rate * 100:.0f}% of frames"
                 f"   {s1.observe_ms:.1f} ms/read",
                 f"  plan    {s1.label:<10}cost {s1.cost:.2f} m   "
-                f"yaw {s1.entry_yaw:+.2f} rad   frames {s1.frames}"
+                f"entry xy {s1.entry_translation_m:.2f} m "
+                f"@ {s1.entry_bearing_rad * 57.3:+.0f}°   frames {s1.frames}"
                 + (f" (+{s1.lead_in_frames} ramp)" if s1.lead_in_frames else ""),
-                f"  {DIM}next{OFF}    {s1.cand_label:<10}cost {s1.cand_cost:.2f} m"
+                f"  {DIM}next{OFF}    {s1.cand_label:<16}cost {s1.cand_cost:.2f} m"
+                f"   entry xy {s1.cand_entry_translation_m:.2f} m"
+                f" @ {s1.cand_entry_bearing_rad * 57.3:+.0f}°"
                 f"   {DIM}(what a finished reference would commit to){OFF}",
             ]
+            if s1.mode == PlannerStatus.APPROACH or s1.approach_attempts:
+                lines.append(
+                    f"  walk    ask {s1.approach_requested_m:.2f} m  "
+                    f"ref {s1.approach_covered_m:.2f} m  "
+                    f"progress {s1.approach_progress_m:+.2f} m  "
+                    f"attempt {s1.approach_attempts}"
+                    + (f"  no-progress {s1.approach_no_progress}"
+                       if s1.approach_no_progress else "")
+                    + (f"  {BOLD}APPROACH ONLY{OFF}" if s1.approach_only else ""))
+            if s1.approach_turn_locked:
+                lines.append(
+                    f"  turn    {BOLD}LOCKED{OFF} row {s1.approach_turn_row} "
+                    f"sym {s1.approach_turn_sym}  "
+                    f"attempt {s1.approach_turn_attempts}")
 
         lines.append(rule)
         if s0 is None:

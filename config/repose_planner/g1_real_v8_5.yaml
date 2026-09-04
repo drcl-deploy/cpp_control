@@ -1,0 +1,88 @@
+# v8.5 hardware candidate: the accepted v8 D435i localization unchanged,
+# plus a guarded robot-anchored approach before unreachable clip entries.
+version: v8.5
+target_color: 4
+rate_hz: 20.0
+stale_s: 1.0
+
+clips: data/sys1_clips.npz
+frames:
+  source: retargeted
+  path: data/retargeted_motions
+  library: data/sys1_library.npz
+
+camera:
+  host: 127.0.0.1
+  port: 5555
+mount:
+  xyz: [0.05, 0.0, 0.4318]
+  quat: [0.6533, 0.2706, -0.2706, -0.6533]
+
+observe:
+  read: plane
+  proc_width: 0
+  palette:
+    red:    {lit: [255, 120, 80], shaded: [255, 131, 114]}
+    orange: {lit: [255, 168, 9], shaded: [255, 189, 57]}
+    green:  {lit: [195, 255, 223], shaded: [224, 255, 240]}
+    yellow: {lit: [255, 252, 85], shaded: [255, 164, 94]}
+    blue:   {lit: [0, 190, 255], shaded: [32, 196, 255]}
+    pink:   {lit: [255, 159, 250], shaded: [253, 136, 255]}
+  gates:
+    min_value: 30
+    min_rel_sat: 0.15
+    min_area_frac: 0.002
+    min_px_floor: 8
+    chroma_reject: 0.06
+  geometry:
+    up_dot_min: 0.90
+    min_visible: 0.70
+    min_visible_color: 0.0
+    big_max: 1.4
+    slab_frac: 0.25
+    z_min_m: 0.05
+  plane:
+    floor_quantile: 0.70
+    ransac_dist_m: 0.035
+    top_band_m: 0.08
+    close_px: 2
+    fit_slack: 0.15
+    range_max_m: 2.30
+
+belief:
+  window: 8
+  min_votes: 3
+  omega_still: 0.15
+
+loop:
+  pattern: RRF
+  retry_limit: 3
+  arm_radius: 0.30
+  horizon_gain: 0.3
+  stance_band_m: 0.70
+  scan_sweep_deg: 90.0
+  settle_steps: 40
+  scan_steps: 110
+  hold_tail: 15
+
+approach:
+  enabled: true
+  motion: data/sys1_walk/walk_forward_amateur_001__A001/motion.npz
+  enter_m: 0.25
+  target_m: 0.13
+  max_step_m: 0.30
+  turn_max_deg: 20.0
+  turn_max_attempts: 3
+  min_progress_m: 0.05
+  max_attempts: 2
+  window_step_m: 0.12
+  window_snap: 4
+  still_speed_m_s: 0.05
+  speed_smooth: 9
+  window_heading_max_deg: 45.0
+
+seam:
+  blend_frames: 12
+  lead_in_rate: 1.5
+  lead_in_min_s: 0.2
+  enter_joint_rate: 2.0

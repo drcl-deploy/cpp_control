@@ -138,6 +138,31 @@ struct Cfg {
   /// needs none — its yaw is zero, so the whole hold is quiescent.
   int hold_tail = 15;
 
+  // ── v8.5 approach ──
+  // A clip candidate whose TRANSLATION-ONLY entry residual exceeds this gate
+  // gets a robot-anchored walk before it is reconsidered. The old total cost
+  // is deliberately not the gate: it also prices heading and the exit
+  // horizon, neither of which says how far the feet need to move.
+  bool approach_enabled = false;
+  std::string approach_motion;
+  float approach_enter_m = 0.25f;
+  float approach_target_m = 0.13f;
+  float approach_max_step_m = 0.30f;
+  float approach_turn_max_deg = 20.0f;
+  /// Hard stop for the preparatory heading correction. Two ideal 90-degree
+  /// sweeps cover the full circle; the third allows tracking error to settle.
+  int approach_turn_max_attempts = 3;
+  float approach_min_progress_m = 0.05f;
+  int approach_max_attempts = 2;
+  /// ReachSource-compatible construction of the fixed walk vocabulary.
+  float approach_window_step_m = 0.12f;
+  int approach_window_snap = 4;
+  float approach_still_speed_m_s = 0.05f;
+  int approach_speed_smooth = 9;
+  /// Reject short prefixes whose initial weight shift travels sideways. A
+  /// heading warp on one of those would itself be an unsafe yaw step.
+  float approach_window_heading_max_deg = 45.0f;
+
   // ── the seam (no sim twin: hardware has no teleport) ──
   int blend_frames = 12;  ///< live->reference offset decay; only if no lead-in
   float lead_in_rate =
@@ -192,6 +217,16 @@ struct Cfg {
   static Cfg v8() {
     Cfg c = v7();
     c.read = Read::PLANE;
+    return c;
+  }
+  /// v8.5 — v8 localization plus a guarded robot-anchored walk. APPROACH
+  /// always returns to SETTLE and re-observes; it never carries a stale clip
+  /// candidate across dead-reckoned locomotion.
+  static Cfg v8_5() {
+    Cfg c = v8();
+    c.approach_enabled = true;
+    c.approach_motion =
+        "data/sys1_walk/walk_forward_amateur_001__A001/motion.npz";
     return c;
   }
   static Cfg preset(const std::string& name);

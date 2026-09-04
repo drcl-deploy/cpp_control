@@ -41,8 +41,9 @@ void rotate_row(float* row, float psi) {
 
 }  // namespace
 
-ReferenceWriter::ReferenceWriter(const ClipTable& table, const Cfg& cfg)
-    : t_(table), cfg_(cfg), cols_(table.cols()) {}
+ReferenceWriter::ReferenceWriter(const ClipTable& table, const Cfg& cfg,
+                                 const ApproachSource* approach)
+    : t_(table), approach_(approach), cfg_(cfg), cols_(table.cols()) {}
 
 void ReferenceWriter::push_stand(int count) {
   const size_t at = rows_.size();
@@ -54,14 +55,16 @@ void ReferenceWriter::push_stand(int count) {
 
 /// Rate-limited ramp from the live pose onto `target`. The sim pays this as a
 /// 12-frame blend; on hardware a reference that STEPS is a step input to a
-/// balancing policy, so walk there instead — the same mechanism the human-driven
-/// L1 prep provides, just automatic (docs/planners/repose/planner.md §1 F4).
+/// balancing policy, so walk there instead — the same mechanism the
+/// human-driven L1 prep provides, just automatic
+/// (docs/planners/repose/planner.md §1 F4).
 ///
-/// Under v7 this matters for STILL modes too, not only clips: the nominal stance
-/// is the planner's own vocabulary and therefore sits further from a clip's exit pose
-/// than the library frame it replaced, so the settle that follows every clip is
-/// the largest joint step in the loop. Cost is `lead_in_min_s` (0.2 s) when the
-/// delta is small, which is what a settle-after-settle sees.
+/// Under v7 this matters for STILL modes too, not only clips: the nominal
+/// stance is the planner's own vocabulary and therefore sits further from a
+/// clip's exit pose than the library frame it replaced, so the settle that
+/// follows every clip is the largest joint step in the loop. Cost is
+/// `lead_in_min_s` (0.2 s) when the delta is small, which is what a
+/// settle-after-settle sees.
 ///
 /// v7.1 puts the HEADING in the same ramp (`enter_yaw_rate_deg`), for clips
 /// only. `MotionClock::engage` cancels the FRAME-0 heading and nothing else, so
@@ -73,8 +76,8 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
   if (cfg_.lead_in_rate <= 0.0f) return;
   ramp_ = cfg_.enter_yaw_rate_deg > 0.0f && plan.mode == Mode::CLIP;
 
-  // v7.1 starts from what the controller was ACTUALLY commanded, so the ramp is C0 with
-  // the still it leaves; v7 keeps the live pose it was measured with.
+  // v7.1 starts from what the controller was ACTUALLY commanded, so the ramp is
+  // C0 with the still it leaves; v7 keeps the live pose it was measured with.
   const bool held = ramp_ && live.held_row.size() == static_cast<size_t>(cols_);
   const float* from = held ? live.held_row.data() : live.joint_pos_il.data();
 
@@ -112,10 +115,10 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
     std::memcpy(row + APOS, target + APOS, (cols_ - APOS) * sizeof(float));
     std::memset(row + ALIN, 0, (cols_ - ALIN) * sizeof(float));
     const float a = static_cast<float>(f) / (lead_ - 1);
-    const float s = a * a * (3.0f - 2.0f * a);  // smoothstep, as Motion::lead_in
+    const float s =
+        a * a * (3.0f - 2.0f * a);  // smoothstep, as Motion::lead_in
     if (!ramp_) {
-      for (int j = 0; j < J; ++j)
-        row[j] = (1.0f - s) * from[j] + s * target[j];
+      for (int j = 0; j < J; ++j) row[j] = (1.0f - s) * from[j] + s * target[j];
       continue;
     }
     // Cubic Hermite. v0 is ZERO because a clip is only ever committed out of a
@@ -159,7 +162,8 @@ void ReferenceWriter::push_lead_in(const Plan& plan, const float* target,
     for (int j = 0; j < J; ++j)
       rows_[at + static_cast<size_t>(f) * cols_ + J + j] =
           (rows_[at + static_cast<size_t>(f + 1) * cols_ + j] -
-           rows_[at + static_cast<size_t>(f) * cols_ + j]) * t_.fps();
+           rows_[at + static_cast<size_t>(f) * cols_ + j]) *
+          t_.fps();
 }
 
 /// Motion matching's inertialization: pay the pose discontinuity, buy task
@@ -181,7 +185,8 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
                                                  Stage stage) {
   if (live.joint_pos_il.size() != static_cast<size_t>(J) ||
       live.joint_vel_il.size() != static_cast<size_t>(J))
-    throw std::runtime_error("the planner writer: live state is not 29 IL joints");
+    throw std::runtime_error(
+        "the planner writer: live state is not 29 IL joints");
   rows_.clear();
   lead_ = 0;
   ramp_ = false;
@@ -201,12 +206,34 @@ const std::vector<float>& ReferenceWriter::build(const Plan& plan,
     return rows_;
   }
 
+  if (plan.mode == Mode::APPROACH) {
+    if (!approach_)
+      throw std::runtime_error(
+          "the planner writer: APPROACH requested without a walk source");
+    if (approach_->cols() != cols_ ||
+        std::fabs(approach_->fps() - t_.fps()) > 1e-3f)
+      throw std::runtime_error(
+          "the planner writer: approach/table wire or fps mismatch");
+    const float* span = approach_->span(plan.approach_window);
+    const int count = approach_->frames(plan.approach_window);
+    push_lead_in(plan, span, live);
+    const size_t at = rows_.size();
+    rows_.resize(at + static_cast<size_t>(count) * cols_);
+    std::memcpy(&rows_[at], span,
+                static_cast<size_t>(count) * cols_ * sizeof(float));
+    frames_ = static_cast<int>(rows_.size() / cols_);
+    if (lead_ == 0 && cfg_.blend_frames > 0)
+      blend_head(live, std::min(cfg_.blend_frames, frames_));
+    return rows_;
+  }
+
   if (plan.mode != Mode::CLIP) {
     // A still mode is a clip whose frames happen to be identical — except for
     // the yaw, which RAMPS across them. That is what actually commands the
-    // turn: the controller's window reads frame k at the yaw the sweep WILL have reached,
-    // so the 6D row says "still turning", not "hold this heading". A one-shot
-    // ask saturates the tracking error instead (28.5 deg achieved per 90 asked).
+    // turn: the controller's window reads frame k at the yaw the sweep WILL
+    // have reached, so the 6D row says "still turning", not "hold this
+    // heading". A one-shot ask saturates the tracking error instead (28.5 deg
+    // achieved per 90 asked).
     const int hold = std::max(plan.frames, 1);
     push_lead_in(plan, t_.stand_row(), live);
     const size_t at = rows_.size();  // the sweep is over the HELD frames only

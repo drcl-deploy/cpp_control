@@ -28,6 +28,7 @@
 #include "cnpy/cnpy.h"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
+#include "cpp_control/planners/repose/approach.hpp"
 #include "cpp_control/planners/repose/belief.hpp"
 #include "cpp_control/planners/repose/clips.hpp"
 #include "cpp_control/planners/repose/kinematics.hpp"
@@ -64,7 +65,7 @@ bool threw(F&& f) {
 
 void check_cfg() {
   std::puts("cfg");
-  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8();
+  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8(), v85 = Cfg::v8_5();
   check(!v6.nominal_stand && v7.nominal_stand,
         "v6 and v7 differ by the gaze fix and nothing else");
   check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
@@ -87,6 +88,8 @@ void check_cfg() {
         "a SCAN that never goes quiet is refused");
   check(refuses([](Cfg& c) { c.belief_min_votes = c.belief_window + 1; }),
         "a vote that can never carry is refused");
+  check(refuses([](Cfg& c) { c.approach_turn_max_attempts = 0; }),
+        "a preparatory turn without a finite positive attempt budget is refused");
   const Cfg r = Cfg::v7_1();
   check(r.enter_yaw_rate_deg > 0.0f && v7.enter_yaw_rate_deg == 0.0f,
         "v7.1 is v7 plus one rate; 0 is the ramp off");
@@ -101,12 +104,22 @@ void check_cfg() {
             v8.pattern == v7.pattern &&
             v8.enter_yaw_rate_deg == v7.enter_yaw_rate_deg,
         "v8 changes the observation read, not planning or control");
+  check(v85.read == v8.read && v85.approach_enabled && !v8.approach_enabled &&
+            v85.approach_enter_m == 0.25f,
+        "v8.5 is v8 plus the guarded approach mode");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
         "a quiescence gate that never opens is refused");
   check(refuses([](Cfg& c) { c.plane_floor_quantile = 1.0f; }),
         "a plane floor quantile outside (0, 1) is refused");
+  check(refuses([](Cfg& c) {
+          c.approach_enabled = true;
+          c.approach_motion.clear();
+        }),
+        "an enabled approach without a deployable motion is refused");
+  check(refuses([](Cfg& c) { c.approach_target_m = c.approach_enter_m; }),
+        "an approach target outside its admission gate is refused");
 }
 
 /// A depth-only scene for v8. The camera looks forward in +base-x; lower image
@@ -251,6 +264,20 @@ void check_decide_is_pure(const ClipTable& t) {
   check(a.row == c.row && a.sym == c.sym && a.cost == c.cost &&
             clips.burned() == 0,
         "and twenty calls burn nothing and answer the same");
+  if (a.mode == Mode::CLIP) {
+    const ClipRow& r = t.rows()[a.row];
+    const float q = a.sym * static_cast<float>(M_PI) / 2.0f;
+    const float rx = std::cos(q) * r.qx - std::sin(q) * r.qy;
+    const float ry = std::sin(q) * r.qx + std::cos(q) * r.qy;
+    const float ex =
+        placed.pos[0] + std::cos(placed.phi) * rx - std::sin(placed.phi) * ry;
+    const float ey =
+        placed.pos[1] + std::sin(placed.phi) * rx + std::cos(placed.phi) * ry;
+    check(std::fabs(a.entry_translation - std::hypot(ex, ey)) < 1e-6f &&
+              std::fabs(a.entry_bearing - std::atan2(ey, ex)) < 1e-6f,
+          "the published entry vector is exactly the ranking's translation "
+          "term in robot coordinates");
+  }
   clips.commit(a);
   check(clips.burned() == 1 && clips.rolls() == 1,
         "the commit is what burns the row and counts the roll");
@@ -285,6 +312,64 @@ void check_decide_is_pure(const ClipTable& t) {
   for (int i = 0; i < 10; ++i) fresh.observe(b2);
   check(fresh.tips() == 1 && fresh.rung() == 1,
         "a colour change steps exactly one rung, however often observe() runs");
+}
+
+/// A preparatory turn changes the coordinates of every candidate but must not
+/// change which physical entry stance the robot is pursuing. This exact pose
+/// is a witness from the shipping R pool: unconstrained retrieval alternates
+/// forever between two locally cheapest rows after ideal turns.
+void check_approach_turn_continuity(const ClipTable& t) {
+  std::puts("approach turn continuity");
+  Cfg cfg = Cfg::v8_5();
+  Clips clips(t, cfg, 4);
+  Belief belief(cfg);
+  constexpr float kPi = static_cast<float>(M_PI);
+  const float range = 1.19f;
+  const float world_bearing = 154.7f * kPi / 180.0f;
+  const float world_phi = 100.9f * kPi / 180.0f;
+  auto wrap = [](float a) { return std::atan2(std::sin(a), std::cos(a)); };
+  auto see_at = [&](float robot_yaw) {
+    Sight s;
+    s.ok = true;
+    s.color_ok = true;
+    s.color = 2;
+    const float b = wrap(world_bearing - robot_yaw);
+    s.pos = {range * std::cos(b), range * std::sin(b), 0.3048f};
+    s.phi = wrap(world_phi - robot_yaw);
+    return s;
+  };
+  auto global_at = [&](float yaw) {
+    belief.clear();
+    const Sight s = see_at(yaw);
+    for (int i = 0; i < cfg.belief_min_votes; ++i) belief.push(s);
+    return clips.decide(belief);
+  };
+
+  float yaw = 0.0f;
+  const Plan anchor = global_at(yaw);
+  check(anchor.mode == Mode::CLIP && anchor.entry_translation > 0.25f &&
+            std::fabs(anchor.entry_bearing) > 20.0f * kPi / 180.0f,
+        "the witness requires a preparatory turn");
+
+  Plan fixed = anchor;
+  int turns = 0;
+  for (; turns < cfg.approach_turn_max_attempts; ++turns) {
+    fixed = clips.retarget(anchor, see_at(yaw));
+    if (std::fabs(fixed.entry_bearing) <=
+        cfg.approach_turn_max_deg * kPi / 180.0f)
+      break;
+    const float sweep = cfg.scan_sweep_deg * kPi / 180.0f;
+    yaw = wrap(yaw + std::clamp(fixed.entry_bearing, -sweep, sweep));
+  }
+  check(turns <= 2 && fixed.row == anchor.row && fixed.sym == anchor.sym &&
+            std::fabs(fixed.entry_bearing) < 1e-4f,
+        "a locked row/sym converges after at most two ideal turns");
+  check(std::fabs(fixed.entry_translation - anchor.entry_translation) < 1e-4f,
+        "turning recomputes coordinates without inventing translation");
+
+  const Plan switched = global_at(yaw);
+  check(switched.row != anchor.row || switched.sym != anchor.sym,
+        "the same final sight makes unconstrained retrieval switch targets");
 }
 
 /// THE v7 RESULT, asserted offline: a nominal stance has waist = 0, so the
@@ -620,6 +705,74 @@ void check_table(const ClipTable& t) {
   check(worst == 0, "every clean row's span matches its [entry, exit]");
 }
 
+void check_approach_source(const std::string& path, const ClipTable& t,
+                           const Cfg& cfg) {
+  std::puts("approach source");
+  ApproachSource source(path, cfg);
+  check(!source.windows().empty(), "the fixed walk yields distance windows");
+  bool monotone = true;
+  for (size_t i = 1; i < source.windows().size(); ++i)
+    monotone = monotone &&
+               source.windows()[i].distance > source.windows()[i - 1].distance;
+  check(monotone, "approach windows increase monotonically in covered metres");
+
+  Plan clip;
+  clip.mode = Mode::CLIP;
+  clip.cost = 0.56f;
+  clip.entry_translation = 0.556f;  // the failed R#53 hardware candidate
+  clip.entry_bearing = -3.2f * static_cast<float>(M_PI) / 180.0f;
+  const Plan p = source.plan(clip);
+  check(p.mode == Mode::APPROACH &&
+            p.approach_requested <= cfg.approach_max_step_m + 1e-6f,
+        "the failed hardware residual becomes one bounded approach leg");
+  check(p.approach_covered > 0.0f && p.frames > 1,
+        "a real unscaled source window supplies the command");
+
+  LiveState live;
+  live.joint_pos_il.assign(g1::NUM_JOINTS, 0.0f);
+  live.joint_vel_il.assign(g1::NUM_JOINTS, 0.0f);
+  ReferenceWriter writer(t, cfg, &source);
+  const auto& rows = writer.build(p, live);
+  const int lead = writer.lead_in_frames(), cols = writer.cols();
+  check(writer.frames() == lead + p.frames,
+        "the approach follows its live-to-walk lead-in intact");
+
+  const g1::Motion source_motion = g1::Motion::from_npz(path, g1::MJ2IL, false);
+  std::array<float, g1::NUM_JOINTS> expected_jp{};
+  source_motion.jp_il(source.onset(), expected_jp.data());
+  float joint_order_error = 0.0f;
+  const float* first_walk = &rows[static_cast<size_t>(lead) * cols];
+  for (int j = 0; j < g1::NUM_JOINTS; ++j)
+    joint_order_error =
+        std::max(joint_order_error, std::fabs(first_walk[j] - expected_jp[j]));
+  check(joint_order_error < 1e-6f,
+        "the IL source survives MJ storage and returns in IL wire order");
+
+  float contacts = 0.0f, twist = 0.0f;
+  for (int f = lead; f < writer.frames(); ++f) {
+    const float* row = &rows[static_cast<size_t>(f) * cols];
+    for (int k = 0; k < 6; ++k)
+      twist = std::max(twist, std::fabs(row[g1::WIRE_COLS_MIN + k]));
+    for (int k = 0; k < g1::NUM_CONTACT_BODIES; ++k)
+      contacts = std::max(contacts, std::fabs(row[g1::WIRE_COLS_MIN + 6 + k]));
+  }
+  check(twist > 0.01f, "the walking reference carries truthful root twist");
+  check(contacts == 0.0f, "an approach commands zero robot-to-object contacts");
+
+  const g1::Motion motion = g1::Motion::from_wire(writer.frames(), rows.data(),
+                                                  cols, true, true, t.fps());
+  g1::MotionClock clock(motion, 0);
+  clock.engage({1.0f, 0.0f, 0.0f, 0.0f}, 0, p.entry_yaw);
+  const auto end = clock.aligned_root_pos(writer.frames() - 1);
+  const float distance = std::hypot(end[0], end[1]);
+  const float bearing = std::atan2(end[1], end[0]);
+  check(std::fabs(distance - p.approach_covered) < 1e-4f,
+        "the aligned reference covers the selected metric distance");
+  check(std::fabs(std::atan2(std::sin(bearing - clip.entry_bearing),
+                             std::cos(bearing - clip.entry_bearing))) < 1e-4f,
+        "and its net displacement points at the candidate entry bearing");
+}
+
 // ── Replay rig ───────────────────────────────────────────────────
 //
 // Each npz holds one recorded read: bgr (H,W,3) uint8, depth (h,w) float32
@@ -765,7 +918,7 @@ void check_config_roundtrip(const std::string& path, bool parity) {
           "the shipped yaml round-trips to the preset it names");
     // `version:` is the ablation switch, so all three have to survive the same
     // file — that is the "one line A/Bs both" claim, tested.
-    for (const char* v : {"v6", "v7", "v7.1", "v8"}) {
+    for (const char* v : {"v6", "v7", "v7.1", "v8", "v8.5"}) {
       YAML::Node n = YAML::Clone(root);
       n["version"] = v;
       check(Cfg::from_yaml(n) == Cfg::preset(v),
@@ -804,7 +957,7 @@ void check_config_roundtrip(const std::string& path, bool parity) {
 
 int main(int argc, char** argv) {
   std::string table_path, frames_path, library_path, bake_path, replay_dir,
-      config_path, version = "v7";  // v6 is the gaze ablation
+      config_path, approach_path, version = "v7";  // v6 is the gaze ablation
   bool summary = false, check_parity = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -823,6 +976,8 @@ int main(int argc, char** argv) {
       version = next();
     else if (a == "--config")
       config_path = next();
+    else if (a == "--approach")
+      approach_path = next();
     else if (a == "--summary")
       summary = true;
     else if (a == "--check-preset-parity")
@@ -882,6 +1037,9 @@ int main(int argc, char** argv) {
     check_lead_in(table, cfg);
     check_enter_ramp(table);
     check_decide_is_pure(table);
+    check_approach_turn_continuity(table);
+    if (!approach_path.empty())
+      check_approach_source(approach_path, table, cfg);
   }
   if (!replay_dir.empty() && replay(replay_dir, table, cfg, summary) != 0)
     ++failures;

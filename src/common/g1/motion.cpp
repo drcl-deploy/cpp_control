@@ -146,7 +146,8 @@ void load_object_goal(const std::string& motion_path, Motion& motion) {
 }  // namespace
 
 Motion Motion::from_npz(const std::string& path,
-                        const std::vector<int>& joint_perm) {
+                        const std::vector<int>& joint_perm,
+                        bool load_companions) {
   cnpy::npz_t npz = cnpy::npz_load(path);
 
   auto require = [&](const char* key) -> cnpy::NpyArray& {
@@ -180,13 +181,14 @@ Motion Motion::from_npz(const std::string& path,
   m.body_ang_vel_w = m.has_twist ? to_floats(npz.at("body_ang_vel_w"))
                                  : std::vector<float>(tb3, 0.0f);
 
-  m.bodywise_contact = load_contact(path, m.num_frames);
+  m.bodywise_contact =
+      load_companions ? load_contact(path, m.num_frames) : std::vector<float>{};
   m.has_contact = !m.bodywise_contact.empty();
   if (!m.has_contact)
     m.bodywise_contact.assign(
         static_cast<size_t>(m.num_frames) * NUM_CONTACT_BODIES, 0.0f);
 
-  load_object_goal(path, m);
+  if (load_companions) load_object_goal(path, m);
 
   if (npz.count("fps")) {
     // fps dtype varies by producer (mjlab demo: float64; retargeted dataset:
@@ -391,8 +393,8 @@ void MotionClock::engage(const std::array<float, 4>& robot_quat,
       math::qinv(math::heading_quat(motion_.root_quat(f0, anchor_body_))));
   if (extra_yaw != 0.0f) {
     const float h = 0.5f * extra_yaw;
-    heading_offset_ = math::qmul(
-        {std::cos(h), 0.0f, 0.0f, std::sin(h)}, heading_offset_);
+    heading_offset_ =
+        math::qmul({std::cos(h), 0.0f, 0.0f, std::sin(h)}, heading_offset_);
   }
 }
 

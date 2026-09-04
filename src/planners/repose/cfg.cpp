@@ -17,9 +17,10 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v7") return Cfg::v7();
   if (name == "v7.1") return Cfg::v7_1();
   if (name == "v8") return Cfg::v8();
+  if (name == "v8.5") return Cfg::v8_5();
   throw std::runtime_error(
-      "repose planner: version must be v6 | v7 | v7.1 | v8, got '" + name +
-      "'");
+      "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5, got '" +
+      name + "'");
 }
 
 // ── The loader ───────────────────────────────────────────────────
@@ -204,6 +205,29 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_l("scan_steps", c.scan_steps);
   r_l("hold_tail", c.hold_tail);
 
+  const YAML::Node a = root["approach"];
+  reject_unknown(
+      a, "approach",
+      {"enabled", "motion", "enter_m", "target_m", "max_step_m", "turn_max_deg",
+       "turn_max_attempts", "min_progress_m", "max_attempts", "window_step_m",
+       "window_snap", "still_speed_m_s", "speed_smooth",
+       "window_heading_max_deg"});
+  Reader r_a{a};
+  r_a("enabled", c.approach_enabled);
+  r_a("motion", c.approach_motion);
+  r_a("enter_m", c.approach_enter_m);
+  r_a("target_m", c.approach_target_m);
+  r_a("max_step_m", c.approach_max_step_m);
+  r_a("turn_max_deg", c.approach_turn_max_deg);
+  r_a("turn_max_attempts", c.approach_turn_max_attempts);
+  r_a("min_progress_m", c.approach_min_progress_m);
+  r_a("max_attempts", c.approach_max_attempts);
+  r_a("window_step_m", c.approach_window_step_m);
+  r_a("window_snap", c.approach_window_snap);
+  r_a("still_speed_m_s", c.approach_still_speed_m_s);
+  r_a("speed_smooth", c.approach_speed_smooth);
+  r_a("window_heading_max_deg", c.approach_window_heading_max_deg);
+
   const YAML::Node s = root["seam"];
   reject_unknown(s, "seam",
                  {"blend_frames", "lead_in_rate", "lead_in_min_s",
@@ -243,6 +267,20 @@ bool Cfg::operator==(const Cfg& o) const {
          horizon_gain == o.horizon_gain && stance_band_m == o.stance_band_m &&
          scan_sweep_deg == o.scan_sweep_deg && settle_steps == o.settle_steps &&
          scan_steps == o.scan_steps && hold_tail == o.hold_tail &&
+         approach_enabled == o.approach_enabled &&
+         approach_motion == o.approach_motion &&
+         approach_enter_m == o.approach_enter_m &&
+         approach_target_m == o.approach_target_m &&
+         approach_max_step_m == o.approach_max_step_m &&
+         approach_turn_max_deg == o.approach_turn_max_deg &&
+         approach_turn_max_attempts == o.approach_turn_max_attempts &&
+         approach_min_progress_m == o.approach_min_progress_m &&
+         approach_max_attempts == o.approach_max_attempts &&
+         approach_window_step_m == o.approach_window_step_m &&
+         approach_window_snap == o.approach_window_snap &&
+         approach_still_speed_m_s == o.approach_still_speed_m_s &&
+         approach_speed_smooth == o.approach_speed_smooth &&
+         approach_window_heading_max_deg == o.approach_window_heading_max_deg &&
          blend_frames == o.blend_frames && lead_in_rate == o.lead_in_rate &&
          lead_in_min_s == o.lead_in_min_s && lead_in_max_s == o.lead_in_max_s &&
          enter_yaw_rate_deg == o.enter_yaw_rate_deg &&
@@ -287,6 +325,31 @@ void Cfg::validate() const {
   if (lead_in_max_s < lead_in_min_s)
     throw std::runtime_error(
         "repose planner: lead_in_max_s must be >= lead_in_min_s");
+  if (approach_enabled && approach_motion.empty())
+    throw std::runtime_error(
+        "repose planner: approach.motion is required when approach is enabled");
+  if (approach_enter_m <= 0.0f || approach_target_m < 0.0f ||
+      approach_target_m >= approach_enter_m)
+    throw std::runtime_error(
+        "repose planner: approach needs 0 <= target_m < enter_m");
+  if (approach_max_step_m <= 0.0f || approach_turn_max_deg <= 0.0f ||
+      approach_turn_max_deg > 180.0f || approach_turn_max_attempts < 1)
+    throw std::runtime_error(
+        "repose planner: approach max_step_m must be > 0, turn_max_deg in "
+        "(0, 180], and turn_max_attempts >= 1");
+  if (approach_min_progress_m < 0.0f || approach_max_attempts < 1)
+    throw std::runtime_error(
+        "repose planner: approach needs min_progress_m >= 0 and max_attempts "
+        ">= 1");
+  if (approach_window_step_m <= 0.0f || approach_window_snap < 0 ||
+      approach_still_speed_m_s <= 0.0f || approach_speed_smooth < 1 ||
+      approach_speed_smooth % 2 == 0 ||
+      approach_window_heading_max_deg <= 0.0f ||
+      approach_window_heading_max_deg > 180.0f)
+    throw std::runtime_error(
+        "repose planner: approach window_step/still_speed must be positive, "
+        "window_snap non-negative, speed_smooth a positive odd number, and "
+        "window_heading_max_deg in (0, 180]");
 
   // ── the knobs the yaml only just gained a way to get wrong ──
   if (min_value < 0 || min_value > 255)
