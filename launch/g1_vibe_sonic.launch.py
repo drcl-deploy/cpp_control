@@ -333,7 +333,7 @@ def generate_launch_description():
             'stand_walk_teleop', default_value='false',
             description='left-stick forward runs bounded walk bouts in planner stand'),
         DeclareLaunchArgument('stand_walk_motion', default_value=''),
-        DeclareLaunchArgument('stand_walk_distance_m', default_value='0.32'),
+        DeclareLaunchArgument('stand_walk_distance_m', default_value='1.0'),
         DeclareLaunchArgument('stand_walk_lead_s', default_value='0.35'),
         DeclareLaunchArgument('stand_walk_exit_s', default_value='0.45'),
         DeclareLaunchArgument('stand_walk_pause_s', default_value='0.35'),

@@ -110,7 +110,7 @@ void G1SonicNode::construct(bool bind_now) {
   const std::string manual_walk_path =
       this->declare_parameter("stand_walk_motion", "");
   manual_walk_distance_m_ =
-      this->declare_parameter("stand_walk_distance_m", 0.32);
+      this->declare_parameter("stand_walk_distance_m", 1.0);
   manual_walk_lead_s_ = this->declare_parameter("stand_walk_lead_s", 0.35);
   manual_walk_exit_s_ = this->declare_parameter("stand_walk_exit_s", 0.45);
   manual_walk_pause_s_ = this->declare_parameter("stand_walk_pause_s", 0.35);
@@ -177,8 +177,12 @@ void G1SonicNode::construct(bool bind_now) {
   make_stand_motion();
   if (manual_walk_enabled_)
     make_manual_walk_motion(asset_path(manual_walk_path));
-  active_motion_ = motion_.get();
-  active_clock_ = clock_.get();
+  // A planner intentionally boots without a clip, so motion_/clock_ are null.
+  // Preserve the nominal stand binding selected by make_stand_motion() rather
+  // than overwriting it with those null clip pointers.
+  rebind_active();
+  if (!active_motion_ || !active_clock_)
+    throw std::runtime_error("g1_sonic: no active reference after startup");
 
   if (config_ && std::abs(config_->control_dt - manifest_.step_dt) > 1e-6)
     RCLCPP_WARN(

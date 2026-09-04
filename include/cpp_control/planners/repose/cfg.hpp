@@ -180,6 +180,9 @@ struct Cfg {
   // every noisy hint. +90,-180,-90 covers the full circle without the old
   // +90,-90 cancellation. A partial, close top gets only the small reframe.
   bool stateful_scan = false;
+  /// Start each new global search with positive base yaw: physically left /
+  /// CCW. False preserves v9's newest-hint sign for a direct A/B.
+  bool search_left_first = false;
   bool lock_candidate_identity = false;
   bool smooth_scan = false;
   float scan_yaw_rate_deg = 45.0f;
@@ -191,6 +194,9 @@ struct Cfg {
   // through that known square rather than requiring those same pixels to have
   // valid depth. This is the hole-tolerant half of v9 perception.
   bool plane_color_pool = false;
+  /// Pooling is an augmentation for depth holes. When true, a failed or
+  /// conflicting projected vote cannot erase a valid depth-supported vote.
+  bool plane_color_pool_fallback = false;
   float plane_color_inset_frac = 0.06f;
 
   // ── the seam (no sim twin: hardware has no teleport) ──
@@ -276,6 +282,18 @@ struct Cfg {
     c.plane_color_pool = true;
     c.enter_yaw_rate_deg = 60.0f;
     c.lead_in_max_s = 0.60f;
+    return c;
+  }
+  /// v9.1 — the evidence-backed hardware patch from 04Sep2026_03_47. Keep
+  /// v9's dynamics, but admit more settled reads, retain a sound depth colour
+  /// when projected pooling misses, and make a fresh global search begin left.
+  static Cfg v9_1() {
+    Cfg c = v9();
+    c.omega_still = 0.25f;
+    c.settle_steps = 60;
+    c.min_visible = 0.55f;
+    c.plane_color_pool_fallback = true;
+    c.search_left_first = true;
     return c;
   }
   static Cfg preset(const std::string& name);

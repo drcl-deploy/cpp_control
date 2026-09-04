@@ -19,8 +19,10 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v8") return Cfg::v8();
   if (name == "v8.5") return Cfg::v8_5();
   if (name == "v9") return Cfg::v9();
+  if (name == "v9.1") return Cfg::v9_1();
   throw std::runtime_error(
-      "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5 | v9, got '" +
+      "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5 | v9 | "
+      "v9.1, got '" +
       name + "'");
 }
 
@@ -151,7 +153,7 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   reject_unknown(
       pl, "observe.plane",
       {"floor_quantile", "ransac_dist_m", "top_band_m", "close_px", "fit_slack",
-       "range_max_m", "color_pool", "color_inset_frac"});
+       "range_max_m", "color_pool", "color_pool_fallback", "color_inset_frac"});
   Reader r_pl{pl};
   r_pl("floor_quantile", c.plane_floor_quantile);
   r_pl("ransac_dist_m", c.plane_ransac_dist_m);
@@ -160,6 +162,7 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_pl("fit_slack", c.plane_fit_slack);
   r_pl("range_max_m", c.plane_range_max_m);
   r_pl("color_pool", c.plane_color_pool);
+  r_pl("color_pool_fallback", c.plane_color_pool_fallback);
   r_pl("color_inset_frac", c.plane_color_inset_frac);
 
   const YAML::Node g = obs ? obs["gates"] : YAML::Node();
@@ -197,9 +200,9 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
       l, "loop",
       {"nominal_stand", "pattern", "retry_limit", "arm_radius", "horizon_gain",
        "stance_band_m", "scan_sweep_deg", "settle_steps", "scan_steps",
-       "hold_tail", "stateful_scan", "near_reframe_range_m", "near_reframe_deg",
-       "lock_candidate_identity", "smooth_scan", "scan_yaw_rate_deg",
-       "scan_yaw_accel_deg"});
+       "hold_tail", "stateful_scan", "search_left_first",
+       "near_reframe_range_m", "near_reframe_deg", "lock_candidate_identity",
+       "smooth_scan", "scan_yaw_rate_deg", "scan_yaw_accel_deg"});
   Reader r_l{l};
   r_l("nominal_stand", c.nominal_stand);
   r_l("pattern", c.pattern);
@@ -212,6 +215,7 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_l("scan_steps", c.scan_steps);
   r_l("hold_tail", c.hold_tail);
   r_l("stateful_scan", c.stateful_scan);
+  r_l("search_left_first", c.search_left_first);
   r_l("near_reframe_range_m", c.near_reframe_range_m);
   r_l("near_reframe_deg", c.near_reframe_deg);
   r_l("lock_candidate_identity", c.lock_candidate_identity);
@@ -278,6 +282,7 @@ bool Cfg::operator==(const Cfg& o) const {
          plane_fit_slack == o.plane_fit_slack &&
          plane_range_max_m == o.plane_range_max_m &&
          plane_color_pool == o.plane_color_pool &&
+         plane_color_pool_fallback == o.plane_color_pool_fallback &&
          plane_color_inset_frac == o.plane_color_inset_frac &&
          chroma_reject == o.chroma_reject && proc_width == o.proc_width &&
          min_area_frac == o.min_area_frac && min_px_floor == o.min_px_floor &&
@@ -294,6 +299,7 @@ bool Cfg::operator==(const Cfg& o) const {
          scan_sweep_deg == o.scan_sweep_deg && settle_steps == o.settle_steps &&
          scan_steps == o.scan_steps && hold_tail == o.hold_tail &&
          stateful_scan == o.stateful_scan &&
+         search_left_first == o.search_left_first &&
          lock_candidate_identity == o.lock_candidate_identity &&
          smooth_scan == o.smooth_scan &&
          scan_yaw_rate_deg == o.scan_yaw_rate_deg &&

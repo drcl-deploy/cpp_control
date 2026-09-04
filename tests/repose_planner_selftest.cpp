@@ -66,7 +66,7 @@ bool threw(F&& f) {
 void check_cfg() {
   std::puts("cfg");
   const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8(), v85 = Cfg::v8_5(),
-            v9 = Cfg::v9();
+            v9 = Cfg::v9(), v91 = Cfg::v9_1();
   check(!v6.nominal_stand && v7.nominal_stand,
         "v6 and v7 differ by the gaze fix and nothing else");
   check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
@@ -114,8 +114,15 @@ void check_cfg() {
             v85.approach_no_progress_limit == 2,
         "v8.5 is v8 plus the guarded approach mode");
   check(v9.approach_enabled && v9.approach_anisotropic && v9.stateful_scan &&
-            v9.plane_color_pool && v9.enter_yaw_rate_deg > 0.0f,
+            v9.plane_color_pool && !v9.plane_color_pool_fallback &&
+            !v9.search_left_first && v9.enter_yaw_rate_deg > 0.0f,
         "v9 enables stable search, axis-wise approach and smooth dynamic acts");
+  check(v91.plane_color_pool_fallback && v91.search_left_first &&
+            v91.omega_still == 0.25f && v91.settle_steps == 60 &&
+            v91.min_visible == 0.55f &&
+            v91.approach_enter_forward_m == v9.approach_enter_forward_m &&
+            v91.approach_window_step_m == v9.approach_window_step_m,
+        "v9.1 changes observation/search admission without changing approach");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
@@ -201,6 +208,20 @@ void check_plane_read() {
   const Sight from_holes = pooled(hole_color, depth, intr, cam);
   check(from_holes.ok && from_holes.color_ok && from_holes.color == 5,
         "v9 pools RGB inside the square even where top depth is missing");
+
+  Cfg destructive = Cfg::v9();
+  destructive.min_visible = 0.70f;
+  destructive.plane_color_inset_frac = 0.499f;
+  CubeSight tiny_pool(destructive, half);
+  const Sight pool_miss = tiny_pool(bgr, depth, intr, cam);
+  Cfg fallback = Cfg::v9_1();
+  fallback.min_visible = 0.70f;
+  fallback.plane_color_inset_frac = 0.499f;
+  CubeSight guarded_pool(fallback, half);
+  const Sight depth_retained = guarded_pool(bgr, depth, intr, cam);
+  check(!pool_miss.color_ok && depth_retained.color_ok &&
+            depth_retained.color == 5,
+        "v9.1 projected pooling cannot erase a valid depth colour vote");
 
   cv::Mat floor_depth = depth.clone();
   for (int i = 0; i < h * w; ++i)
@@ -977,15 +998,23 @@ void check_config_roundtrip(const std::string& path, bool parity) {
       root["version"] ? root["version"].as<std::string>() : "v7";
   check(!threw([&] { Cfg::from_yaml(root); }),
         "the config loads and validates");
+  const Cfg loaded = Cfg::from_yaml(root);
+  if (named == "v9.1") {
+    check(loaded.plane_color_pool_fallback && loaded.search_left_first &&
+              loaded.omega_still == 0.25f && loaded.settle_steps == 60 &&
+              loaded.min_visible == 0.55f,
+          "the shipped v9.1 hardware-evidence knobs survive yaml parsing");
+  }
 
   // Parity is asserted only for a file that CLAIMS to be untuned — the shipped
   // base. A deployment config exists precisely to differ from its preset, and
   // asserting otherwise would make tuning a test failure.
   if (parity) {
-    check(Cfg::from_yaml(root) == Cfg::preset(named),
+    check(loaded == Cfg::preset(named),
           "the shipped yaml round-trips to the preset it names");
-    // `version:` is the ablation switch, so all three have to survive the same
-    // file — that is the "one line A/Bs both" claim, tested.
+    // V6--v9 remain one-line ablations of the base file. V9.1 deliberately
+    // changes explicit observation thresholds, so its own shipped file has a
+    // separate full-parity test.
     for (const char* v : {"v6", "v7", "v7.1", "v8", "v8.5", "v9"}) {
       YAML::Node n = YAML::Clone(root);
       n["version"] = v;

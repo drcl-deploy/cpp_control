@@ -82,7 +82,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'stand_walk_motion',
             default_value='data/sys1_walk/walk_forward_amateur_001__A001/motion.npz'),
-        DeclareLaunchArgument('stand_walk_distance_m', default_value='0.32'),
+        DeclareLaunchArgument('stand_walk_distance_m', default_value='1.0'),
         DeclareLaunchArgument('stand_walk_lead_s', default_value='0.35'),
         DeclareLaunchArgument('stand_walk_exit_s', default_value='0.45'),
         DeclareLaunchArgument('stand_walk_pause_s', default_value='0.35'),

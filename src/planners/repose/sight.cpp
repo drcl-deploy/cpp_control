@@ -911,6 +911,8 @@ Sight CubeSight::read_plane(const cv::Mat& depth, int min_px, float edge,
     return s;
   }
   if (cfg_.plane_color_pool) {
+    const int depth_color = best.color;
+    const int depth_color_px = best.color_px;
     // Geometry has already paid for the square. Project every image ray onto
     // its known top plane and vote RGB inside the fitted footprint, including
     // pixels whose D435i depth is missing at an edge or texture boundary.
@@ -941,8 +943,19 @@ Sight CubeSight::read_plane(const cv::Mat& depth, int min_px, float edge,
     }
     const int pooled = static_cast<int>(
         std::max_element(vote.begin(), vote.end()) - vote.begin());
-    best.color_px = vote[pooled];
-    best.color = best.color_px >= min_px ? pooled : -1;
+    const int pooled_px = vote[pooled];
+    const int pooled_color = pooled_px >= min_px ? pooled : -1;
+    // V9 made projected pooling authoritative. The hardware bag showed that a
+    // small projection/palette miss could consequently turn a clear existing
+    // depth vote into `no_color`. V9.1 makes pooling the intended rescue path:
+    // measured 3-D top pixels win when valid; projection fills only their gap.
+    if (!cfg_.plane_color_pool_fallback || depth_color < 0) {
+      best.color = pooled_color;
+      best.color_px = pooled_px;
+    } else {
+      best.color = depth_color;
+      best.color_px = depth_color_px;
+    }
     for (int color = 0; color < NUM_COLORS; ++color)
       if (vote[color] > 0)
         last_.push_back({color, vote[color], best.up, best.vis, best.big,

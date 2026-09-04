@@ -757,7 +757,9 @@ class ReposeNode : public rclcpp::Node {
   /// directed reframe, and make it smaller when the partial geometry is close.
   Plan shape_scan(Plan raw) {
     if (raw.mode != Mode::SCAN || raw.approach_turn) {
-      if (raw.mode == Mode::CLIP || raw.mode == Mode::APPROACH) reset_scan();
+      if (raw.mode == Mode::CLIP || raw.mode == Mode::APPROACH ||
+          (cfg_.search_left_first && raw.approach_turn))
+        reset_scan();
       return raw;
     }
     if (!cfg_.stateful_scan) return raw;
@@ -779,7 +781,11 @@ class ReposeNode : public rclcpp::Node {
       search_scan_active_ = true;
       search_scan_phase_ = 0;
       search_scan_rung_ = clips_->rung();
-      search_scan_sign_ = raw.yaw_offset < 0.0f ? -1.0f : 1.0f;
+      // Positive base yaw is physically left / counter-clockwise. V9.1 fixes
+      // that as the first global-search leg; v9 retains its hint-selected sign.
+      search_scan_sign_ = cfg_.search_left_first
+                              ? 1.0f
+                              : (raw.yaw_offset < 0.0f ? -1.0f : 1.0f);
     }
     static constexpr float kScale[3] = {1.0f, -2.0f, -1.0f};
     const float sweep = cfg_.scan_sweep_deg * 3.14159265358979323846f / 180.0f;

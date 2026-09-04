@@ -166,7 +166,7 @@ class G1SonicNode : public G1Node {
   double manual_walk_deadband_ = 0.20;
   double manual_walk_timeout_ = 0.25;
   double manual_walk_pause_s_ = 0.35;
-  double manual_walk_distance_m_ = 0.32;
+  double manual_walk_distance_m_ = 1.0;
   double manual_walk_lead_s_ = 0.35;
   double manual_walk_exit_s_ = 0.45;
   double manual_walk_input_ = 0.0;
