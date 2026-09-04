@@ -22,6 +22,7 @@
 #include "common/deploy_manifest.hpp"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
+#include "common/g1/stand_yaw.hpp"
 #include "common/math_utils.hpp"
 #include "common/obs_terms.hpp"
 #include "common/onnx_session.hpp"
@@ -43,6 +44,60 @@ static std::string tmp_path(const std::string& name)
 {
     const char* base = std::getenv("TMPDIR");
     return std::string(base ? base : "/tmp") + "/" + name;
+}
+
+// ── Stand yaw: deadband, acceleration, watchdog, and unwrapped turns ──
+
+static void test_stand_yaw()
+{
+    g1::StandYawConfig config;
+    config.enabled = true;
+    config.max_rate = 1.0;
+    config.max_accel = 2.0;
+    config.deadband = 0.1;
+    config.input_timeout = 0.25;
+    g1::StandYaw yaw(config);
+
+    yaw.set_input(0.05, 0.0);  // inside deadband
+    yaw.step(0.0, 0.1, true);
+    CHECK(yaw.rate() == 0.0 && yaw.angle() == 0.0);
+
+    yaw.set_input(1.0, 0.1);
+    yaw.step(0.1, 0.1, true);
+    CHECK(std::fabs(yaw.rate() - 0.2) < 1e-9);
+    CHECK(std::fabs(yaw.angle() - 0.01) < 1e-9);
+    yaw.step(0.2, 0.1, true);
+    CHECK(std::fabs(yaw.rate() - 0.4) < 1e-9);
+    CHECK(std::fabs(yaw.angle() - 0.04) < 1e-9);
+    CHECK(std::fabs(yaw.future_angle(0.3) - 0.25) < 1e-9);
+
+    // A stale input brakes rather than continuing forever.
+    yaw.step(0.4, 0.1, true);
+    CHECK(std::fabs(yaw.rate() - 0.2) < 1e-9);
+    yaw.step(0.5, 0.1, true);
+    CHECK(std::fabs(yaw.rate()) < 1e-9);
+    const double held = yaw.angle();
+    yaw.step(0.6, 0.1, false);
+    CHECK(std::fabs(yaw.angle() - held) < 1e-9);
+
+    // Arming disables further stick drive and brakes without resetting angle.
+    yaw.reset();
+    yaw.set_input(1.0, 1.0);
+    yaw.step(1.0, 0.1, true);
+    yaw.set_input(1.0, 1.1);
+    yaw.step(1.1, 0.1, false);
+    CHECK(std::fabs(yaw.rate()) < 1e-9);
+    CHECK(yaw.angle() > 0.0);
+
+    // The state does not clamp at +/-pi: a held stick can keep turning.
+    yaw.reset();
+    for (int i = 0; i < 100; ++i) {
+        const double now = i * 0.1;
+        yaw.set_input(1.0, now);
+        yaw.step(now, 0.1, true);
+    }
+    CHECK(yaw.angle() > 2.0 * 3.14159265358979323846);
+    std::puts("ok  stand yaw (bounded rate, watchdog, unlimited heading)");
 }
 
 // ── HistoryTerm: mjlab CircularBuffer semantics ─────────────────
@@ -515,6 +570,7 @@ static void test_asset_path()
 
 int main(int argc, char** argv)
 {
+    test_stand_yaw();
     test_history();
     test_manifest();
     test_motion();

@@ -254,7 +254,10 @@ G1SonicNode::Binding G1VibeSonicNode::make_binding(
                 auto t = active_motion_->root_ang_vel_b(active_clock_->frame());
                 v[0] = t[0];
                 v[1] = t[1];
-                v[2] = t[2];
+                // The joystick rotates the synthetic stand reference itself;
+                // report the matching twist to the adapter instead of lying
+                // that this rolling reference is static.
+                v[2] = stand_yaw_reference_active() ? stand_yaw_rate() : t[2];
               }};
   }
 
@@ -308,7 +311,7 @@ bool G1VibeSonicNode::allow_policy_entry() {
         start_frame_);
     return false;
   }
-  return true;
+  return G1SonicNode::allow_policy_entry();
 }
 
 void G1VibeSonicNode::enter_prep() {

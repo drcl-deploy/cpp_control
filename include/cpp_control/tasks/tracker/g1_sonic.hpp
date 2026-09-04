@@ -10,6 +10,7 @@
 
 #include "common/deploy_manifest.hpp"
 #include "common/g1/motion.hpp"
+#include "common/g1/stand_yaw.hpp"
 #include "common/obs_terms.hpp"
 #include "common/onnx_session.hpp"
 #include "cpp_control/robots/g1.hpp"
@@ -50,10 +51,13 @@ class G1SonicNode : public G1Node {
 
  protected:
   RobotCommand policy_control() override;
+  void on_joy_input(sensor_msgs::msg::Joy::SharedPtr msg) override;
   void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
 #ifdef HAS_UNITREE_HG
+  void on_gamepad_input() override;
   void on_gamepad() override;
 #endif
+  bool allow_policy_entry() override;
 
   /// One manifest term bound to its slice of a session input buffer.
   struct Binding {
@@ -74,6 +78,11 @@ class G1SonicNode : public G1Node {
   /// but keep observation histories and the last action (the planner reference swaps).
   virtual void engage_reset(bool reset_history = true);
   void fill_tokenizer(float* dst);
+  std::array<float, 4> reference_root_quat(int frame,
+                                           double seconds_ahead = 0.0) const;
+  bool stand_yaw_reference_active() const;
+  bool stand_yaw_drive_active() const;
+  float stand_yaw_rate() const;
   void on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void on_reference(cpp_control::msg::MotionReference::SharedPtr msg);
   void commit_pending_motion();
@@ -125,6 +134,13 @@ class G1SonicNode : public G1Node {
   bool pending_engage_ =
       false;  ///< explicit re-engage (stand <-> track switches)
   bool prev_rb_joy_ = false;
+  bool prev_a_joy_ = false;
+
+  // Right-stick X heading control, active only while SONIC owns nominal stand.
+  g1::StandYaw stand_yaw_;
+  double stand_yaw_settle_rate_ = 0.03490658503988659;  // 2 deg/s
+  double stand_yaw_settle_gyro_ = 0.08726646259971647;  // 5 deg/s
+  double stand_yaw_settle_error_ = 0.08726646259971647;  // 5 deg
 
   // obs state
   std::vector<std::unique_ptr<obs::HistoryTerm>> histories_;

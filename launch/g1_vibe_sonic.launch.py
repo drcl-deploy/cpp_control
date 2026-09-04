@@ -207,6 +207,17 @@ def _launch_runtime(context, encoder_pkg):
             'planner': LaunchConfiguration('planner'),
             'calibration_lock': LaunchConfiguration('calibration_lock'),
             'status_rate_hz': LaunchConfiguration('status_rate_hz'),
+            'stand_yaw_teleop': LaunchConfiguration('stand_yaw_teleop'),
+            'stand_yaw_rate_deg_s': LaunchConfiguration('stand_yaw_rate_deg_s'),
+            'stand_yaw_accel_deg_s2': LaunchConfiguration('stand_yaw_accel_deg_s2'),
+            'stand_yaw_deadband': LaunchConfiguration('stand_yaw_deadband'),
+            'stand_yaw_timeout_s': LaunchConfiguration('stand_yaw_timeout_s'),
+            'stand_yaw_settle_rate_deg_s': LaunchConfiguration(
+                'stand_yaw_settle_rate_deg_s'),
+            'stand_yaw_settle_gyro_deg_s': LaunchConfiguration(
+                'stand_yaw_settle_gyro_deg_s'),
+            'stand_yaw_settle_error_deg': LaunchConfiguration(
+                'stand_yaw_settle_error_deg'),
         }],
         on_exit=Shutdown(reason='Vibe controller exited'),
     )
@@ -298,7 +309,18 @@ def generate_launch_description():
             description='hold nominal SONIC stand and refuse every motion source'),
         DeclareLaunchArgument(
             'status_rate_hz', default_value='20.0',
-            description='ControllerStatus publication rate when the planner or calibration is active'),
+            description='ControllerStatus rate with planner/calibration active'),
+        DeclareLaunchArgument(
+            'stand_yaw_teleop', default_value='false',
+            description='right-stick X controls heading while SONIC holds stand'),
+        DeclareLaunchArgument('stand_yaw_rate_deg_s', default_value='45.0'),
+        DeclareLaunchArgument(
+            'stand_yaw_accel_deg_s2', default_value='180.0'),
+        DeclareLaunchArgument('stand_yaw_deadband', default_value='0.15'),
+        DeclareLaunchArgument('stand_yaw_timeout_s', default_value='0.25'),
+        DeclareLaunchArgument('stand_yaw_settle_rate_deg_s', default_value='2.0'),
+        DeclareLaunchArgument('stand_yaw_settle_gyro_deg_s', default_value='5.0'),
+        DeclareLaunchArgument('stand_yaw_settle_error_deg', default_value='5.0'),
 
         OpaqueFunction(function=_launch_runtime, args=[encoder_pkg]),
     ])

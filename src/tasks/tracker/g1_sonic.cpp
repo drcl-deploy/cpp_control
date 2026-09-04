@@ -11,6 +11,18 @@
 
 namespace cpp_control {
 
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kDegToRad = kPi / 180.0;
+
+double yaw_of(const std::array<float, 4>& q) {
+  return std::atan2(2.0 * (q[0] * q[3] + q[1] * q[2]),
+                    1.0 - 2.0 * (q[2] * q[2] + q[3] * q[3]));
+}
+
+}  // namespace
+
 // ── Constructor ──────────────────────────────────────────────────
 
 G1SonicNode::G1SonicNode(const std::string& node_name)
@@ -37,6 +49,28 @@ void G1SonicNode::construct(bool bind_now) {
       this->declare_parameter("reference_topic", "/tracker/reference");
   planner_ = this->declare_parameter("planner", false);
   calibration_lock_ = this->declare_parameter("calibration_lock", false);
+
+  g1::StandYawConfig stand_yaw_config;
+  stand_yaw_config.enabled =
+      this->declare_parameter("stand_yaw_teleop", false);
+  stand_yaw_config.max_rate =
+      this->declare_parameter("stand_yaw_rate_deg_s", 45.0) * kDegToRad;
+  stand_yaw_config.max_accel =
+      this->declare_parameter("stand_yaw_accel_deg_s2", 180.0) * kDegToRad;
+  stand_yaw_config.deadband =
+      this->declare_parameter("stand_yaw_deadband", 0.15);
+  stand_yaw_config.input_timeout =
+      this->declare_parameter("stand_yaw_timeout_s", 0.25);
+  stand_yaw_settle_rate_ =
+      this->declare_parameter("stand_yaw_settle_rate_deg_s", 2.0) * kDegToRad;
+  stand_yaw_settle_gyro_ =
+      this->declare_parameter("stand_yaw_settle_gyro_deg_s", 5.0) * kDegToRad;
+  stand_yaw_settle_error_ =
+      this->declare_parameter("stand_yaw_settle_error_deg", 5.0) * kDegToRad;
+  if (stand_yaw_settle_rate_ <= 0.0 || stand_yaw_settle_gyro_ <= 0.0 ||
+      stand_yaw_settle_error_ <= 0.0)
+    throw std::runtime_error("g1_sonic: stand-yaw settle limits must be > 0");
+  stand_yaw_.configure(stand_yaw_config);
 
   if (onnx_path.empty())
     throw std::runtime_error("g1_sonic: onnx_path is required");
@@ -93,6 +127,13 @@ void G1SonicNode::construct(bool bind_now) {
         this->get_logger(),
         "control_dt %.4f != manifest step_dt %.4f — timer runs at control_dt",
         config_->control_dt, manifest_.step_dt);
+  if (stand_yaw_.enabled())
+    RCLCPP_INFO(this->get_logger(),
+                "stand yaw teleop ON: right-stick X, %.1f deg/s, %.1f "
+                "deg/s^2, deadband %.2f, watchdog %.2f s",
+                stand_yaw_config.max_rate / kDegToRad,
+                stand_yaw_config.max_accel / kDegToRad,
+                stand_yaw_config.deadband, stand_yaw_config.input_timeout);
 
   policy_actions_.assign(G1_NUM_MOTOR, 0.0f);
   session_ = std::make_unique<deploy::OnnxSession>(onnx_path);
@@ -266,6 +307,9 @@ void G1SonicNode::commit_pending_motion() {
 }
 
 void G1SonicNode::on_button_a() {
+  // Also gate direct task-handler calls; BaseNode performs the same check
+  // before changing modes, but ROS /joy dispatch reaches this method too.
+  if (!allow_policy_entry()) return;
   if (calibration_lock_) {
     enter_stand();
     RCLCPP_INFO(this->get_logger(),
@@ -312,6 +356,7 @@ void G1SonicNode::enter_stand() {
                 "the planner rollout DISARMED — nominal stand locked");
   }
   planner_active_ = false;
+  stand_yaw_.reset();
   stand_mode_ = true;
   pending_engage_ = true;
   control_mode_ = ControlMode::POLICY;
@@ -476,11 +521,40 @@ void G1SonicNode::fill_tokenizer(float* dst) {
     std::memcpy(dst + s * row, &tokenizer_flat_[s * 2 * J],
                 2 * J * sizeof(float));
     const int f = active_clock_->future_frame(s * skip);
-    auto rot_dif =
-        math::qmul(math::qinv(robot_quat), active_clock_->aligned_root_quat(f));
+    const double seconds_ahead =
+        static_cast<double>(s * skip) / active_motion_->fps;
+    auto rot_dif = math::qmul(math::qinv(robot_quat),
+                              reference_root_quat(f, seconds_ahead));
     auto r6d = math::quat_to_rotation_6d(rot_dif);
     std::memcpy(dst + s * row + 2 * J, r6d.data(), 6 * sizeof(float));
   }
+}
+
+std::array<float, 4> G1SonicNode::reference_root_quat(
+    int frame, double seconds_ahead) const {
+  const auto base = active_clock_->aligned_root_quat(frame);
+  if (!stand_yaw_reference_active()) return base;
+  // Keep the integrator unwrapped so a held stick can rotate indefinitely;
+  // reduce only the trigonometric argument used to build the quaternion.
+  const double yaw = std::remainder(stand_yaw_.future_angle(seconds_ahead),
+                                    2.0 * kPi);
+  const float half = static_cast<float>(0.5 * yaw);
+  return math::qmul({std::cos(half), 0.0f, 0.0f, std::sin(half)}, base);
+}
+
+bool G1SonicNode::stand_yaw_reference_active() const {
+  return stand_yaw_.enabled() && !calibration_lock_ && stand_mode_ &&
+         control_mode_ == ControlMode::POLICY;
+}
+
+bool G1SonicNode::stand_yaw_drive_active() const {
+  return stand_yaw_reference_active() && !planner_active_;
+}
+
+float G1SonicNode::stand_yaw_rate() const {
+  return stand_yaw_reference_active()
+             ? static_cast<float>(stand_yaw_.rate())
+             : 0.0f;
 }
 
 // ── Engage / reset ───────────────────────────────────────────────
@@ -546,6 +620,9 @@ RobotCommand G1SonicNode::policy_control() {
   // (pending_engage_, since those never leave POLICY).
   const auto now = this->now();
   const bool from_elsewhere = (now - last_policy_tick_).seconds() > 5.0 * dt;
+  // Any excursion through nominal/zeroing/damping invalidates the old stand
+  // anchor. Re-enter at the measured heading with no latent stick/rate state.
+  if (from_elsewhere && stand_mode_) stand_yaw_.reset();
   if (pending_engage_ || from_elsewhere) {
     // Arriving from another control mode is a cold start; a reference swap
     // inside POLICY is not — under the planner that happens every couple of seconds.
@@ -553,6 +630,19 @@ RobotCommand G1SonicNode::policy_control() {
     pending_engage_ = false;
   }
   last_policy_tick_ = now;
+
+  if (stand_yaw_reference_active()) {
+    stand_yaw_.step(now.seconds(), dt, stand_yaw_drive_active());
+    if (std::abs(stand_yaw_.target_rate()) > 0.0 ||
+        std::abs(stand_yaw_.rate()) > stand_yaw_settle_rate_)
+      RCLCPP_INFO_THROTTLE(
+          this->get_logger(), *this->get_clock(), 500,
+          "stand yaw: stick=%+.2f target=%+.1f rate=%+.1f angle=%+.1f deg",
+          stand_yaw_.input(), stand_yaw_.target_rate() / kDegToRad,
+          stand_yaw_.rate() / kDegToRad, stand_yaw_.angle() / kDegToRad);
+  } else {
+    stand_yaw_.reset();
+  }
 
   for (auto& update : history_updates_) update();
   for (auto& b : bindings_) b.write(b.dst);
@@ -584,9 +674,45 @@ RobotCommand G1SonicNode::policy_control() {
 
 // ── Joystick / Gamepad (textop parity: RB/R1 = stand, A = track) ─
 
+void G1SonicNode::on_joy_input(sensor_msgs::msg::Joy::SharedPtr msg) {
+  const float axis = msg->axes.size() > joy::XMODE_RIGHT_JOY_LEFT_RIGHT
+                         ? msg->axes[joy::XMODE_RIGHT_JOY_LEFT_RIGHT]
+                         : 0.0f;
+  stand_yaw_.set_input(axis, this->now().seconds());
+}
+
+bool G1SonicNode::allow_policy_entry() {
+  // The ordinary A transition (nominal -> policy) stays unchanged. This gate
+  // matters only when A arms a planner from an already-running SONIC stand.
+  if (!stand_yaw_reference_active()) return true;
+
+  const double now = this->now().seconds();
+  const auto desired =
+      reference_root_quat(active_clock_->frame(), /*seconds_ahead=*/0.0);
+  const auto heading_error = math::qmul(
+      math::qinv(math::heading_quat(robot_state_.imu_quaternion)),
+      math::heading_quat(desired));
+  const double error = yaw_of(heading_error);
+  const bool ready = stand_yaw_.centered(now) &&
+                     std::abs(stand_yaw_.rate()) <= stand_yaw_settle_rate_ &&
+                     std::abs(robot_state_.imu_gyroscope[2]) <=
+                         stand_yaw_settle_gyro_ &&
+                     std::abs(error) <= stand_yaw_settle_error_;
+  if (!ready)
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "A refused — center right stick and let stand yaw settle "
+        "(ref rate %.1f, gyro %.1f, heading err %.1f deg)",
+        stand_yaw_.rate() / kDegToRad,
+        robot_state_.imu_gyroscope[2] / kDegToRad, error / kDegToRad);
+  return ready;
+}
+
 void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
   const bool rb =
       msg->buttons.size() > joy::XMODE_R1 && msg->buttons[joy::XMODE_R1] == 1;
+  const bool a =
+      msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1;
   if (rb && !prev_rb_joy_) {
     enter_stand();
     RCLCPP_INFO(this->get_logger(), "-> stand (SONIC @ nominal)");
@@ -595,11 +721,15 @@ void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
 
   // A (base already switched to POLICY): commit any staged motion, then
   // leave stand and (re)start it.
-  if (msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1)
-    on_button_a();
+  if (a && !prev_a_joy_) on_button_a();
+  prev_a_joy_ = a;
 }
 
 #ifdef HAS_UNITREE_HG
+void G1SonicNode::on_gamepad_input() {
+  stand_yaw_.set_input(gamepad_.rx, this->now().seconds());
+}
+
 void G1SonicNode::on_gamepad() {
   if (gamepad_.R1.on_press) {
     enter_stand();

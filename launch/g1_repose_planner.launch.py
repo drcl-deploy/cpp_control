@@ -61,6 +61,18 @@ def generate_launch_description():
             default_value=os.environ.get('VIBE_CAMERA_ADDRESS', '127.0.0.1'),
             description='TCP camera source selected by setup.sh/setup_local.sh'),
         DeclareLaunchArgument('enable_bridge', default_value='true'),
+        DeclareLaunchArgument(
+            'stand_yaw_teleop', default_value='true',
+            description='right-stick heading control while RB stand is active'),
+        DeclareLaunchArgument(
+            'stand_yaw_rate_deg_s', default_value='45.0',
+            description='full-stick manual turn rate while RB stand is active'),
+        DeclareLaunchArgument('stand_yaw_accel_deg_s2', default_value='180.0'),
+        DeclareLaunchArgument('stand_yaw_deadband', default_value='0.15'),
+        DeclareLaunchArgument('stand_yaw_timeout_s', default_value='0.25'),
+        DeclareLaunchArgument('stand_yaw_settle_rate_deg_s', default_value='2.0'),
+        DeclareLaunchArgument('stand_yaw_settle_gyro_deg_s', default_value='5.0'),
+        DeclareLaunchArgument('stand_yaw_settle_error_deg', default_value='5.0'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(common),
@@ -73,6 +85,17 @@ def generate_launch_description():
                 'camera_ip': LaunchConfiguration('camera_ip'),
                 'enable_bridge': LaunchConfiguration('enable_bridge'),
                 'planner': 'true',
+                'stand_yaw_teleop': LaunchConfiguration('stand_yaw_teleop'),
+                'stand_yaw_rate_deg_s': LaunchConfiguration('stand_yaw_rate_deg_s'),
+                'stand_yaw_accel_deg_s2': LaunchConfiguration('stand_yaw_accel_deg_s2'),
+                'stand_yaw_deadband': LaunchConfiguration('stand_yaw_deadband'),
+                'stand_yaw_timeout_s': LaunchConfiguration('stand_yaw_timeout_s'),
+                'stand_yaw_settle_rate_deg_s': LaunchConfiguration(
+                    'stand_yaw_settle_rate_deg_s'),
+                'stand_yaw_settle_gyro_deg_s': LaunchConfiguration(
+                    'stand_yaw_settle_gyro_deg_s'),
+                'stand_yaw_settle_error_deg': LaunchConfiguration(
+                    'stand_yaw_settle_error_deg'),
             }.items(),
         ),
         Node(

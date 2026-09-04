@@ -63,6 +63,8 @@ protected:
 
     // --- Level 2 can override ---
     virtual RobotCommand policy_control();
+    /// Input sampling hook that runs before button mode changes and gates.
+    virtual void on_joy_input(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
     virtual void on_joy(sensor_msgs::msg::Joy::SharedPtr /*msg*/) {}
     /// Task veto on the A button, checked BEFORE the mode flip: a refusal
     /// leaves the mode untouched, so it can never strand DAMPING/ZEROING

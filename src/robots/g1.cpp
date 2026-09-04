@@ -171,6 +171,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
 {
     memcpy(gamepad_rx_.buff, msg.wireless_remote.data(), 40);
     gamepad_.update(gamepad_rx_.RF_RX);
+    on_gamepad_input();
 
     // Mode switching only — velocity mapping is task-specific (Level 2)
     if (gamepad_.B.on_press)

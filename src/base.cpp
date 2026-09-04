@@ -146,6 +146,7 @@ RobotCommand BaseNode::policy_control()
 
 void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
 {
+    on_joy_input(msg);
     if (msg->buttons.size() <= joy::XMODE_Y)
         return;
 
