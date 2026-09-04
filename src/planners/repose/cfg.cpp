@@ -21,9 +21,10 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v9") return Cfg::v9();
   if (name == "v9.1") return Cfg::v9_1();
   if (name == "v9.2") return Cfg::v9_2();
+  if (name == "v9.3") return Cfg::v9_3();
   throw std::runtime_error(
       "repose planner: version must be v6 | v7 | v7.1 | v8 | v8.5 | v9 | "
-      "v9.1 | v9.2, got '" +
+      "v9.1 | v9.2 | v9.3, got '" +
       name + "'");
 }
 
@@ -190,10 +191,12 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_geo("z_min_m", c.z_min_m);
 
   const YAML::Node b = root["belief"];
-  reject_unknown(b, "belief", {"window", "min_votes", "omega_still"});
+  reject_unknown(b, "belief",
+                 {"window", "min_votes", "scan_after_reads", "omega_still"});
   Reader r_b{b};
   r_b("window", c.belief_window);
   r_b("min_votes", c.belief_min_votes);
+  r_b("scan_after_reads", c.belief_scan_after_reads);
   r_b("omega_still", c.omega_still);
 
   const YAML::Node l = root["loop"];
@@ -202,8 +205,9 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
       {"nominal_stand", "pattern", "retry_limit", "arm_radius", "horizon_gain",
        "stance_band_m", "scan_sweep_deg", "settle_steps", "scan_steps",
        "hold_tail", "stateful_scan", "search_left_first",
-       "near_reframe_range_m", "near_reframe_deg", "lock_candidate_identity",
-       "smooth_scan", "scan_yaw_rate_deg", "scan_yaw_accel_deg"});
+       "search_left_each_cycle", "near_reframe_range_m", "near_reframe_deg",
+       "lock_candidate_identity", "smooth_scan", "scan_yaw_rate_deg",
+       "scan_yaw_accel_deg"});
   Reader r_l{l};
   r_l("nominal_stand", c.nominal_stand);
   r_l("pattern", c.pattern);
@@ -217,6 +221,7 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_l("hold_tail", c.hold_tail);
   r_l("stateful_scan", c.stateful_scan);
   r_l("search_left_first", c.search_left_first);
+  r_l("search_left_each_cycle", c.search_left_each_cycle);
   r_l("near_reframe_range_m", c.near_reframe_range_m);
   r_l("near_reframe_deg", c.near_reframe_deg);
   r_l("lock_candidate_identity", c.lock_candidate_identity);
@@ -313,6 +318,7 @@ bool Cfg::operator==(const Cfg& o) const {
          slab_frac == o.slab_frac && palette == o.palette &&
          nominal_stand == o.nominal_stand && belief_window == o.belief_window &&
          belief_min_votes == o.belief_min_votes &&
+         belief_scan_after_reads == o.belief_scan_after_reads &&
          omega_still == o.omega_still && pattern == o.pattern &&
          retry_limit == o.retry_limit && arm_radius == o.arm_radius &&
          horizon_gain == o.horizon_gain && stance_band_m == o.stance_band_m &&
@@ -320,6 +326,7 @@ bool Cfg::operator==(const Cfg& o) const {
          scan_steps == o.scan_steps && hold_tail == o.hold_tail &&
          stateful_scan == o.stateful_scan &&
          search_left_first == o.search_left_first &&
+         search_left_each_cycle == o.search_left_each_cycle &&
          lock_candidate_identity == o.lock_candidate_identity &&
          smooth_scan == o.smooth_scan &&
          scan_yaw_rate_deg == o.scan_yaw_rate_deg &&
@@ -378,6 +385,14 @@ void Cfg::validate() const {
   if (belief_min_votes < 1 || belief_window < belief_min_votes)
     throw std::runtime_error(
         "repose planner: need 1 <= belief_min_votes <= belief_window");
+  if (belief_scan_after_reads < belief_min_votes ||
+      belief_scan_after_reads > belief_window)
+    throw std::runtime_error(
+        "repose planner: scan_after_reads must be between min_votes and "
+        "belief window");
+  if (search_left_each_cycle && !search_left_first)
+    throw std::runtime_error(
+        "repose planner: search_left_each_cycle requires search_left_first");
   if (omega_still <= 0.0f)
     throw std::runtime_error(
         "repose planner: omega_still must be > 0 — a gate that never opens "

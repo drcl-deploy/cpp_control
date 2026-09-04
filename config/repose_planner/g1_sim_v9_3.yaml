@@ -1,0 +1,89 @@
+# v9.3: v9.2 approach behavior with patient negative evidence. Three agreeing
+# reads still act immediately; global search waits for the full eight-read ring.
+version: v9.3
+target_color: 4
+rate_hz: 20.0
+stale_s: 1.0
+
+clips: data/sys1_clips.npz
+frames:
+  source: retargeted
+  path: data/retargeted_motions
+  library: data/sys1_library.npz
+
+camera: {host: 127.0.0.1, port: 5555}
+mount:
+  xyz: [0.05, 0.0, 0.4318]
+  quat: [0.6533, 0.2706, -0.2706, -0.6533]
+
+observe:
+  read: plane
+  proc_width: 0
+  geometry:
+    min_visible: 0.55
+  plane:
+    floor_quantile: 0.70
+    ransac_dist_m: 0.035
+    top_band_m: 0.08
+    close_px: 2
+    fit_slack: 0.15
+    range_max_m: 2.30
+    color_pool: true
+    color_pool_fallback: true
+    color_inset_frac: 0.06
+
+belief: {window: 8, min_votes: 3, scan_after_reads: 8, omega_still: 0.25}
+
+loop:
+  pattern: RRF
+  retry_limit: 3
+  arm_radius: 0.30
+  horizon_gain: 0.3
+  stance_band_m: 0.70
+  scan_sweep_deg: 90.0
+  settle_steps: 60
+  scan_steps: 140       # legacy fallback; bounded v9 turns size from angle/rate
+  hold_tail: 15
+  stateful_scan: true
+  search_left_first: true
+  search_left_each_cycle: true
+  lock_candidate_identity: true
+  smooth_scan: true
+  scan_yaw_rate_deg: 45.0
+  scan_yaw_accel_deg: 180.0
+  near_reframe_range_m: 0.70
+  near_reframe_deg: 12.0
+
+approach:
+  enabled: true
+  motion: data/sys1_walk/walk_forward_amateur_001__A001/motion.npz
+  enter_m: 0.25         # retained only for v8.5 A/B; v9+ use axis gates below
+  target_m: 0.13
+  max_step_m: 0.30
+  turn_max_deg: 20.0
+  turn_max_attempts: 3
+  min_progress_m: 0.05
+  max_attempts: 2
+  no_progress_limit: 2
+  net_windows: true
+  anisotropic: true
+  enter_forward_m: 0.25
+  enter_lateral_m: 0.10
+  target_forward_m: 0.08
+  window_step_m: 0.10
+  min_window_m: 0.30
+  window_snap: 4
+  still_speed_m_s: 0.05
+  speed_smooth: 9
+  window_heading_max_deg: 30.0
+  escalate_window: true
+  forward_only: true
+  latch_blocked: true
+
+seam:
+  blend_frames: 12
+  lead_in_rate: 1.5
+  lead_in_min_s: 0.2
+  lead_in_max_s: 0.6
+  enter_yaw_rate_deg: 60.0
+  enter_joint_rate: 2.0

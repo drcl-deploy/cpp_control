@@ -120,21 +120,26 @@ Plan Clips::decide(const Belief& b) const {
   // is down, or the robot never went quiet enough to read — both are answered
   // by standing in the nominal stance, which is also the state that produces
   // the reads needed to get out of it. Turning would be a guess.
-  if (done_ || b.n_reads() < cfg_.belief_min_votes) return still(0.0f);
+  if (done_) return still(0.0f);
 
-  if (!b.valid() || !b.pose_ok()) {
-    // No POSE: turn. Covers "no cube", "only side faces", "mid-tumble" and
-    // "half in frame" with ONE branch — all four are answered by looking from
-    // elsewhere. A quarter sweep when the top face IS in frame and merely cut:
-    // that is a re-aim, not a search.
-    const float sweep =
-        cfg_.scan_sweep_deg * kPi / 180.0f * (b.valid() ? 0.25f : 1.0f);
-    float yaw = std::clamp(b.newest().hint, -sweep, sweep);
-    if (std::fabs(yaw) < 0.25f * sweep)
-      yaw = 0.25f * sweep * (yaw < 0.0f ? -1.0f : 1.0f);
-    return still(yaw);
-  }
-  return retrieve(b.pose());
+  // Positive evidence should remain fast: three agreeing, placed reads may
+  // retrieve immediately. Negative evidence is asymmetric. Hardware commonly
+  // supplies ok, ok, no_blob while settling; v9.2 treated that third read as a
+  // reason for a 180-degree search even though the eight-read ring had not had
+  // a chance to carry. Wait out the configured negative horizon before moving.
+  if (b.valid() && b.pose_ok()) return retrieve(b.pose());
+  if (b.n_reads() < cfg_.belief_scan_after_reads) return still(0.0f);
+
+  // No POSE: turn. Covers "no cube", "only side faces", "mid-tumble" and
+  // "half in frame" with ONE branch — all four are answered by looking from
+  // elsewhere. A quarter sweep when the top face IS in frame and merely cut:
+  // that is a re-aim, not a search.
+  const float sweep =
+      cfg_.scan_sweep_deg * kPi / 180.0f * (b.valid() ? 0.25f : 1.0f);
+  float yaw = std::clamp(b.newest().hint, -sweep, sweep);
+  if (std::fabs(yaw) < 0.25f * sweep)
+    yaw = 0.25f * sweep * (yaw < 0.0f ? -1.0f : 1.0f);
+  return still(yaw);
 }
 
 Plan Clips::still(float yaw) const {

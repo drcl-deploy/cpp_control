@@ -66,7 +66,8 @@ bool threw(F&& f) {
 void check_cfg() {
   std::puts("cfg");
   const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8(), v85 = Cfg::v8_5(),
-            v9 = Cfg::v9(), v91 = Cfg::v9_1(), v92 = Cfg::v9_2();
+            v9 = Cfg::v9(), v91 = Cfg::v9_1(), v92 = Cfg::v9_2(),
+            v93 = Cfg::v9_3();
   check(!v6.nominal_stand && v7.nominal_stand,
         "v6 and v7 differ by the gaze fix and nothing else");
   check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
@@ -132,12 +133,28 @@ void check_cfg() {
             v92.approach_escalate_window && v92.approach_forward_only &&
             v92.approach_latch_blocked &&
             v92.plane_color_pool_fallback == v91.plane_color_pool_fallback &&
-            v92.omega_still == v91.omega_still,
+            v92.omega_still == v91.omega_still &&
+            v92.belief_scan_after_reads == v92.belief_min_votes &&
+            !v92.search_left_each_cycle,
         "v9.2 changes bounded approach recovery, not v9.1 perception");
+  check(v93.belief_scan_after_reads == v93.belief_window &&
+            v93.search_left_first && v93.search_left_each_cycle &&
+            v93.approach_min_window_m == v92.approach_min_window_m &&
+            v93.approach_no_progress_limit == v92.approach_no_progress_limit &&
+            v93.omega_still == v92.omega_still,
+        "v9.3 delays only negative scan evidence and restarts search left");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
         "a quiescence gate that never opens is refused");
+  check(refuses(
+            [](Cfg& c) { c.belief_scan_after_reads = c.belief_min_votes - 1; }),
+        "a negative horizon below the positive quorum is refused");
+  check(refuses([](Cfg& c) {
+          c.search_left_each_cycle = true;
+          c.search_left_first = false;
+        }),
+        "a left-each-cycle search without a left-first convention is refused");
   check(refuses([](Cfg& c) { c.plane_floor_quantile = 1.0f; }),
         "a plane floor quantile outside (0, 1) is refused");
   check(refuses([](Cfg& c) {
@@ -323,6 +340,32 @@ void check_decide_is_pure(const ClipTable& t) {
   check(a.row == c.row && a.sym == c.sym && a.cost == c.cost &&
             clips.burned() == 0,
         "and twenty calls burn nothing and answer the same");
+
+  // 04Sep2026_05_25 t+222.1: two agreeing, placed pink reads followed by one
+  // no_blob read. V9.2 launched a 180-degree scan at 2/3 votes; v9.3 holds the
+  // stance until either the positive quorum carries or all eight reads fail.
+  Cfg patient_cfg = Cfg::v9_3();
+  Clips patient_clips(t, patient_cfg, 4);
+  Belief patient(patient_cfg);
+  Sight missing;
+  missing.hint = 0.4f;
+  patient.push(placed);
+  patient.push(placed);
+  patient.push(missing);
+  check(patient.pose_ok() && !patient.valid() &&
+            patient_clips.decide(patient).mode == Mode::SETTLE,
+        "v9.3 does not turn two good poses plus one miss into a global scan");
+  patient.push(placed);
+  check(patient_clips.decide(patient).mode == Mode::CLIP,
+        "and a third agreeing pose still retrieves before the window fills");
+  patient.clear();
+  for (int i = 0; i + 1 < patient_cfg.belief_scan_after_reads; ++i)
+    patient.push(missing);
+  check(patient_clips.decide(patient).mode == Mode::SETTLE,
+        "negative evidence waits through seven accepted reads");
+  patient.push(missing);
+  check(patient_clips.decide(patient).mode == Mode::SCAN,
+        "a full failed evidence window still launches bounded search");
   if (a.mode == Mode::CLIP) {
     const ClipRow& r = t.rows()[a.row];
     const float q = a.sym * static_cast<float>(M_PI) / 2.0f;
@@ -1044,19 +1087,25 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   check(!threw([&] { Cfg::from_yaml(root); }),
         "the config loads and validates");
   const Cfg loaded = Cfg::from_yaml(root);
-  if (named == "v9.1" || named == "v9.2") {
+  if (named == "v9.1" || named == "v9.2" || named == "v9.3") {
     check(loaded.plane_color_pool_fallback && loaded.search_left_first &&
               loaded.omega_still == 0.25f && loaded.settle_steps == 60 &&
               loaded.min_visible == 0.55f,
           "the shipped v9.1 hardware-evidence knobs survive yaml parsing");
   }
-  if (named == "v9.2") {
+  if (named == "v9.2" || named == "v9.3") {
     check(loaded.approach_enter_forward_m == 0.25f &&
               loaded.approach_min_window_m == 0.30f &&
               loaded.approach_no_progress_limit == 2 &&
               loaded.approach_escalate_window && loaded.approach_forward_only &&
               loaded.approach_latch_blocked,
           "the shipped v9.2 bounded-approach knobs survive yaml parsing");
+  }
+  if (named == "v9.3") {
+    check(loaded.belief_scan_after_reads == loaded.belief_window &&
+              loaded.search_left_each_cycle,
+          "the shipped v9.3 negative horizon and left restart survive yaml "
+          "parsing");
   }
 
   // Parity is asserted only for a file that CLAIMS to be untuned — the shipped

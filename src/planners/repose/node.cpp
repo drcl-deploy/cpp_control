@@ -166,14 +166,15 @@ class ReposeNode : public rclcpp::Node {
     RCLCPP_INFO(
         this->get_logger(),
         "the planner %s ready: %zu clips (F%zu B%zu L%zu R%zu) | pattern %s | "
-        "target %s | belief %d/%d reads under %.2f rad/s%s%s | "
+        "target %s | belief +%d/-%d of %d reads under %.2f rad/s%s%s | "
         "camera %s:%u @ %.0f Hz",
         version_.c_str(), table_.rows().size(), table_.pool('F').size(),
         table_.pool('B').size(), table_.pool('L').size(),
         table_.pool('R').size(), cfg_.pattern.c_str(),
         vibe::cube_color_name(clips_->target_color()), cfg_.belief_min_votes,
-        cfg_.belief_window, cfg_.omega_still, ramp.c_str(), approach.c_str(),
-        camera_ip_.c_str(), camera_port_, rate_hz_);
+        cfg_.belief_scan_after_reads, cfg_.belief_window, cfg_.omega_still,
+        ramp.c_str(), approach.c_str(), camera_ip_.c_str(), camera_port_,
+        rate_hz_);
   }
 
   ~ReposeNode() override {
@@ -557,7 +558,16 @@ class ReposeNode : public rclcpp::Node {
                                  terminal_approach_hold(plan_) &&
                                  terminal_approach_hold(candidate_) &&
                                  plan_.label == candidate_.label;
-        if (!keep_parked)
+        // V9.3's negative horizon can be longer than one hardware settle's
+        // quiet tail. Recommitting the identical zero-yaw stance would clear
+        // its belief and make eight accepted reads impossible to accumulate.
+        // Hold the already-finished reference instead; positive evidence still
+        // changes `candidate_` immediately on its third agreeing pose.
+        const bool keep_collecting =
+            cfg_.belief_scan_after_reads > cfg_.belief_min_votes &&
+            plan_.mode == Mode::SETTLE && plan_.label == "settle" &&
+            candidate_.mode == Mode::SETTLE && candidate_.label == "settle";
+        if (!keep_parked && !keep_collecting)
           in_enter_ ? commit_clip(pending_) : commit(candidate_);
       }
     }
@@ -844,7 +854,8 @@ class ReposeNode : public rclcpp::Node {
       search_scan_phase_ = plan_.search_phase + 1;
       if (search_scan_phase_ >= 3) {
         search_scan_phase_ = 0;
-        search_scan_sign_ = -search_scan_sign_;
+        search_scan_sign_ =
+            cfg_.search_left_each_cycle ? 1.0f : -search_scan_sign_;
       }
     }
     if (plan_.approach_turn) {

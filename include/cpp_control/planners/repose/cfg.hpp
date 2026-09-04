@@ -118,6 +118,10 @@ struct Cfg {
   int belief_window = 8;  ///< reads kept; at 20 Hz this is the last 0.4 s
   int belief_min_votes =
       3;  ///< agreeing reads before the belief may be acted on
+  /// Accepted reads required before absence/incomplete geometry may launch a
+  /// scan. Positive evidence still acts as soon as `belief_min_votes` agree.
+  /// Equal to min_votes in v6--v9.2; v9.3 waits out the whole evidence window.
+  int belief_scan_after_reads = 3;
   /// rad/s of CAMERA motion above which a read is blur, not evidence. A held
   /// stance sits near 0.05, a 90 deg sweep at 0.96 — the gap is an order of
   /// magnitude, so this needs no tuning to separate them.
@@ -193,6 +197,9 @@ struct Cfg {
   /// Start each new global search with positive base yaw: physically left /
   /// CCW. False preserves v9's newest-hint sign for a direct A/B.
   bool search_left_first = false;
+  /// A completed three-leg global sweep starts its next cycle left again.
+  /// False preserves v9.1/v9.2's alternating cycle sign.
+  bool search_left_each_cycle = false;
   bool lock_candidate_identity = false;
   bool smooth_scan = false;
   float scan_yaw_rate_deg = 45.0f;
@@ -317,6 +324,15 @@ struct Cfg {
     c.approach_escalate_window = true;
     c.approach_forward_only = true;
     c.approach_latch_blocked = true;
+    return c;
+  }
+  /// v9.3 — hardware evidence from 04Sep2026_05_25. Positive three-vote
+  /// decisions stay just as fast; a negative decision waits for all eight
+  /// accepted reads, and repeated global-search cycles always begin left.
+  static Cfg v9_3() {
+    Cfg c = v9_2();
+    c.belief_scan_after_reads = c.belief_window;
+    c.search_left_each_cycle = true;
     return c;
   }
   static Cfg preset(const std::string& name);
