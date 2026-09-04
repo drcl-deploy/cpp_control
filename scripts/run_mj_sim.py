@@ -278,7 +278,7 @@ def main():
 
     assets = os.environ.get("SIM_ASSETS_PATH")
     if not assets:
-        sys.exit("SIM_ASSETS_PATH is not set (source workflows/conda_env/runenv.sh)")
+        sys.exit("SIM_ASSETS_PATH is not set (source unitree_ros2/setup.sh)")
 
     cfg = yaml.safe_load(open(args.cfgpath))
     cfg["sim"]["headless"] = args.headless

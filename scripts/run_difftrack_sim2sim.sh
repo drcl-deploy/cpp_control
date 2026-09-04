@@ -287,15 +287,17 @@ TIMEOUT=$((DURATION * 3 + 120))
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "$HERE/.." && pwd)"
 ESTIMATOR_IMAGE=${ESTIMATOR_IMAGE:-g1-estimator}
-# The middleware is chosen HERE, before anything starts. Under the unitree
-# workflow runenv.sh switches to rmw_cyclonedds_cpp on `lo` — without that the
-# controller and unitree_mujoco are on different middlewares, every node starts
-# cleanly, and not one message is ever delivered.
-if [ "$WORKFLOW" = "unitree" ]; then
-  DRCL_WORKFLOW=unitree source "$PKG/workflows/conda_env/runenv.sh" > /dev/null
-else
-  source "$PKG/workflows/conda_env/runenv.sh" > /dev/null
-fi
+# The middleware is chosen HERE, before anything starts. `setup.sh` in sim mode
+# switches to rmw_cyclonedds_cpp on `lo` — without that the controller and
+# unitree_mujoco are on different middlewares, every node starts cleanly, and not
+# one message is ever delivered.
+#
+# `sim` is passed explicitly and is not negotiable for this script: it starts
+# unitree_mujoco with `-n lo` further down, so a shell left in robot mode by a
+# previous `source setup.sh robot` would put the two halves of the rig on
+# different interfaces. Stating it here makes the script independent of whatever
+# the calling shell was last set to.
+source "$PKG/../../../setup.sh" sim > /dev/null
 
 # Everything below that differs between the two plants, in one place.
 if [ "$WORKFLOW" = "unitree" ]; then
@@ -426,7 +428,7 @@ start_estimator() {
     return 1
   fi
   stop_estimator
-  # Loopback: the whole rig is on this machine and runenv.sh already pins DDS
+  # Loopback: the whole rig is on this machine and setup.sh already pins DDS
   # to localhost, so the estimator has to be on `lo` too or it never hears
   # rt/lowstate. On the robot it is the robot's own interface — see
   # docs/trackers/difftrack_state_estimation.md.
@@ -663,7 +665,7 @@ PYCFG
       #   -r g1   picks the G1Bridge, which is what sets LowState.mode_machine
       #           (5 for the 29-dof G1) and adds the rt/secondary_imu publisher.
       #   -t 1    unitree_hg IDL, stated rather than inferred from nu > 20.
-      #   -i/-n   the DDS domain and interface, which MUST match what runenv.sh
+      #   -i/-n   the DDS domain and interface, which MUST match what setup.sh
       #           put in ROS_DOMAIN_ID and CYCLONEDDS_URI or the two processes
       #           never see each other.
       #   -s      the generated scene, absolute so it is not resolved against
@@ -675,7 +677,7 @@ PYCFG
       # robot up, which is this plant's version of the mj_sim world_root weld.
       # `env -u LD_LIBRARY_PATH`, and it is not optional. unitree_mujoco is a
       # plain C++ program built against the SYSTEM toolchain; it is not a ROS
-      # node and wants nothing from the conda env. But runenv.sh has just put
+      # node and wants nothing from the conda env. But setup.sh has just put
       # $CONDA_PREFIX/lib at the front of LD_LIBRARY_PATH, and the binary then
       # loads conda's libstdc++ and libyaml-cpp while its boost still resolves
       # to the system one. It dies with `free(): invalid pointer` moments after

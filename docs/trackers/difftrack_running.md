@@ -67,7 +67,7 @@ cd $WS
 bash src/cpp_control/workflows/conda_env/build.sh --packages-select cpp_control
 
 # verify the export against the golden trace: no robot, no sim, no ROS
-source src/cpp_control/workflows/conda_env/runenv.sh
+source ../setup.sh
 ./build/cpp_control/difftrack_selftest \
     $(ros2 pkg prefix cpp_control)/share/cpp_control/models/tracker/difftrack/g1_walk
 ```
@@ -246,8 +246,8 @@ Measured in this tree after the move, `g1_walk`, 15 s, `-e rsi`: `750/750`,
 `mean_err` 0.322-0.325 m, `fell_at=none` — the same numbers the section below
 records, which is the check that the move changed nothing.
 
-The script switches the middleware itself (`DRCL_WORKFLOW=unitree source
-runenv.sh`), generates a unitree scene, starts the controller **first** with
+The script switches the middleware itself (`source setup.sh sim`, stated so a
+shell left in robot mode cannot split the rig), generates a unitree scene, starts the controller **first** with
 `config/tracker/g1_difftrack_unitree.yaml`, waits for `difftrack loaded`, starts
 `unitree_mujoco` with `--wait-for-cmd`, and asserts exactly one publisher on
 `/lowstate` and one on `/lowcmd`.
@@ -568,7 +568,7 @@ the mj_sim recipe below it is kept with §2's numbers.
 
 ```bash
 cd $WS
-source src/cpp_control/workflows/conda_env/runenv.sh   # sets the CycloneDDS middleware
+source ../setup.sh sim                    # sim mode: CycloneDDS on `lo`
 export DISPLAY=:1; unset WAYLAND_DISPLAY XDG_SESSION_TYPE
 
 # once: a scene outside the upstream checkout, with a `track` camera selected
@@ -597,7 +597,7 @@ env -u LD_LIBRARY_PATH $UNITREE_MUJOCO/simulate/build/unitree_mujoco \
 ```
 
 `env -u LD_LIBRARY_PATH` is not optional: `unitree_mujoco` is a plain C++ program
-built against the SYSTEM toolchain, and `runenv.sh` has just put
+built against the SYSTEM toolchain, and `setup.sh` has just put
 `$CONDA_PREFIX/lib` at the front of the path. It then loads conda's libstdc++
 and libyaml-cpp while its boost still resolves to the system one, and dies with
 `free(): invalid pointer` moments after the DDS bridge starts — which reads as
@@ -611,7 +611,7 @@ integrate limp while the bridge comes up.
 
 ```bash
 cd $DRCL          # the retired drcl/ workspace root -- not this tree
-source cpp_control/workflows/conda_env/runenv.sh
+source unitree_ros2/setup.sh
 export DISPLAY=:1; unset WAYLAND_DISPLAY XDG_SESSION_TYPE   # mj_sim needs X11
 
 # once: a scene with the world_root weld OFF (the shipped one hangs the robot
@@ -736,8 +736,7 @@ Check the stream from **the same environment the controller will run in**,
 because this is the hop that crosses ROS distros:
 
 ```bash
-source src/cpp_control/workflows/conda_env/runenv.sh
-DRCL_ROS_NETWORK=1 CYCLONE_IFACE=<nic> source src/cpp_control/workflows/conda_env/runenv.sh
+source ../setup.sh robot
 ros2 topic hz /optitrack_adaptor/mocap_frame
 ros2 topic echo --once /optitrack_adaptor/mocap_frame | head -40      # note the rigid-body id
 ```
@@ -764,7 +763,13 @@ Three things to get right in Motive before this means anything:
 ### 4.4 the launch
 
 ```bash
-DRCL_ROS_NETWORK=1 CYCLONE_IFACE=<nic> source src/cpp_control/workflows/conda_env/runenv.sh
+source ../setup.sh robot     # finds the NIC on the robot's subnet itself
+
+# The onboard motion mode publishes LowCmd too, and the motor board follows IT.
+# Suspend the robot first -- releasing drops the controller holding it up.
+python src/cpp_control/scripts/robot_mode.py check
+python src/cpp_control/scripts/robot_mode.py release --yes
+python src/cpp_control/scripts/robot_mode.py who        # expect 0 publishers
 
 CFG=$(ros2 pkg prefix cpp_control)/share/cpp_control/config/tracker/g1_difftrack_hw.yaml
 
@@ -859,8 +864,9 @@ sim2sim failure at your desk instead of a surprise in the lab.
 | `optitrack_topic was set but this binary was built WITHOUT optitrack_msgs` | §4.2 |
 | `OptiTrack frame carries N rigid bodies, none with id X` | wrong `optitrack_rigid_body_id`, or the robot is occluded |
 | the simulator segfaults on start | Wayland. `export DISPLAY=:1; unset WAYLAND_DISPLAY XDG_SESSION_TYPE` for the X11 backend (the sim2sim script does this itself) |
-| nodes on one machine cannot see each other | a VPN is eating DDS multicast. `runenv.sh` sets `ROS_LOCALHOST_ONLY=1`; use `DRCL_ROS_NETWORK=1` only when it genuinely has to cross the network |
-| both processes healthy, zero messages delivered | different DDS middleware, domain or interface. Nothing errors — a subscription nobody publishes to is a normal state. The script sets all three; by hand it is `source runenv.sh` (which now selects CycloneDDS on `lo` by default) plus `-i $ROS_DOMAIN_ID -n lo` on the simulator |
+| nodes on one machine cannot see each other | a VPN is eating DDS multicast. `source setup.sh sim` pins `lo`, which does not need it; `source setup.sh robot` only when the traffic genuinely has to cross the network |
+| both processes healthy, zero messages delivered | different DDS middleware, domain or interface. Nothing errors — a subscription nobody publishes to is a normal state. The script sets all three; by hand it is `source setup.sh sim` (CycloneDDS on `lo`) plus `-i $ROS_DOMAIN_ID -n lo` on the simulator |
+| on hardware: the controller runs, `/lowcmd` is at rate, the robot does not move | the G1's onboard motion mode is publishing `LowCmd` too and the motor board follows it | `scripts/robot_mode.py who`, then `release --yes` with the robot suspended |
 | `no unitree_mujoco binary at ...` | [`workflows/unitree.md`](../../workflows/unitree.md) is not installed, or `$UNITREE_ROS2` points somewhere else (set in `workflows/conda_env/env.sh`) |
 | `difftrack cannot engage: no world base state` | `unitree_world_state` is not `sportmode_imu`, or the simulator's `frame_pos`/`frame_vel` sensors are missing from the scene. Both halves must arrive — SportModeState has no orientation, LowState no position |
 | the robot is only half in frame, head cut off | an OLD generated scene. The `track` camera used to aim 26.6° down at 3 m, i.e. below the floor; it is now solved from a look-at. Regenerate, or retune with `DRCL_CAM_AZ` / `DRCL_CAM_DIST` / `DRCL_CAM_EYE` / `DRCL_CAM_AIM` |

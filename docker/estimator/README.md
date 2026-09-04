@@ -231,7 +231,7 @@ mind: **in simulation the IMU's yaw is exact**, and on the robot it drifts.
 bash $PKG/docker/estimator/run.sh -i lo
 
 # terminal 2 — the controller
-source $PKG/workflows/conda_env/runenv.sh
+source $UNITREE_ROS2/setup.sh
 ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
     config_path:=$(ros2 pkg prefix cpp_control)/share/cpp_control/config/tracker/g1_difftrack_unitree.yaml \
     odom_topic:=/odom unitree_world_state:=none

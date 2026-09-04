@@ -182,7 +182,20 @@ void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
                (idx < prev_buttons_.size() ? prev_buttons_[idx] == 0 : true);
     };
 
-    if (pressed(joy::XMODE_X))
+    // The two aborts first: B kills the motors, Y damps them, on every task.
+    // They lead the chain so a same-frame press can never lose to a mode.
+    if (pressed(joy::XMODE_B))
+    {
+        control_mode_ = ControlMode::ZEROING;
+        RCLCPP_INFO(this->get_logger(), "-> zeroing");
+    }
+    else if (pressed(joy::XMODE_Y))
+    {
+        control_mode_ = ControlMode::DAMPING;
+        RCLCPP_INFO(this->get_logger(), "-> damping");
+    }
+    // Everything that puts the robot UNDER control rather than out of it.
+    else if (pressed(joy::XMODE_X))
     {
         control_mode_ = ControlMode::NOMINAL_POSE;
         alpha_ = 0.0f;
@@ -200,16 +213,6 @@ void BaseNode::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg)
         if (policy_)
             policy_->reset_memory();
         RCLCPP_INFO(this->get_logger(), "-> policy");
-    }
-    else if (pressed(joy::XMODE_B))
-    {
-        control_mode_ = ControlMode::ZEROING;
-        RCLCPP_INFO(this->get_logger(), "-> zeroing");
-    }
-    else if (pressed(joy::XMODE_Y))
-    {
-        control_mode_ = ControlMode::DAMPING;
-        RCLCPP_INFO(this->get_logger(), "-> damping");
     }
     else if (msg->buttons.size() > joy::XMODE_R1 && pressed(joy::XMODE_R1) && has_stand())
     {

@@ -36,15 +36,13 @@ cd unitree_ros2/cyclonedds_ws
 colcon build 
 ```
 
-* make sure to update unitree_ros2/setup.sh as per your system paths and network interface
+* `unitree_ros2/setup.sh` needs no editing
 
-  As shipped it sources `/opt/ros/foxy` and `$HOME/unitree_ros2`, and pins a
-  `NetworkInterface` name that is probably not yours — both are wrong on most
-  machines, and the failure is `AMENT_PREFIX_PATH is not set` or two healthy
-  processes exchanging nothing. On a machine using the conda toolchain
-  ([conda_env/](conda_env/README.md)) do not use it at all:
-  `source cyclonedds_ws/src/cpp_control/workflows/conda_env/runenv.sh` sets the
-  distro, the overlay, the RMW, the domain and the interface together.
+  It was upstream's file — `/opt/ros/foxy`, `$HOME/unitree_ros2` and a hardcoded
+  `NetworkInterface` name, all three wrong on most machines. It is now the single
+  entry point for this stack and derives its own paths, activates the conda
+  toolchain and picks the interface from the mode you ask for. See
+  [usage](#usage).
 
 ### python venv
 
@@ -198,16 +196,57 @@ colcon build --symlink-install --packages-select optitrack_msgs
 
 ## usage
 
-One source per shell, and it is **not** `setup.sh`: as shipped that file sources
-`/opt/ros/foxy` and `$HOME/unitree_ros2`, and pins a `NetworkInterface` name —
-all three are wrong on most machines, and on the conda toolchain it is wrong on
-every one. `runenv.sh` sets the distro, the overlay, the RMW, the domain and the
-interface (`lo`) together.
+One source per shell, and it is `unitree_ros2/setup.sh`. It activates the conda
+environment, sources the workspace overlay for your shell, and sets the RMW, the
+domain and the interface together:
 
 ```
-cd unitree_ros2/cyclonedds_ws
-source src/cpp_control/workflows/conda_env/runenv.sh
+source unitree_ros2/setup.sh              # the robot's NIC if it is plugged in,
+                                          # otherwise `lo` for unitree_mujoco
+source unitree_ros2/setup.sh robot        # force hardware
+source unitree_ros2/setup.sh sim          # force `lo`
 ```
+
+The no-argument form detects the interface: a NIC holding an address on
+`192.168.123.0/24` is the robot, and no such NIC means `lo`. The argument
+exists for the case detection cannot cover — running the SIMULATOR with the
+robot's cable still plugged in, which is why `run_difftrack_sim2sim.sh` passes
+`sim` explicitly.
+
+`workflows/conda_env/runenv.sh` is a deprecated shim that forwards to this and
+prints a note; nothing needs to source it any more.
+
+**The conda environment is not optional**, and that is a fact about this build
+rather than a preference. Everything in `cyclonedds_ws/install` is linked against
+ROS 2 Humble *inside* the env:
+
+```
+$ ldd install/cpp_control/lib/cpp_control/g1_locomotion_node | grep rclcpp
+librclcpp.so => /home/<you>/miniconda3/envs/drclros/lib/librclcpp.so
+```
+
+`/opt/ros/jazzy` is a different ABI and a different RMW build. `setup.sh`
+activates the env itself, so `conda activate drclros` first is optional — but
+sourcing a system distro instead of it is not a thing that works.
+
+### why the mode is stated and not detected
+
+DDS connects processes that agree on middleware, domain **and** interface, and a
+disagreement is silent: every node starts, every topic is advertised, and nothing
+is delivered. The simulator runs on `lo`; the robot is on a real NIC. No single
+interface is right for both, so the mode is an argument. Detecting it would mean
+that plugging the robot in silently breaks every sim2sim run on the machine.
+
+The banner says which one you got, and refuses to claim readiness otherwise:
+
+```
+unitree_ros2 ready  MODE=sim    iface=lo               domain=0  env=drclros
+unitree_ros2 ready  MODE=robot  iface=enx6c1ff7239ce4  domain=0  env=drclros
+```
+
+Overrides, for a machine laid out differently: `DRCL_ENV=` (conda env name),
+`CYCLONE_IFACE=` (skip subnet detection), `ROS_DOMAIN_ID=` (must match the
+simulator's `-i`), `ROBOT_SUBNET=` (default `192.168.123`).
 
 * in terminal1, spawn simulation
 ```
@@ -218,7 +257,7 @@ env -u LD_LIBRARY_PATH $UNITREE_MUJOCO/simulate/build/unitree_mujoco -i 0 -n lo 
 
   `env -u LD_LIBRARY_PATH` is **not optional** under the conda toolchain.
   `unitree_mujoco` is a plain C++ program built against the SYSTEM toolchain,
-  and `runenv.sh` has just put `$CONDA_PREFIX/lib` at the front of the path; it
+  and `setup.sh` has just put `$CONDA_PREFIX/lib` at the front of the path; it
   then loads conda's libstdc++ and libyaml-cpp while its boost still resolves to
   the system one, and dies with `free(): invalid pointer` moments after the DDS
   bridge starts — which reads as the simulator crashing on our traffic, and is
@@ -239,8 +278,7 @@ env -u LD_LIBRARY_PATH $UNITREE_MUJOCO/simulate/build/unitree_mujoco -i 0 -n lo 
 
 * in terminal2, spawn controller
 ```
-cd unitree_ros2/cyclonedds_ws
-source src/cpp_control/workflows/conda_env/runenv.sh
+source unitree_ros2/setup.sh
 ros2 launch cpp_control g1_locomotion.launch.py
 ```
 
@@ -250,6 +288,7 @@ This is the workflow the difftrack tracker ships on, and its sim2sim script
 drives both processes itself:
 
 ```
+source unitree_ros2/setup.sh
 cd unitree_ros2/cyclonedds_ws
 
 # measure it — no joystick, one result line per run
@@ -275,3 +314,127 @@ and `LowState` carries none of it. In simulation `unitree_world_state:
 the hardware config leaves that setting off and takes mocap instead. See
 [../docs/trackers/difftrack_running.md](../docs/trackers/difftrack_running.md).
 
+## on the robot
+
+Everything above is the simulator. Hardware differs in exactly two ways, and
+both of them fail *silently* — which is why a stack that works in sim2sim can
+look like a comms problem on the robot when the comms are fine.
+
+```
+source unitree_ros2/setup.sh robot
+```
+
+### 1. the interface
+
+`setup.sh robot` finds the NIC holding an address on the robot's subnet
+(`192.168.123.0/24`) and pins `CYCLONEDDS_URI` to it. Every terminal needs it —
+a shell without it gets CycloneDDS's fallback and
+
+```
+selected interface "lo" is not multicast-capable: disabling multicast
+```
+
+which is not an error message about loopback so much as an announcement that
+your `ros2 topic echo` is looking at the wrong network. `ros2 topic hz /lowstate`
+then reports `does not appear to be published yet` while the robot is streaming
+at 500 Hz.
+
+### 2. the onboard motion mode owns /lowcmd
+
+A G1 boots into an onboard motion mode (`ai`, `normal`, …). That mode is a DDS
+application **on the robot** and it publishes `LowCmd` on `rt/lowcmd` — the same
+topic `cpp_control` publishes on. Two writers, one motor board, and the onboard
+one is the one currently keeping the robot upright.
+
+Nothing looks wrong from the ROS side. `/lowstate` streams, `/lowcmd` has
+traffic, the CRC is valid, and the robot ignores you. In sim2sim nothing else is
+publishing, so this is invisible until you are standing next to the robot.
+
+[`scripts/robot_mode.py`](../scripts/robot_mode.py) is the whole story:
+
+```
+python scripts/robot_mode.py who        # how many writers are on /lowcmd
+python scripts/robot_mode.py check      # which onboard mode is running
+```
+
+```
+$ python scripts/robot_mode.py who
+/lowcmd publishers: 2
+  _CREATED_BY_BARE_DDS_APP_
+  _CREATED_BY_BARE_DDS_APP_
+$ python scripts/robot_mode.py check
+onboard motion mode: 'ai' (form 0)
+```
+
+Releasing it hands the motors to low-level control — and stops the controller
+that is holding the robot up, so **the robot goes limp the instant it lands**:
+
+```
+python scripts/robot_mode.py release --yes     # suspend the robot FIRST
+python scripts/robot_mode.py select ai         # give the motors back
+```
+
+The bring-up order that follows from that:
+
+1. suspend the robot from the gantry, or sit it down
+2. `source unitree_ros2/setup.sh robot`
+3. `python scripts/robot_mode.py check` — expect a mode name
+4. `python scripts/robot_mode.py release --yes` — expect `released`
+5. `python scripts/robot_mode.py who` — `/lowcmd publishers: 0`
+6. `ros2 launch cpp_control g1_locomotion.launch.py`
+7. the controller starts in `ZEROING` — which on hardware is LIMP, `kp=0
+   kd=0`, so have the robot suspended or sitting before you launch. The gamepad
+   moves it on (`B` zeroing, `Y` damping, and unless the task set
+   `abort_buttons_only_`, `X` nominal pose, `A` policy — see
+   `G1Node::handle_gamepad`). `g1_locomotion` sets it: there, B and Y are the
+   only two bindings
+
+### the gamepad does nothing
+
+`B`/`Y`/`X`/`A` are decoded from `LowState.wireless_remote` in
+`G1Node::handle_gamepad()` — they are not a separate input path, and there is no
+`/joy` involved on hardware. "Pressing B does nothing" has three causes that look
+identical from where you are standing, and
+[`scripts/gamepad_probe.py`](../scripts/gamepad_probe.py) separates them without
+launching anything:
+
+```
+source unitree_ros2/setup.sh robot
+python scripts/gamepad_probe.py        # press B, then Y; ^C to stop
+```
+
+1. **The bytes never arrive.** The probe prints `LowState messages: N` and no
+   `PRESS` lines. Nothing on the controller side can fix that — the remote is off
+   or unpaired.
+2. **They arrive and the robot still does not move.** The onboard motion mode
+   owns the motors; `scripts/robot_mode.py check`.
+3. **The controller is not running.** `/lowcmd` still carries traffic in that
+   case, because the robot's own onboard controller publishes on it. A non-empty
+   `ros2 topic echo /lowcmd` is not evidence that your node is alive — the probe
+   prints the writer count so this cannot be mistaken for success.
+
+Note also that `B` (zeroing) and `Y` (damping) are near-identical on the wire —
+all-zero commands versus `kd = 5` — so even when the whole path is healthy,
+neither produces visible motion on a suspended robot. The controller's own log is
+the signal:
+
+```
+[g1_locomotion_node]: [GP] -> zeroing
+[g1_locomotion_node]: [GP] -> damping
+```
+
+### mode_machine
+
+`LowCmd.mode_machine` identifies the machine — `5` for the 29-dof G1 — and the
+motor board **drops** a command whose value is not its own. It is latched from
+`LowState` and written into every outgoing command; the controller logs the
+latch once:
+
+```
+[g1_locomotion_node]: mode_machine: 0 -> 5 (from LowState)
+```
+
+`unitree_mujoco`'s G1Bridge does not check it, so a hardcoded constant is a
+sim2sim run that passes and a robot that ignores commands with a valid CRC.
+Nothing to configure — but if that log line never appears, no `LowState` is
+arriving and everything downstream is moot.

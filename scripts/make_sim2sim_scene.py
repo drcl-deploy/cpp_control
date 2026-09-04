@@ -80,7 +80,7 @@ def main():
 
     if not args.assets:
         sys.exit("no asset root: pass --assets or set SIM_ASSETS_PATH "
-                 "(source workflows/conda_env/runenv.sh)")
+                 "(source unitree_ros2/setup.sh)")
     src = os.path.join(args.assets, args.model)
     terrain = os.path.join(args.assets, args.terrain)
     for path in (src, terrain):

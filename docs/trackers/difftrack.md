@@ -149,7 +149,7 @@ On a plant that publishes one state per physics step, set it to
 This section is the summary.
 
 ```bash
-source workflows/conda_env/runenv.sh          # or your own ROS 2 humble env
+source unitree_ros2/setup.sh                 # or your own ROS 2 humble env
 
 # 1. verify the export against the golden trace — no robot, no sim, no ROS
 ./build/cpp_control/difftrack_selftest \

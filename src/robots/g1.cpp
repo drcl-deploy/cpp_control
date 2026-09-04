@@ -259,17 +259,21 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
     memcpy(gamepad_rx_.buff, msg.wireless_remote.data(), 40);
     gamepad_.update(gamepad_rx_.RF_RX);
 
-    // Mode switching only — velocity mapping is task-specific (Level 2)
+    // The two that are always live, on every task. B kills the motors, Y damps
+    // them, and between them they are the whole hardware abort story — so they
+    // are never behind a mode, a task flag, or a second button.
     if (gamepad_.B.on_press)
     {
         control_mode_ = ControlMode::ZEROING;
-        RCLCPP_INFO(this->get_logger(), "[GP] -> zeroing");
+        RCLCPP_INFO(this->get_logger(), "[GP] B -> zeroing");
     }
     if (gamepad_.Y.on_press)
     {
         control_mode_ = ControlMode::DAMPING;
-        RCLCPP_INFO(this->get_logger(), "[GP] -> damping");
+        RCLCPP_INFO(this->get_logger(), "[GP] Y -> damping");
     }
+
+    // Everything that puts the robot UNDER control rather than out of it.
     if (gamepad_.X.on_press)
     {
         control_mode_ = ControlMode::NOMINAL_POSE;
@@ -278,12 +282,12 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
             pre_nominal_pos_[i] = robot_state_.joint_positions[i];
         std::fill(actions_.begin(), actions_.end(), 0.0f);
         std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
-        RCLCPP_INFO(this->get_logger(), "[GP] -> nominal_pose");
+        RCLCPP_INFO(this->get_logger(), "[GP] X -> nominal_pose");
     }
     if (gamepad_.R1.on_press && has_stand())
     {
         engage_stand();
-        RCLCPP_INFO(this->get_logger(), "[GP] -> stand (robot-level SONIC)");
+        RCLCPP_INFO(this->get_logger(), "[GP] R1 -> stand (robot-level SONIC)");
     }
     if (gamepad_.up.on_press || gamepad_.A.on_press)
     {
@@ -292,7 +296,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
         std::fill(last_actions_.begin(), last_actions_.end(), 0.0f);
         if (policy_)
             policy_->reset_memory();
-        RCLCPP_INFO(this->get_logger(), "[GP] -> policy");
+        RCLCPP_INFO(this->get_logger(), "[GP] A -> policy");
     }
 
     on_gamepad();

@@ -20,19 +20,31 @@ bash build.sh --packages-select optitrack_msgs      # optional, hardware only
 bash build.sh --packages-select cpp_control
 ```
 
-Then, to **run** anything (new shell, bash or zsh):
+Then, to **run** anything (new shell, bash or zsh), source the workspace's own
+entry point — not anything in this directory:
 
 ```bash
-source workflows/conda_env/runenv.sh
+source unitree_ros2/setup.sh              # simulation, on `lo`
+source unitree_ros2/setup.sh robot        # hardware, on the robot's NIC
 ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk
 ```
 
-`runenv.sh` activates the env, sources the workspace overlay for your shell, and
-sets `SIM_ASSETS_PATH`. Without it `ros2` is whatever the system has, and you get
-`OSError: Environment variable 'AMENT_PREFIX_PATH' is not set or empty` or
-`package 'cpp_control' not found`.
+`setup.sh` activates this env, sources the workspace overlay for your shell, sets
+the RMW / domain / interface and `SIM_ASSETS_PATH`, and says which mode you got.
+Without it `ros2` is whatever the system has, and you get `OSError: Environment
+variable 'AMENT_PREFIX_PATH' is not set or empty` or `package 'cpp_control' not
+found`.
 
-`env.sh` (which `runenv.sh` builds on) is the **build** environment and
+`runenv.sh` is a deprecated shim that forwards to `setup.sh`. It exists so that
+`DRCL_ROS_NETWORK=1 CYCLONE_IFACE=… source runenv.sh` in an old note still lands
+somewhere sane; it prints a deprecation line and will be removed.
+
+**The env is not optional for running**, only for building. Everything in
+`cyclonedds_ws/install` is linked against this env's Humble
+(`ldd …/g1_locomotion_node | grep rclcpp` points at `$CONDA_PREFIX/lib`), so
+`/opt/ros/jazzy` is not a substitute — it is a different ABI.
+
+`env.sh` is the **build** environment (`build.sh` sources it) and
 deliberately does not source the overlay: running `colcon build` with the
 workspace's own `install/` already sourced causes trouble.
 
@@ -90,19 +102,20 @@ DECLARES it, and `cpp_control` deliberately leaves both backends out of its
 build after installing the messages needs `rm build/cpp_control/CMakeCache.txt`
 or it silently keeps the old answer.
 
-`runenv.sh` sets the middleware up for you, and it is no longer opt-in:
-`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `ROS_DOMAIN_ID=0` and a
-`CYCLONEDDS_URI` pinned to `lo` — `unitree_ros2/setup_local.sh`, in other words.
-That is what makes a ROS 2 node see `unitree_mujoco`'s raw-DDS `rt/lowstate` as
-`/lowstate`. It used to be behind `DRCL_WORKFLOW=unitree` because a second
-plant on a different RMW shared the shell; there is one plant now.
-`DRCL_WORKFLOW=none source runenv.sh` leaves the middleware alone.
-
-On the ROBOT the interface is a real NIC rather than loopback:
+`setup.sh` sets the middleware up for you: `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`,
+`ROS_DOMAIN_ID=0` and a `CYCLONEDDS_URI` pinned to the mode's interface. That is
+what makes a ROS 2 node see `unitree_mujoco`'s raw-DDS `rt/lowstate` as
+`/lowstate`.
 
 ```bash
-DRCL_ROS_NETWORK=1 CYCLONE_IFACE=enp3s0 source workflows/conda_env/runenv.sh
+source unitree_ros2/setup.sh              # iface=lo
+source unitree_ros2/setup.sh robot        # iface = the NIC on 192.168.123.0/24
 ```
+
+The mode is an argument rather than a detection because no interface is right for
+both, and a mismatch is silent in both directions. See
+[../unitree.md#usage](../unitree.md) and, for what else differs on hardware,
+[../unitree.md — on the robot](../unitree.md).
 
 ## Why each workaround is there
 
@@ -120,14 +133,19 @@ time.
 | flags silently folded into `CMAKE_BUILD_TYPE` | zsh does not word-split unquoted variables | run the build under bash |
 | `CONDA_BUILD: unbound variable` on activate | RoboStack's activation scripts are not `set -u` clean | the scripts use `set -eo pipefail`, not `-euo` |
 | MuJoCo: `number of faces should be between 1 and 200000 in STL file … perhaps this is an ASCII file?` | the `assets` meshes are git-lfs pointers | `git lfs pull` in `src/assets` |
-| mj_sim exits with `TypeError` on `None + '/...'` | `SIM_ASSETS_PATH` is unset | `source runenv.sh` |
+| mj_sim exits with `TypeError` on `None + '/...'` | `SIM_ASSETS_PATH` is unset | `source setup.sh` |
 | mj_sim segfaults on startup, after `libdecor-gtk-WARNING: Failed to initialize GTK` | GLFW takes the Wayland backend under a Wayland session and libdecor cannot load its GTK plugin | `unset WAYLAND_DISPLAY XDG_SESSION_TYPE` for the X11 backend (XWayland is fine) |
-| `AMENT_PREFIX_PATH is not set or empty`, or the package is not found, with a traceback under `/opt/ros/jazzy` | the env and workspace overlay were not sourced in that shell | `source runenv.sh` |
-| `_comps: assignment to invalid subscript range` (zsh) | colcon's zsh hooks call `compdef` before `compinit` has run | `runenv.sh` runs `compinit` first |
-| nodes on this machine cannot see each other, `ros2 service list` hangs | a VPN or firewall is dropping DDS multicast on the real NIC | `runenv.sh` sets `ROS_LOCALHOST_ONLY=1` (opt out with `DRCL_ROS_NETWORK=1`) |
+| `AMENT_PREFIX_PATH is not set or empty`, or the package is not found, with a traceback under `/opt/ros/jazzy` | the env and workspace overlay were not sourced in that shell | `source setup.sh` |
+| `_comps: assignment to invalid subscript range` (zsh) | colcon's zsh hooks call `compdef` before `compinit` has run | `setup.sh` runs `compinit` first |
+| nodes on this machine cannot see each other, `ros2 service list` hangs | a VPN or firewall is dropping DDS multicast on the real NIC | in sim mode `setup.sh` pins `lo`, which does not need multicast to work |
 | `ros2 topic info` reports a publisher that does not exist | the ros2 daemon caches participants for minutes after the process is gone | ask the graph directly (`get_publishers_info_by_topic`), or `ros2 daemon stop` |
-| `unitree_mujoco` and the controller both start, both look healthy, and not one message is delivered | they are on different DDS middlewares, domains or interfaces. Nothing errors: a subscription to a topic nobody publishes on is a normal state | `DRCL_WORKFLOW=unitree source runenv.sh`, and give the simulator the matching `-i $ROS_DOMAIN_ID -n lo` |
+| `unitree_mujoco` and the controller both start, both look healthy, and not one message is delivered | they are on different DDS middlewares, domains or interfaces. Nothing errors: a subscription to a topic nobody publishes on is a normal state | `source setup.sh` (sim mode), and give the simulator the matching `-i $ROS_DOMAIN_ID -n lo` |
 | `Requested workflow backend not compiled` at startup, from a config with `workflow: unitree` | cpp_control was configured before `unitree_hg` existed, and `find_package(QUIET)` cached the miss | `rm build/cpp_control/CMakeCache.txt` and rebuild |
+| `selected interface "lo" is not multicast-capable: disabling multicast`, then `topic does not appear to be published yet`, while the robot is streaming | that shell has no `CYCLONEDDS_URI`, so CycloneDDS fell back to loopback and is not on the robot's network at all | `source setup.sh robot` in **every** terminal, `ros2 topic echo` ones included |
+| `command not found: ament_zsh_to_array` on the SECOND source, under zsh | the overlay's `setup.zsh` leaves `AMENT_SHELL=zsh` behind, and conda's ROS activation is the POSIX `setup.sh`, which then takes its zsh branch | `setup.sh` unsets `AMENT_SHELL` before activating |
+| the controller runs, `/lowcmd` is at 50 Hz with a valid CRC, and the robot does not move | the G1's onboard motion mode is publishing `LowCmd` too, and it is the writer the motor board is following | `scripts/robot_mode.py who`, then `release --yes` — see [../unitree.md — on the robot](../unitree.md) |
+| commands ignored on a G1 variant that is not 29-dof | `LowCmd.mode_machine` did not match the machine; `unitree_mujoco` does not check it, so sim2sim never catches this | latched from `LowState` now; look for `mode_machine: 0 -> N` in the controller log |
+| gamepad B/Y/X/A do nothing on hardware | three different causes: the remote's bytes are not in `LowState.wireless_remote`, or the onboard motion mode owns the motors, or the controller is not running and `/lowcmd` traffic is the robot's own | `scripts/gamepad_probe.py` separates them; it also prints the `/lowcmd` writer count |
 
 No source change to any package was needed for this: `cpp_control` already globs
 `thirdparty/onnxruntime-linux-x64-*` for ONNX Runtime, and `deps.sh` only puts a

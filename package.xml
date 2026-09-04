@@ -16,8 +16,16 @@
   <depend>nav_msgs</depend>
   <depend>vision_encoders</depend>  <!-- ImageTokens (adapt-sonic); build-orders after the msg pkg -->
 
-  <!-- Optional: at least one required. CMake handles conditional builds. -->
-  <!-- <depend>unitree_hg</depend> -->
+  <!-- Optional backends: CMake requires at least one of unitree_hg / messages
+       at configure time and drops the other. Declared rather than commented so
+       colcon orders them ahead of this package AND puts their install prefixes
+       on the search path. Without that, a build selecting only cpp_control
+       cannot see unitree_hg and the FATAL_ERROR in CMakeLists fires. A declared
+       package that is absent from the workspace is simply skipped, exactly as
+       vision_encoders is. `messages` stays commented: it lives in the DRCL
+       deploy workspace, not this one. -->
+  <depend>unitree_hg</depend>
+  <depend>unitree_go</depend>
   <!-- <depend>messages</depend> -->
 
   <test_depend>ament_lint_auto</test_depend>

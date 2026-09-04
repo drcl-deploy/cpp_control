@@ -53,7 +53,7 @@ if ! docker image inspect "$tag" >/dev/null 2>&1; then
 fi
 
 # Interface. Loopback is the right default: both the simulator and the
-# controller run on this machine, and cpp_control's runenv.sh already pins DDS
+# controller run on this machine, and unitree_ros2/setup.sh already pins DDS
 # to localhost so a lab network full of other ROS nodes stays out of it.
 if [ -z "$iface" ]; then
     iface=lo

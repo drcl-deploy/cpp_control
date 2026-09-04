@@ -88,17 +88,30 @@ installing the messages needs `rm build/cpp_control/CMakeCache.txt`.
 | `optitrack_msgs` | the lab's OptiTrack interface, for hardware. Symlink it into `$WS/src/` and build it here — a `crl_ws` install is ROS 2 jazzy and this workspace is humble, and you cannot link across them |
 | CLI shims (`publish-motion`) | `uv pip install -e $PKG --python venv/bin/python` |
 
-**6. run anything** — one source per shell. It activates the env, sources the
-overlay, and selects CycloneDDS on `lo` so a ROS 2 node sees `unitree_mujoco`'s
-raw-DDS `rt/lowstate` as `/lowstate`:
+**6. run anything** — one source per shell, and it is `unitree_ros2/setup.sh`.
+It activates the conda env, sources the overlay, and selects CycloneDDS on the
+mode's interface so a ROS 2 node sees `unitree_mujoco`'s raw-DDS `rt/lowstate`
+as `/lowstate`:
 
 ```bash
-source $PKG/workflows/conda_env/runenv.sh
+source $UNITREE_ROS2/setup.sh              # the robot's NIC if it is plugged in,
+                                           # otherwise `lo` for unitree_mujoco
+source $UNITREE_ROS2/setup.sh robot        # force hardware
+source $UNITREE_ROS2/setup.sh sim          # force `lo`
 ```
 
-Do **not** use `unitree_ros2/setup.sh` with the conda toolchain: as shipped it
-sources `/opt/ros/foxy`, a `$HOME/unitree_ros2` path and an interface name that
-are all probably wrong on your machine.
+With no argument it looks for a NIC holding an address on the robot's subnet
+(`192.168.123.0/24`) and uses that, falling back to `lo`. The argument is for
+the one case detection cannot cover: running the SIMULATOR with the robot's
+cable still plugged in. `run_difftrack_sim2sim.sh` passes `sim` for exactly
+that reason.
+
+`setup.sh` used to be upstream's file — `/opt/ros/foxy`, a `$HOME/unitree_ros2`
+path and a hardcoded interface name, all wrong on most machines. It is the single
+entry point for this stack now: it derives its own paths, activates the conda env
+(required — `install/` is linked against that env's Humble, not `/opt/ros/jazzy`)
+and pins the interface for the mode you ask for. `workflows/conda_env/runenv.sh`
+is a deprecated shim that forwards to it.
 
 ## usage
 
@@ -131,9 +144,15 @@ ros2 launch cpp_control mini_pi_locomotion.launch.py
 ros2 launch cpp_control mini_pi_dive.launch.py
 ```
 
-buttons (joy / unitree gamepad): `X` nominal pose · `A` policy · `B` zeroing ·
-`Y` damping · `RB/R1` stand. Only the RISING edge counts, so a held button is
+buttons (joy / unitree gamepad): `B` zeroing · `Y` damping · `X` nominal pose ·
+`A` policy · `RB/R1` stand. Only the RISING edge counts, so a held button is
 one press and the same button has to be released before it can be pressed again.
+
+`B` and `Y` are the two aborts and are live on every task. A task that sets
+`abort_buttons_only_` in its constructor drops the other three on BOTH input
+paths — the locomotion node does, because `A` there means "run the walking
+policy now", from whatever pose the robot is in, with no stand-up ramp in
+front of it.
 
 **stand mode**: set `stand_onnx_path` in any g1 config yaml (or pass it as a
 launch argument) to a base-SONIC export and the robot gets an actively-balancing
@@ -147,8 +166,8 @@ the training repo (`diffsimrl/code/scripts/EXPORT_TO_DRCL_CPP_CONTROL.md`);
 running one is [docs/trackers/difftrack_running.md](docs/trackers/difftrack_running.md).
 
 ```bash
+source $UNITREE_ROS2/setup.sh
 cd $WS
-source src/cpp_control/workflows/conda_env/runenv.sh
 ```
 
 **1. verify the export** against its golden trace — no robot, no simulator, no

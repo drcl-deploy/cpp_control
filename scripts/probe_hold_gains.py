@@ -8,12 +8,12 @@ runs exactly that, and nothing else -- no ONNX, no clip, no observation builder,
 no controller -- against a running `unitree_mujoco`, and says HELD or FELL.
 
     # terminal 1
-    DRCL_WORKFLOW=unitree source workflows/conda_env/runenv.sh
+    source unitree_ros2/setup.sh
     env -u LD_LIBRARY_PATH $UNITREE_MUJOCO/simulate/build/unitree_mujoco \\
         -r g1 -t 1 -c -i $ROS_DOMAIN_ID -n lo -s <scene>
 
     # terminal 2
-    DRCL_WORKFLOW=unitree source workflows/conda_env/runenv.sh
+    source unitree_ros2/setup.sh
     python3 scripts/probe_hold_gains.py --config <export>/difftrack_config.json
 
 Options that matter, because they are what the answer turns on:

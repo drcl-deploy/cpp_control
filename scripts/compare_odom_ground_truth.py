@@ -66,7 +66,7 @@ try:
     from unitree_hg.msg import LowState
 except ImportError as exc:  # pragma: no cover
     print(f"needs the unitree message packages on AMENT_PREFIX_PATH: {exc}", file=sys.stderr)
-    print("  source workflows/conda_env/runenv.sh", file=sys.stderr)
+    print("  source unitree_ros2/setup.sh", file=sys.stderr)
     raise SystemExit(2)
 
 

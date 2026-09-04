@@ -125,20 +125,19 @@ EPs become a session option when a policy actually needs them.
 
 ## usage
 
-One source per shell — `runenv.sh` sets the distro, the overlay, the RMW, the
-domain and the interface (`lo`) together. Do not use `unitree_ros2/setup.sh` or
-`setup_local.sh`: as shipped they source `/opt/ros/foxy` and `$HOME/unitree_ros2`
-(see [workflows/unitree.md](../../workflows/unitree.md#usage)).
+One source per shell — `unitree_ros2/setup.sh` sets the distro, the overlay, the
+RMW, the domain and the interface together, and takes `sim` (default, `lo`) or
+`robot` (see [workflows/unitree.md](../../workflows/unitree.md#usage)).
 
 ```bash
 WS=/path/to/unitree_ros2/cyclonedds_ws
 
 # terminal 1 — sim (empty-ground g1 scene)
-cd $WS && source src/cpp_control/workflows/conda_env/runenv.sh
+source $WS/../setup.sh && cd $WS
 env -u LD_LIBRARY_PATH $UNITREE_MUJOCO/simulate/build/unitree_mujoco -i 0 -n lo -r g1 -c
 
 # terminal 2 — tracker
-cd $WS && source src/cpp_control/workflows/conda_env/runenv.sh
+source $WS/../setup.sh && cd $WS
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=/path/to/g1_sonic_base.onnx \
     motion_path:=/tmp/mjlab_cache/lafan1_dance1_subject1_demo_motion.npz
