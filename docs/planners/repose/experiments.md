@@ -188,6 +188,13 @@ ros2 run cpp_control repose_voice_keys.py --list-devices
 ros2 run cpp_control repose_voice_keys.py --device CMTECK --dry-run
 ```
 
+On a normal Ubuntu desktop, the helper finds `CMTECK` through PulseAudio (or
+PipeWire's Pulse compatibility service), so it can share the microphone with
+the desktop. If friendly matching is unavailable, choose the microphone as the
+system input in Sound Settings and use `--device default`. An explicit
+`plughw:...` name bypasses the sound server and can fail with `Device or
+resource busy` while another application has the raw device open.
+
 For the live path, mute the microphone, start the helper in a separate terminal,
 then focus the Repose console. Unmute, say exactly one colour, and mute again;
 the ending silence finalizes one utterance and the helper types one digit.

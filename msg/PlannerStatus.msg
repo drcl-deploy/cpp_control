@@ -50,5 +50,5 @@ float32 bearing_rad
 float32 phi_rad
 int32 n_px
 
-string version          # v6 | v7
+string version          # v6 | v7 | v7.1 | v8
 float32 observe_ms

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calibration bag -> the replay rig's read_XXXX.npz, labels included."""
+"""Calibration or continuous localization bag -> replay read_XXXX.npz files."""
 
 #     repose_export_observe_bag.py <bag> <out_dir>
 #     repose_planner_selftest --replay <out_dir> --config <yaml> --summary
@@ -18,7 +18,8 @@ import sys
 import numpy as np
 
 # The observe node published under /vibe/sys1/... before the level-3 rename.
-PREFIXES = ('/vibe/planner/calibration', '/vibe/sys1/calibration')
+CAL_PREFIXES = ('/vibe/planner/calibration', '/vibe/sys1/calibration')
+LIVE_PREFIXES = ('/vibe/planner/observe', '/vibe/sys1/observe')
 
 
 class Cdr:
@@ -73,7 +74,15 @@ class Cdr:
 
 def read_state(buf):
     r = Cdr(buf)
-    return {'stamp': r.stamp(), 'source_sequence': r.u64(), 'expected': r.i32()}
+    out = {'stamp': r.stamp(), 'source_sequence': r.u64(),
+           'expected': r.i32()}
+    out['stage'] = r.u32()
+    out['attempt'] = r.u32()
+    out['sample'] = r.u32()
+    out['samples_per_color'] = r.u32()
+    out['capturing'] = r.b8()
+    out['complete'] = r.b8()
+    return out
 
 
 def read_observation(buf):
@@ -128,8 +137,8 @@ def load(db_path):
     topics = {name: tid for tid, name, _ in
               con.execute('select id, name, type from topics')}
 
-    def grab(suffix, parse):
-        for prefix in PREFIXES:
+    def grab(prefixes, suffix, parse, required=True):
+        for prefix in prefixes:
             tid = topics.get(prefix + suffix)
             if tid is None:
                 continue
@@ -137,11 +146,20 @@ def load(db_path):
                 'select data from messages where topic_id = ? order by timestamp',
                 (tid,))
             return [parse(bytes(d[0])) for d in rows]
-        raise SystemExit(f'export: no topic {{{",".join(PREFIXES)}}}{suffix} in the bag')
+        if required:
+            raise SystemExit(
+                f'export: no topic {{{",".join(prefixes)}}}{suffix} in the bag')
+        return []
 
-    return (grab('/state', read_state), grab('/observation', read_observation),
-            grab('/color/compressed', read_compressed), grab('/depth', read_image),
-            grab('/camera_info', read_camera_info))
+    snapshot = any(prefix + '/observation' in topics for prefix in CAL_PREFIXES)
+    image_prefixes = CAL_PREFIXES if snapshot else LIVE_PREFIXES
+    states = grab(CAL_PREFIXES, '/state', read_state, required=snapshot)
+    return (states,
+            grab(image_prefixes, '/observation', read_observation),
+            grab(image_prefixes, '/color/compressed', read_compressed),
+            grab(image_prefixes, '/depth', read_image),
+            grab(image_prefixes, '/camera_info', read_camera_info),
+            snapshot)
 
 
 def main():
@@ -163,8 +181,19 @@ def main():
             raise SystemExit(f'export: no .db3 under {db}')
         db = os.path.join(db, found[0])
 
-    states, obs, colors, depths, infos = load(db)
+    states, obs, colors, depths, infos, labelled = load(db)
     by_stamp = {}
+    # CalibrationState also publishes progress/startup records. Only a selected
+    # snapshot (`capturing=true`) is ground truth; exporting the others caused
+    # the historical one-extra-frame mismatch.
+    states = [state for state in states if state['capturing']]
+    final_attempt = {}
+    for state in states:
+        expected = state['expected']
+        final_attempt[expected] = max(
+            final_attempt.get(expected, 0), state['attempt'])
+    states = [state for state in states
+              if state['attempt'] == final_attempt[state['expected']]]
     for group, key in ((states, 'state'), (obs, 'obs'), (colors, 'color'),
                        (depths, 'depth'), (infos, 'info')):
         for m in group:
@@ -174,7 +203,10 @@ def main():
     kept = skipped = 0
     for stamp in sorted(by_stamp):
         rec = by_stamp[stamp]
-        if len(rec) != 5 or not rec['obs']['state_ready']:
+        required = {'obs', 'color', 'depth', 'info'}
+        if labelled:
+            required.add('state')
+        if not required <= set(rec) or not rec['obs']['state_ready']:
             skipped += 1
             continue
         depth = rec['depth']
@@ -188,20 +220,23 @@ def main():
             skipped += 1
             continue
         info = rec['info']
-        np.savez(os.path.join(args.out_dir, f'read_{kept:04d}.npz'),
-                 bgr=np.ascontiguousarray(bgr),
-                 depth=np.ascontiguousarray(z),
-                 # Intrinsics are the DEPTH plane's own pixels, which is the
-                 # plane CubeSight unprojects — the colour plane is resized onto
-                 # it, never the other way round.
-                 intrinsics=np.array([info['fx'], info['fy'], info['cx'], info['cy']],
-                                     np.float32),
-                 R_bc=np.array(rec['obs']['R'], np.float32),
-                 t_bc=np.array(rec['obs']['t'], np.float32),
-                 label=np.int32(rec['state']['expected']))
+        payload = {
+            'bgr': np.ascontiguousarray(bgr),
+            'depth': np.ascontiguousarray(z),
+            # Intrinsics are the DEPTH plane's own pixels, which is the plane
+            # CubeSight unprojects — colour is resized onto it.
+            'intrinsics': np.array(
+                [info['fx'], info['fy'], info['cx'], info['cy']], np.float32),
+            'R_bc': np.array(rec['obs']['R'], np.float32),
+            't_bc': np.array(rec['obs']['t'], np.float32),
+        }
+        if labelled:
+            payload['label'] = np.int32(rec['state']['expected'])
+        np.savez(os.path.join(args.out_dir, f'read_{kept:04d}.npz'), **payload)
         kept += 1
 
-    print(f'export: {kept} reads -> {args.out_dir} ({skipped} skipped)')
+    mode = 'labelled snapshots' if labelled else 'continuous localization'
+    print(f'export: {kept} {mode} reads -> {args.out_dir} ({skipped} skipped)')
     if not kept:
         sys.exit(1)
 

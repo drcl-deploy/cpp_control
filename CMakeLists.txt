@@ -272,6 +272,8 @@ if(OpenCV_FOUND)
     add_test(NAME repose_planner_selftest COMMAND repose_planner_selftest
              --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim.yaml
              --check-preset-parity)
+    add_test(NAME repose_planner_v8_config_selftest COMMAND repose_planner_selftest
+             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_real_v8.yaml)
   endif()
   list(APPEND INSTALL_TARGETS repose_planner_selftest)
 
@@ -359,6 +361,7 @@ install(PROGRAMS
   scripts/planners/repose/repose_validate_observe_bag.py
   scripts/planners/repose/repose_check_observe.py
   scripts/planners/repose/repose_check_observe.sh
+  scripts/planners/repose/repose_record_localization.sh
   scripts/planners/repose/repose_export_observe_bag.py
   scripts/planners/repose/repose_tune_observe.py
   scripts/planners/setup_sonic_kinematic.sh

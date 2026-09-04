@@ -3,33 +3,41 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: repose_check_observe.sh
+Usage: repose_check_observe.sh [record]
 
 Offboard bridge client + the live observe check. Sibling of
-repose_stream_observe.sh, minus the labelling: it answers "is the palette right
-here", not "record 240 frames".
+repose_stream_observe.sh, minus the labelling: it answers "is localization
+stable here". Add `record` to capture every live RGB-D/observation tuple for
+offline production replay; no button presses or colour stages are required.
 
-The onboard side is g1_repose_planner_calibration.launch.py, which holds the
+The onboard side is g1_repose_planner_localization.launch.py, which holds the
 controller in its nominal SONIC stand under calibration_lock — no reference
-motion, no planner reference, so the robot stands and only the observe block
+motion, no planner reference, so the robot stands and only the v8 observe block
 runs.
 
-    ros2 launch cpp_control g1_repose_planner_calibration.launch.py \
-        artifact_dir:=<export> env:=real       # onboard (env:=sim in sim2sim)
-    bash repose_check_observe.sh                # offboard
+    ros2 launch cpp_control g1_repose_planner_localization.launch.py \
+        artifact_dir:=<export> env:=real       # onboard
+    bash repose_check_observe.sh record         # offboard
 
 Environment:
   VIBE_BRIDGE_ADDRESS      onboard bridge host
   BRIDGE_ROS_DOMAIN_ID     isolated offboard domain (default 71)
+  REPOSE_LOCALIZATION_BAG_DIR  bag root (default: repo/bags/repose_localization)
 EOF
 }
 
-if (($#)) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
-  usage
-  exit 0
-fi
+record=false
+while (($#)); do
+  case "$1" in
+    record) record=true ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "check_observe: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+script_dir="$(cd -- "$(dirname -- "${script_path}")" && pwd)"
 cpp_control_root="$(cd -- "${script_dir}/../../.." && pwd)"
 repository_root="$(cd -- "${cpp_control_root}/../../.." && pwd)"
 workspace_setup="${repository_root}/cyclonedds_ws/install/setup.bash"
@@ -76,5 +84,10 @@ children+=("$!")
 
 ros2 run cpp_control repose_check_observe.py &
 children+=("$!")
+
+if [[ "${record}" == true ]]; then
+  ros2 run cpp_control repose_record_localization.sh &
+  children+=("$!")
+fi
 
 wait -n "${children[@]}"

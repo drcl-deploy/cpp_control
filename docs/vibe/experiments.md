@@ -36,7 +36,7 @@ names an absolute path — everything below is relative to that root:
 
 ```
 unitree_ros2/vibe/
-  models/   <run>/<export>/{*.onnx,*.manifest.json}      what artifact:= finds
+  models/   <run>/<export>/{*.onnx,*.manifest.json}      what artifact_dir:= finds
   data/     sys1_clips.npz, sys1_library.npz, retargeted_motions/
 ```
 
@@ -74,22 +74,22 @@ the controller when the encoder process is running.
 
 ```bash
 # Repose
-ros2 launch cpp_control g1_vibe_repose.launch.py artifact:=g1_repose_big_cube_floor/011pgzbh
+ros2 launch cpp_control g1_vibe_repose.launch.py artifact_dir:=g1_repose_big_cube_floor/011pgzbh
 
 # UOLM
-ros2 launch cpp_control g1_vibe_uolm.launch.py artifact:=vibe_uolm/xhej6sbd
+ros2 launch cpp_control g1_vibe_uolm.launch.py artifact_dir:=vibe_uolm/xhej6sbd
 
 # PerLoco Grail
-ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact:=vibe_perloco_grail/0uetimde
+ros2 launch cpp_control g1_vibe_perloco_grail.launch.py artifact_dir:=vibe_perloco_grail/0uetimde
 
 # PerLoco OmRe
-ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact:=vibe_perloco_omre/bc7sz47j
+ros2 launch cpp_control g1_vibe_perloco_omre.launch.py artifact_dir:=vibe_perloco_omre/bc7sz47j
 
 # Dodge
-ros2 launch cpp_control g1_vibe_dodge.launch.py artifact:=vibe_dodge/dkwwigny
+ros2 launch cpp_control g1_vibe_dodge.launch.py artifact_dir:=vibe_dodge/dkwwigny
 ```
 
-`artifact:=<run>/<export>` names a directory under `$VIBE_ASSET_ROOT/models`
+`artifact_dir:=<run>/<export>` names a directory under `$VIBE_ASSET_ROOT/models`
 (setup.sh: `<repo>/vibe/models`), so these lines are identical on the desktop
 and on the Orin — see [assets.md](assets.md). Drop the `/<export>` when a run
 has only one; `artifact_dir:=<path>` still takes a directory, relative or

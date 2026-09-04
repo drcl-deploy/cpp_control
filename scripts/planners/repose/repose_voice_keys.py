@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
-from dataclasses import dataclass
 import json
 import os
 import re
@@ -21,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -50,6 +50,19 @@ class CaptureDevice:
         return f'plughw:CARD={self.card},DEV={self.device}'
 
 
+@dataclass(frozen=True)
+class PulseSource:
+    name: str
+    description: str
+
+
+@dataclass(frozen=True)
+class CaptureInput:
+    backend: str
+    device: str
+    description: str
+
+
 def capture_hardware() -> str:
     if shutil.which('arecord') is None:
         raise VoiceKeysError('arecord is missing; install the alsa-utils package')
@@ -57,6 +70,16 @@ def capture_hardware() -> str:
         ['arecord', '-l'], check=False, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True)
     return result.stdout
+
+
+def capture_pulse_sources() -> str:
+    """Return Pulse source JSON, or an empty string when Pulse is unavailable."""
+    if shutil.which('pactl') is None or shutil.which('parec') is None:
+        return ''
+    result = subprocess.run(
+        ['pactl', '--format=json', 'list', 'sources'], check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return result.stdout if result.returncode == 0 else ''
 
 
 def parse_capture_devices(output: str) -> list[CaptureDevice]:
@@ -74,13 +97,78 @@ def parse_capture_devices(output: str) -> list[CaptureDevice]:
     return devices
 
 
-def resolve_device(selector: str, output: str) -> str:
-    # ALSA device expressions are passed through.  Otherwise accept a friendly
-    # case-insensitive substring such as the USB product name 'CMTECK'.
-    if selector == 'default' or ':' in selector:
-        return selector
+def parse_pulse_sources(output: str) -> list[PulseSource]:
+    if not output:
+        return []
+    try:
+        records = json.loads(output)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(records, list):
+        return []
+    sources = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = str(record.get('name', ''))
+        if not name or name.endswith('.monitor'):
+            continue
+        description = str(record.get('description', name))
+        sources.append(PulseSource(name=name, description=description))
+    return sources
+
+
+def resolve_capture(selector: str, alsa_output: str,
+                    pulse_output: str) -> CaptureInput:
+    """Prefer the shared desktop audio server, then fall back to raw ALSA."""
+    pulse_sources = parse_pulse_sources(pulse_output)
+    if selector in ('default', 'pulse', '@DEFAULT_SOURCE@'):
+        if pulse_sources:
+            return CaptureInput(
+                backend='pulse', device='@DEFAULT_SOURCE@',
+                description='PulseAudio/PipeWire default source')
+        if selector == 'default':
+            return CaptureInput(
+                backend='alsa', device='default',
+                description='ALSA default source')
+        raise VoiceKeysError(
+            'the PulseAudio/PipeWire capture service is unavailable')
+
+    # Exact Pulse source names and raw ALSA device expressions bypass friendly
+    # matching. Most ALSA expressions contain a colon.
+    pulse_exact = [source for source in pulse_sources
+                   if source.name == selector]
+    if pulse_exact:
+        return CaptureInput(
+            backend='pulse', device=selector,
+            description=f'{pulse_exact[0].description} via PulseAudio/PipeWire')
+    if selector.startswith('alsa_input.'):
+        raise VoiceKeysError(f'Pulse source does not exist: {selector}')
+    if ':' in selector:
+        return CaptureInput(
+            backend='alsa', device=selector, description=selector)
+
+    # Friendly selectors (for example CMTECK) use Pulse/PipeWire first. The
+    # desktop sound server normally owns the raw USB endpoint, so opening
+    # plughw directly would otherwise fail with EBUSY.
+    pulse_matches = [
+        source for source in pulse_sources
+        if selector.lower() in f'{source.name} {source.description}'.lower()
+    ]
+    if len(pulse_matches) == 1:
+        source = pulse_matches[0]
+        return CaptureInput(
+            backend='pulse', device=source.name,
+            description=f'{source.description} via PulseAudio/PipeWire')
+    if len(pulse_matches) > 1:
+        choices = '\n'.join(
+            f'  {item.description} [{item.name}]' for item in pulse_matches)
+        raise VoiceKeysError(
+            f'capture selector {selector!r} is ambiguous:\n{choices}\n'
+            'pass the full Pulse source name')
+
     matches = [
-        device for device in parse_capture_devices(output)
+        device for device in parse_capture_devices(alsa_output)
         if selector.lower() in device.description.lower()
     ]
     if not matches:
@@ -91,7 +179,10 @@ def resolve_device(selector: str, output: str) -> str:
         raise VoiceKeysError(
             f'capture selector {selector!r} is ambiguous:\n{choices}\n'
             'pass an ALSA name such as plughw:CARD=2,DEV=0')
-    return matches[0].alsa_name
+    device = matches[0]
+    return CaptureInput(
+        backend='alsa', device=device.alsa_name,
+        description=f'{device.card_name} via raw ALSA')
 
 
 def recognized_color(result: dict[str, Any], confidence: float) -> tuple[str, float] | None:
@@ -182,15 +273,54 @@ def load_recognizer(rate: int, model_path: str):
     return recognizer
 
 
-def start_capture(device: str, rate: int) -> subprocess.Popen:
-    command = [
-        'arecord', '-q', '-D', device, '-t', 'raw', '-f', 'S16_LE',
-        '-c', '1', '-r', str(rate),
+def capture_command(capture_input: CaptureInput, rate: int) -> list[str]:
+    if capture_input.backend == 'pulse':
+        return [
+            'parec', '--record', '--device', capture_input.device, '--raw',
+            '--format=s16le', '--channels=1', f'--rate={rate}',
+            '--client-name=repose_voice_keys',
+            '--stream-name=Repose voice commands',
+        ]
+    return [
+        'arecord', '-q', '-D', capture_input.device, '-t', 'raw',
+        '-f', 'S16_LE', '-c', '1', '-r', str(rate),
     ]
+
+
+def start_capture(capture_input: CaptureInput,
+                  rate: int) -> subprocess.Popen:
+    command = capture_command(capture_input, rate)
     try:
-        return subprocess.Popen(command, stdout=subprocess.PIPE)
+        return subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError as error:
-        raise VoiceKeysError(f'could not start arecord: {error}') from error
+        raise VoiceKeysError(
+            f'could not start {command[0]}: {error}') from error
+
+
+def capture_failure(process: subprocess.Popen,
+                    capture_input: CaptureInput) -> VoiceKeysError:
+    try:
+        exit_code = process.wait(timeout=0.25)
+    except subprocess.TimeoutExpired:
+        exit_code = process.poll()
+    detail = ''
+    if exit_code is not None and process.stderr is not None:
+        raw_detail = process.stderr.read()
+        if isinstance(raw_detail, bytes):
+            detail = raw_detail.decode(errors='replace').strip()
+        else:
+            detail = str(raw_detail).strip()
+    program = 'parec' if capture_input.backend == 'pulse' else 'arecord'
+    message = f'{program} stopped unexpectedly (exit {exit_code})'
+    if detail:
+        message += f': {detail}'
+    if capture_input.backend == 'alsa' and 'busy' in detail.lower():
+        message += (
+            '\nAnother process (often the desktop audio service) owns this '
+            'raw ALSA device. Select the microphone in Sound Settings and '
+            'retry with --device default.')
+    return VoiceKeysError(message)
 
 
 def stop_capture(process: subprocess.Popen) -> None:
@@ -206,24 +336,27 @@ def stop_capture(process: subprocess.Popen) -> None:
 
 def listen(args: argparse.Namespace) -> None:
     hardware = capture_hardware()
-    device = resolve_device(args.device, hardware)
+    pulse_output = capture_pulse_sources()
+    capture_input = resolve_capture(args.device, hardware, pulse_output)
     recognizer = load_recognizer(args.rate, args.model)
-    keyboard = None if args.dry_run else X11Keyboard()
-    capture = start_capture(device, args.rate)
+    capture = start_capture(capture_input, args.rate)
+    keyboard = None
     if capture.stdout is None:
-        raise VoiceKeysError('arecord did not provide an audio stream')
+        raise VoiceKeysError('capture process did not provide an audio stream')
 
     mode = 'DRY RUN — no keys will be typed' if args.dry_run else 'ARMED'
-    print(f'voice_keys: input={device} rate={args.rate} Hz | {mode}')
-    print('voice_keys: mute; focus the Repose console; then unmute, say one of:')
-    print(f"            {', '.join(COLORS)}")
-    last_command = 0.0
     try:
+        keyboard = None if args.dry_run else X11Keyboard()
+        print(f'voice_keys: input={capture_input.description} '
+              f'rate={args.rate} Hz | {mode}')
+        print('voice_keys: mute; focus the Repose console; then unmute, '
+              'say one of:')
+        print(f"            {', '.join(COLORS)}")
+        last_command = 0.0
         while True:
             audio = capture.stdout.read(8000)
             if not audio:
-                raise VoiceKeysError(
-                    f'arecord stopped unexpectedly (exit {capture.poll()})')
+                raise capture_failure(capture, capture_input)
             if not recognizer.AcceptWaveform(audio):
                 continue
             result = json.loads(recognizer.Result())
@@ -253,14 +386,56 @@ def listen(args: argparse.Namespace) -> None:
             keyboard.close()
 
 
+def list_devices() -> None:
+    pulse_sources = parse_pulse_sources(capture_pulse_sources())
+    if pulse_sources:
+        print('PulseAudio/PipeWire sources:')
+        for source in pulse_sources:
+            print(f'  {source.description} [{source.name}]')
+        print()
+    print('ALSA capture hardware:')
+    print(capture_hardware(), end='')
+
+
 def self_test() -> None:
     sample = (
         'card 3: Device [MV-SILICON CMTECK], device 0: USB Audio [USB Audio]\n')
+    pulse_sample = json.dumps([{
+        'index': 7,
+        'name': 'alsa_input.usb-MV_SILICON_CMTECK-00.mono-fallback',
+        'description': 'MV-SILICON CMTECK Mono',
+    }, {
+        'index': 8,
+        'name': 'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor',
+        'description': 'Monitor of Built-in Audio',
+    }])
     devices = parse_capture_devices(sample)
     assert len(devices) == 1
     assert devices[0].alsa_name == 'plughw:CARD=3,DEV=0'
-    assert resolve_device('cmteck', sample) == 'plughw:CARD=3,DEV=0'
-    assert resolve_device('default', sample) == 'default'
+    sources = parse_pulse_sources(pulse_sample)
+    assert len(sources) == 1
+    pulse_capture = resolve_capture('cmteck', sample, pulse_sample)
+    assert pulse_capture.backend == 'pulse'
+    assert pulse_capture.device == sources[0].name
+    assert resolve_capture(sources[0].name, sample, pulse_sample) == pulse_capture
+    alsa_capture = resolve_capture('cmteck', sample, '')
+    assert alsa_capture == CaptureInput(
+        backend='alsa', device='plughw:CARD=3,DEV=0',
+        description='MV-SILICON CMTECK via raw ALSA')
+    default_capture = resolve_capture('default', sample, pulse_sample)
+    assert default_capture.device == '@DEFAULT_SOURCE@'
+    assert capture_command(pulse_capture, 16000)[0] == 'parec'
+    assert capture_command(alsa_capture, 16000)[0] == 'arecord'
+    failed_capture = subprocess.Popen(
+        [sys.executable, '-c',
+         'import sys; sys.stderr.write("Device or resource busy\\n"); '
+         'raise SystemExit(7)'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert failed_capture.stdout is not None
+    assert failed_capture.stdout.read() == b''
+    failure = str(capture_failure(failed_capture, alsa_capture))
+    assert 'exit 7' in failure
+    assert '--device default' in failure
     good = {'text': 'blue', 'result': [{'word': 'blue', 'conf': 0.91}]}
     assert recognized_color(good, 0.8) == ('blue', 0.91)
     assert recognized_color(good, 0.95) is None
@@ -275,10 +450,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--device', default=DEFAULT_DEVICE,
-        help='ALSA device or substring from arecord -l (default: CMTECK)')
+        help='audio source name or friendly substring (default: CMTECK)')
     parser.add_argument(
         '--list-devices', action='store_true',
-        help='print ALSA capture hardware and exit')
+        help='print Pulse/PipeWire and ALSA capture devices, then exit')
     parser.add_argument(
         '--model', default=os.environ.get('REPOSE_VOICE_MODEL', ''),
         help='unpacked Vosk model; default lets Vosk find/download small en-us')
@@ -309,7 +484,7 @@ def main() -> None:
         self_test()
         return
     if args.list_devices:
-        print(capture_hardware(), end='')
+        list_devices()
         return
     listen(args)
 

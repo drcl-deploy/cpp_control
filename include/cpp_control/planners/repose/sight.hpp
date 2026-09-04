@@ -36,7 +36,7 @@ struct Sight {
   bool color_ok = false;  ///< top face proven HORIZONTAL, cut or not
   int color = -1;
   std::array<float, 3> pos{};  ///< cube centre (x fwd, y left, z up), metres
-  float phi = 0.0f;   ///< spin about vertical, folded to [-pi/4, pi/4)
+  float phi = 0.0f;            ///< spin about vertical, folded to [-pi/4, pi/4)
   int n_px = 0;
   float hint = 0.0f;  ///< bearing of the biggest blob — valid even if REJECTED
   std::string reason = "init";
@@ -81,6 +81,10 @@ class CubeSight {
   /// Geometry first, one mask, modal colour. `Cfg::Read::MASK`.
   Sight read_mask(const cv::Mat& depth, int min_px, float edge,
                   const CameraPose& cam);
+  /// Depth first: floor -> known-height top -> constrained square -> colour.
+  /// `Cfg::Read::PLANE`.
+  Sight read_plane(const cv::Mat& depth, int min_px, float edge,
+                   const CameraPose& cam);
 
   Cfg cfg_;
   float half_extent_;
@@ -90,8 +94,8 @@ class CubeSight {
   Intrinsics ray_intr_{};
   int ray_w_ = 0, ray_h_ = 0;
   std::vector<Candidate> last_;
-  std::vector<int> idx_;         ///< scratch: live-pixel indices
-  std::vector<float> pts_;       ///< scratch: (N*3) base-frame points
+  std::vector<int> idx_;    ///< scratch: live-pixel indices
+  std::vector<float> pts_;  ///< scratch: (N*3) base-frame points
 };
 
 }  // namespace repose

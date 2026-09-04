@@ -1,27 +1,29 @@
 /**
  * Repose planner unit checks, the replay rig, and the bake — no robot, no ROS.
  *
- *   repose_planner_selftest                                            # unit checks
+ *   repose_planner_selftest                                            # unit
+ * checks
  *   repose_planner_selftest --table sys1_clips.npz \
  *                 --library sys1_library.npz --frames <retargeted_root>
- *   repose_planner_selftest ... --bake bundle.npz     # freeze the spans for the Orin
- *   repose_planner_selftest --table t.npz --frames bundle.npz          # read it back
- *   repose_planner_selftest ... --replay dir/                          # recorded reads
+ *   repose_planner_selftest ... --bake bundle.npz     # freeze the spans for
+ * the Orin repose_planner_selftest --table t.npz --frames bundle.npz          #
+ * read it back repose_planner_selftest ... --replay dir/ # recorded reads
  *
  * The replay rig is the acceptance gate for the perception port: it settles the
  * palette and depth-realism blockers with the robot merely standing still.
  */
 
+#include <yaml-cpp/yaml.h>
+
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
-
-#include <yaml-cpp/yaml.h>
 
 #include "cnpy/cnpy.h"
 #include "common/g1/joint_orders.hpp"
@@ -46,7 +48,8 @@ void check(bool ok, const std::string& what) {
 }
 
 /// A gate that does not reject is not a gate — every `refuses`-style check runs
-/// through here so a silently-accepted bad config fails the build, not the robot.
+/// through here so a silently-accepted bad config fails the build, not the
+/// robot.
 template <typename F>
 bool threw(F&& f) {
   try {
@@ -61,7 +64,7 @@ bool threw(F&& f) {
 
 void check_cfg() {
   std::puts("cfg");
-  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7();
+  const Cfg v6 = Cfg::v6(), v7 = Cfg::v7(), v8 = Cfg::v8();
   check(!v6.nominal_stand && v7.nominal_stand,
         "v6 and v7 differ by the gaze fix and nothing else");
   check(v6.pattern == v7.pattern && v6.horizon_gain == v7.horizon_gain,
@@ -94,10 +97,89 @@ void check_cfg() {
         "with a ceiling that does not truncate the median heading ask");
   check(Cfg::preset("v7.1").enter_yaw_rate_deg == r.enter_yaw_rate_deg,
         "the preset name resolves");
+  check(v8.read == Cfg::Read::PLANE && v8.nominal_stand == v7.nominal_stand &&
+            v8.pattern == v7.pattern &&
+            v8.enter_yaw_rate_deg == v7.enter_yaw_rate_deg,
+        "v8 changes the observation read, not planning or control");
   check(refuses([](Cfg& c) { c.enter_joint_rate = 0.0f; }),
         "a zero joint rate is a divide, not a config");
   check(refuses([](Cfg& c) { c.omega_still = 0.0f; }),
         "a quiescence gate that never opens is refused");
+  check(refuses([](Cfg& c) { c.plane_floor_quantile = 1.0f; }),
+        "a plane floor quantile outside (0, 1) is refused");
+}
+
+/// A depth-only scene for v8. The camera looks forward in +base-x; lower image
+/// rows intersect a horizontal floor, and an edge-sized elevated square
+/// occludes it. Sparse missing top depth models the D435i fringe/interior holes
+/// that made the colour-seeded MASK rectangle collapse on hardware.
+void check_plane_read() {
+  std::puts("plane read");
+  constexpr int h = 120, w = 160;
+  constexpr float edge = 0.6096f, half = 0.5f * edge;
+  const Intrinsics intr{120.0f, 120.0f, 79.5f, 10.0f};
+  CameraPose cam;
+  cam.R = {0.0f, 0.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+  cam.t = {0.0f, 0.0f, 1.0f};
+  cv::Mat bgr(h, w, CV_8UC3, cv::Scalar(20, 20, 20));
+  cv::Mat depth(h, w, CV_32FC1,
+                cv::Scalar(std::numeric_limits<float>::quiet_NaN()));
+  cv::Mat top(h, w, CV_8UC1, cv::Scalar(0));
+  const float cube_x = 0.90f, cube_y = 0.05f, phi = 0.22f;
+  const float cp = std::cos(phi), sp = std::sin(phi);
+  for (int v = 0; v < h; ++v) {
+    for (int u = 0; u < w; ++u) {
+      const float rz = -(static_cast<float>(v) - intr.cy) / intr.fy;
+      if (rz >= -1e-5f) continue;
+      const float floor_d = -cam.t[2] / rz;
+      depth.at<float>(v, u) = floor_d;
+      const float top_d = (edge - cam.t[2]) / rz;
+      const float x = top_d;
+      const float y = -(static_cast<float>(u) - intr.cx) / intr.fx * top_d;
+      const float dx = x - cube_x, dy = y - cube_y;
+      const float qx = cp * dx + sp * dy;
+      const float qy = -sp * dx + cp * dy;
+      if (std::fabs(qx) > half || std::fabs(qy) > half) continue;
+      top.at<uint8_t>(v, u) = 255;
+      bgr.at<cv::Vec3b>(v, u) = {240, 90, 250};
+      // Structured holes: geometry must associate the remaining islands, but
+      // must never manufacture a point where depth is missing.
+      if ((u + 2 * v) % 7 == 0)
+        depth.at<float>(v, u) = std::numeric_limits<float>::quiet_NaN();
+      else
+        depth.at<float>(v, u) = top_d;
+    }
+  }
+
+  Cfg cfg = Cfg::v8();
+  cfg.min_visible = 0.70f;
+  CubeSight eye(cfg, half);
+  const Sight seen = eye(bgr, depth, intr, cam);
+  check(seen.ok && seen.color_ok && seen.color == 5,
+        "a holey top yields one usable pink square pose");
+  check(std::fabs(seen.pos[0] - cube_x) < 0.08f &&
+            std::fabs(seen.pos[1] - cube_y) < 0.08f &&
+            std::fabs(seen.phi - phi) < 0.10f,
+        "the constrained square recovers its metric centre and spin");
+
+  cv::Mat gray(h, w, CV_8UC3, cv::Scalar(80, 80, 80));
+  CubeSight depth_only(cfg, half);
+  const Sight unlabelled = depth_only(gray, depth, intr, cam);
+  check(
+      unlabelled.ok && !unlabelled.color_ok && unlabelled.reason == "no_color",
+      "rejected RGB cannot starve depth geometry");
+
+  cv::Mat floor_depth = depth.clone();
+  for (int i = 0; i < h * w; ++i)
+    if (top.ptr<uint8_t>()[i]) {
+      const int v = i / w;
+      const float rz = -(static_cast<float>(v) - intr.cy) / intr.fy;
+      floor_depth.ptr<float>()[i] = -cam.t[2] / rz;
+    }
+  CubeSight empty(cfg, half);
+  const Sight no_cube = empty(gray, floor_depth, intr, cam);
+  check(!no_cube.ok && !no_cube.color_ok,
+        "a floor without an elevated square is not a cube");
 }
 
 /// The belief is what makes the ladder safe, so assert the two properties the
@@ -133,14 +215,15 @@ void check_belief() {
 
   // Roll the window past every blue read; the vote must follow the evidence.
   for (int i = 0; i < 4; ++i) b.push(read(2, true, 3.0f));
-  check(b.color() == 2 && b.n_reads() == 8, "the window forgets, the count does not");
+  check(b.color() == 2 && b.n_reads() == 8,
+        "the window forgets, the count does not");
   b.clear();
   check(b.n_reads() == 0 && !b.valid(), "a commit clears the evidence");
 }
 
 /// decide() must be PURE — the node calls it every tick and commits the answer
-/// only when the controller finishes, so a decision that burned a clip on the way out
-/// would empty the pool twenty times a second.
+/// only when the controller finishes, so a decision that burned a clip on the
+/// way out would empty the pool twenty times a second.
 void check_decide_is_pure(const ClipTable& t) {
   std::puts("decide");
   Cfg cfg;
@@ -179,19 +262,22 @@ void check_decide_is_pure(const ClipTable& t) {
   b.clear();
   for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(target);
   clips.observe(b);
-  check(clips.done() && clips.decide(b).mode == Mode::SETTLE, "the target ends it");
+  check(clips.done() && clips.decide(b).mode == Mode::SETTLE,
+        "the target ends it");
   b.clear();
   for (int i = 0; i < cfg.belief_min_votes; ++i) b.push(placed);
   clips.observe(b);
   check(clips.done() && clips.decide(b).mode == Mode::SETTLE,
         "and done is LATCHED — one bad read cannot roll a solved cube away");
 
-  // The ladder steps on the voted colour, once per change however often it runs.
+  // The ladder steps on the voted colour, once per change however often it
+  // runs.
   Clips fresh(t, cfg, 5);
   Belief b2(cfg);
   for (int i = 0; i < cfg.belief_min_votes; ++i) b2.push(placed);
   for (int i = 0; i < 10; ++i) fresh.observe(b2);
-  check(fresh.rung() == 0 && fresh.tips() == 0, "the first colour is not a tip");
+  check(fresh.rung() == 0 && fresh.tips() == 0,
+        "the first colour is not a tip");
   Sight other = placed;
   other.color = 3;
   b2.clear();
@@ -201,10 +287,11 @@ void check_decide_is_pure(const ClipTable& t) {
         "a colour change steps exactly one rung, however often observe() runs");
 }
 
-/// THE v7 RESULT, asserted offline: a nominal stance has waist = 0, so the torso
-/// is vertical and the camera reads back its mount angle. The library's stand
-/// frame does not, which is why v5/v6 aimed at the near ground and saw 44-47%
-/// side faces. No robot, no camera — three joint angles and the mount quat.
+/// THE v7 RESULT, asserted offline: a nominal stance has waist = 0, so the
+/// torso is vertical and the camera reads back its mount angle. The library's
+/// stand frame does not, which is why v5/v6 aimed at the near ground and saw
+/// 44-47% side faces. No robot, no camera — three joint angles and the mount
+/// quat.
 void check_gaze() {
   std::puts("gaze");
   const Mount mount;  // the xml's, same defaults the node falls back to
@@ -231,8 +318,8 @@ void check_gaze() {
   // The gaze must be a pure function of the waist: any base tilt the IMU
   // reports is already removed before perception, so it cannot enter here.
   const float h = 0.5f * 0.4f;
-  const Gaze yawed = gaze_of(camera_pose(
-      {std::cos(h), 0.f, 0.f, std::sin(h)}, {0.f, 0.f, 0.f}, mount));
+  const Gaze yawed = gaze_of(camera_pose({std::cos(h), 0.f, 0.f, std::sin(h)},
+                                         {0.f, 0.f, 0.f}, mount));
   check(std::fabs(yawed.pitch_deg - nom.pitch_deg) < 1e-3f &&
             std::fabs(yawed.yaw_deg - nom.yaw_deg) < 1e-3f,
         "heading is removed before the gaze, so a turned robot sees the same");
@@ -244,7 +331,8 @@ void check_nominal_stand(ClipTable& t) {
   std::puts("nominal stand");
   std::vector<float> nominal(g1::NUM_JOINTS, 0.0f);
   for (size_t i = 0; i < g1::MJ_JOINTS.size(); ++i)
-    nominal[i] = 0.1f * static_cast<float>(i % 3);  // any stance, waist included
+    nominal[i] =
+        0.1f * static_cast<float>(i % 3);  // any stance, waist included
   for (int i : g1::WAIST_JOINT_INDICES) nominal[i] = 0.0f;
 
   t.set_nominal_stand(nominal);
@@ -261,8 +349,9 @@ void check_nominal_stand(ClipTable& t) {
     if (c != 2 * J + 3) rest = std::max(rest, std::fabs(s[c]));
   check(rest < 1e-6f,
         "velocity, root position, twist and contact are all zero");
-  check(std::fabs(s[2 * J + 3] - 1.0f) < 1e-6f,
-        "the anchor quat is identity — upright, and engage rebases the heading");
+  check(
+      std::fabs(s[2 * J + 3] - 1.0f) < 1e-6f,
+      "the anchor quat is identity — upright, and engage rebases the heading");
 }
 
 /// The warp must be exactly the heading term the retrieval minimises, or the
@@ -272,11 +361,13 @@ void check_warp_identity() {
   const float qth = 0.31f, phi = -0.12f;
   for (int sym = 0; sym < 4; ++sym) {
     const float a = sym * static_cast<float>(M_PI) / 2.0f;
-    const float dth = std::atan2(std::sin(qth + a + phi), std::cos(qth + a + phi));
+    const float dth =
+        std::atan2(std::sin(qth + a + phi), std::cos(qth + a + phi));
     const float entry_yaw =
         std::atan2(std::sin(qth + a + phi), std::cos(qth + a + phi));
     check(std::fabs(dth - entry_yaw) < 1e-6f,
-          "sym " + std::to_string(sym) + ": entry_yaw == the cost's heading term");
+          "sym " + std::to_string(sym) +
+              ": entry_yaw == the cost's heading term");
   }
 }
 
@@ -327,7 +418,8 @@ void check_still_rows(const ClipTable& t, const Cfg& cfg) {
   float head = 0.0f;
   for (int j = 0; j < g1::NUM_JOINTS; ++j)
     head = std::max(head, std::fabs(rows[j] - live.joint_pos_il[j]));
-  check(head < 1e-5f, "row 0 IS the live pose — a still commit ramps, not steps");
+  check(head < 1e-5f,
+        "row 0 IS the live pose — a still commit ramps, not steps");
 }
 
 /// The lead-in must be continuous with the live pose and land on the clip.
@@ -352,8 +444,9 @@ void check_lead_in(const ClipTable& t, const Cfg& cfg) {
   const float* span = t.span(p.row);
   for (int j = 0; j < g1::NUM_JOINTS; ++j) {
     head = std::max(head, std::fabs(rows[j] - live.joint_pos_il[j]));
-    tail = std::max(tail, std::fabs(rows[static_cast<size_t>(lead - 1) * cols + j] -
-                                    span[j]));
+    tail = std::max(
+        tail,
+        std::fabs(rows[static_cast<size_t>(lead - 1) * cols + j] - span[j]));
   }
   check(head < 1e-5f, "row 0 IS the live pose");
   check(tail < 1e-5f, "the last lead-in row IS the clip's entry pose");
@@ -382,7 +475,8 @@ void check_enter_ramp(const ClipTable& t) {
   off.lead_in_max_s = Cfg::v7().lead_in_max_s;
   ReferenceWriter wv7(t, Cfg::v7()), woff(t, off);
   const std::vector<float> a = wv7.build(p, live), b = woff.build(p, live);
-  check(a == b && !woff.ramped(), "enter_yaw_rate_deg = 0 IS v7, byte for byte");
+  check(a == b && !woff.ramped(),
+        "enter_yaw_rate_deg = 0 IS v7, byte for byte");
 
   const Cfg cfg = Cfg::v7_1();
   ReferenceWriter w(t, cfg);
@@ -454,18 +548,19 @@ void check_enter_ramp(const ClipTable& t) {
     }
   }
   check(over < 1e-4f, "the ramp never overshoots either endpoint");
-  check(dv < 0.95f * step_v7,
-        "and arrives moving, where v7 arrived from rest");
+  check(dv < 0.95f * step_v7, "and arrives moving, where v7 arrived from rest");
   check(std::fabs(rows[J]) < 1e-5f, "the ramp starts from rest, as a still is");
 
   // The ramp's root POSITION is pinned at the entry anchor, so the only twist
-  // it may command is its own yaw sweep — and that returns to zero at both ends.
+  // it may command is its own yaw sweep — and that returns to zero at both
+  // ends.
   float twist = 0.0f, yend = 0.0f;
   for (int f = 0; f < lead; ++f) {
     const float* row = &rows[static_cast<size_t>(f) * cols];
     for (int k = alin; k < aang + 3; ++k)
       if (k != aang + 2) twist = std::max(twist, std::fabs(row[k]));
-    if (f == 0 || f == lead - 1) yend = std::max(yend, std::fabs(row[aang + 2]));
+    if (f == 0 || f == lead - 1)
+      yend = std::max(yend, std::fabs(row[aang + 2]));
   }
   check(twist < 1e-6f, "the ramp commands no root twist but its own turn");
   check(yend < 1e-5f, "and that turn rate is zero at both ends of the sweep");
@@ -484,11 +579,12 @@ void check_enter_ramp(const ClipTable& t) {
   const auto& cr = wc.build(p, live, ReferenceWriter::Stage::CLIP);
   check(!wc.ramped() && wc.frames() == p.frames &&
             std::memcmp(cr.data(), span,
-                        static_cast<size_t>(p.frames) * cols * sizeof(float)) == 0,
+                        static_cast<size_t>(p.frames) * cols * sizeof(float)) ==
+                0,
         "the CLIP stage is the raw span — no lead-in, no blend");
 
-  // The ramp starts from what the controller was TOLD, not from where it is: C0 with the
-  // still it leaves, whatever tracking error that still was carrying.
+  // The ramp starts from what the controller was TOLD, not from where it is: C0
+  // with the still it leaves, whatever tracking error that still was carrying.
   LiveState held = live;
   held.held_row.assign(t.stand_row(), t.stand_row() + cols);
   ReferenceWriter wh(t, cfg);
@@ -512,7 +608,8 @@ void check_table(const ClipTable& t) {
   std::puts("table");
   check(!t.rows().empty(), "rows loaded");
   check(t.cols() == g1::WIRE_COLS_FULL, "rows are in MotionReference layout");
-  check(t.half_extent() > 0.1f && t.fps() > 1.0f, "half_extent and fps are sane");
+  check(t.half_extent() > 0.1f && t.fps() > 1.0f,
+        "half_extent and fps are sane");
   size_t pooled = 0;
   for (char d : std::string("FBLR")) pooled += t.pool(d).size();
   check(pooled > 0, "at least one delta has a clean pool");
@@ -552,6 +649,8 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg, bool summary) {
   Belief belief(cfg);
   int conf[7][7] = {};  // [label + 1][answer + 1], index 0 is "no cube"/"none"
   bool scored = false;
+  int color_reads = 0, pose_reads = 0, action_reads = 0;
+  int pose_on_positive = 0, joint_right = 0;
   if (!summary) std::printf("replay: %zu reads\n", files.size());
   for (const auto& f : files) {
     cnpy::npz_t z = cnpy::npz_load(f);
@@ -572,26 +671,39 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg, bool summary) {
     // Every recorded read is a standing robot, so all of them are quiescent by
     // construction — the rig feeds the belief the way the node's gate would.
     const Sight s = eye(bgr, depth, {k[0], k[1], k[2], k[3]}, cam);
+    color_reads += s.color_ok;
+    pose_reads += s.ok;
+    action_reads += s.color_ok && s.ok;
     if (z.count("label")) {
       scored = true;
       const int lab = *z.at("label").data<int32_t>();
       const int ans = s.color_ok ? s.color : -1;
-      if (lab >= -1 && lab < 6 && ans >= -1 && ans < 6) ++conf[lab + 1][ans + 1];
+      if (lab >= -1 && lab < 6 && ans >= -1 && ans < 6)
+        ++conf[lab + 1][ans + 1];
+      if (lab >= 0) {
+        pose_on_positive += s.ok;
+        joint_right += s.ok && s.color_ok && s.color == lab;
+      }
     }
     belief.push(s);
     clips.observe(belief);
     const Plan p = clips.decide(belief);
     if (!summary)
-      std::printf("%-24s %-10s c%d pos %+.4f %+.4f %+.4f phi %+.5f | vote %d/%d "
-                  "c%d | %s cost %.3f yaw %+.4f row %d sym %d\n",
-                  f.substr(f.find_last_of('/') + 1).c_str(), s.reason.c_str(),
-                  s.color, s.pos[0], s.pos[1], s.pos[2], s.phi, belief.n_votes(),
-                  belief.n_reads(), belief.color(), p.label.c_str(), p.cost,
-                  p.entry_yaw, p.row, p.sym);
+      std::printf(
+          "%-24s %-10s c%d pos %+.4f %+.4f %+.4f phi %+.5f | vote %d/%d "
+          "c%d | %s cost %.3f yaw %+.4f row %d sym %d\n",
+          f.substr(f.find_last_of('/') + 1).c_str(), s.reason.c_str(), s.color,
+          s.pos[0], s.pos[1], s.pos[2], s.phi, belief.n_votes(),
+          belief.n_reads(), belief.color(), p.label.c_str(), p.cost,
+          p.entry_yaw, p.row, p.sym);
   }
+  std::printf(
+      "\nOBSERVE frames %zu  color_ok %d  pose_ok %d  action_ready %d\n",
+      files.size(), color_reads, pose_reads, action_reads);
   if (!scored) return 0;
 
-  static const char* kName[6] = {"red", "orange", "green", "yellow", "blue", "pink"};
+  static const char* kName[6] = {"red",    "orange", "green",
+                                 "yellow", "blue",   "pink"};
   int right = 0, n_pos = 0;
   for (int c = 0; c < 6; ++c)
     for (int a = -1; a < 6; ++a) {
@@ -612,16 +724,24 @@ int replay(const std::string& dir, ClipTable& t, const Cfg& cfg, bool summary) {
     if (!n) continue;
     std::printf("%-8s", kName[c]);
     for (int a = 0; a < 6; ++a) std::printf("%8d", conf[c + 1][a + 1]);
-    std::printf("%8d%8d%7.1f%%\n", conf[c + 1][0], n, 100.0 * conf[c + 1][c + 1] / n);
+    std::printf("%8d%8d%7.1f%%\n", conf[c + 1][0], n,
+                100.0 * conf[c + 1][c + 1] / n);
   }
   if (n_neg) {
     std::printf("%-8s", "no cube");
     for (int a = 0; a < 6; ++a) std::printf("%8d", conf[0][a + 1]);
-    std::printf("%8d%8d%7.1f%%\n", conf[0][0], n_neg, 100.0 * conf[0][0] / n_neg);
+    std::printf("%8d%8d%7.1f%%\n", conf[0][0], n_neg,
+                100.0 * conf[0][0] / n_neg);
   }
   // The one line a sweep reads back.
   std::printf("\nSCORE accuracy %.4f (%d/%d)  false_positives %d/%d\n",
-              n_pos ? static_cast<double>(right) / n_pos : 0.0, right, n_pos, fp, n_neg);
+              n_pos ? static_cast<double>(right) / n_pos : 0.0, right, n_pos,
+              fp, n_neg);
+  std::printf("POSE pose_ok %.4f (%d/%d)  joint_color_pose %.4f (%d/%d)\n",
+              n_pos ? static_cast<double>(pose_on_positive) / n_pos : 0.0,
+              pose_on_positive, n_pos,
+              n_pos ? static_cast<double>(joint_right) / n_pos : 0.0,
+              joint_right, n_pos);
   return 0;
 }
 
@@ -634,7 +754,8 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   const YAML::Node root = YAML::LoadFile(path);
   const std::string named =
       root["version"] ? root["version"].as<std::string>() : "v7";
-  check(!threw([&] { Cfg::from_yaml(root); }), "the config loads and validates");
+  check(!threw([&] { Cfg::from_yaml(root); }),
+        "the config loads and validates");
 
   // Parity is asserted only for a file that CLAIMS to be untuned — the shipped
   // base. A deployment config exists precisely to differ from its preset, and
@@ -644,7 +765,7 @@ void check_config_roundtrip(const std::string& path, bool parity) {
           "the shipped yaml round-trips to the preset it names");
     // `version:` is the ablation switch, so all three have to survive the same
     // file — that is the "one line A/Bs both" claim, tested.
-    for (const char* v : {"v6", "v7", "v7.1"}) {
+    for (const char* v : {"v6", "v7", "v7.1", "v8"}) {
       YAML::Node n = YAML::Clone(root);
       n["version"] = v;
       check(Cfg::from_yaml(n) == Cfg::preset(v),
@@ -653,7 +774,7 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   }
   check(threw([&] {
           YAML::Node n = YAML::Clone(root);
-          n["version"] = "v8";
+          n["version"] = "v9";
           Cfg::from_yaml(n);
         }),
         "an unknown version is refused rather than defaulted");
@@ -672,6 +793,8 @@ void check_config_roundtrip(const std::string& path, bool parity) {
   // One override reaches the struct — the whole point of the file.
   YAML::Node tuned = YAML::Clone(root);
   tuned["observe"]["palette"]["blue"]["lit"] = std::vector<float>{1, 181, 255};
+  tuned["observe"]["palette"]["blue"]["shaded"] =
+      std::vector<float>{10, 10, 51};
   check(Cfg::from_yaml(tuned).palette[24] == 1.0f &&
             Cfg::from_yaml(tuned).palette[25] == 181.0f,
         "a palette row written in yaml is the row the classifier gets");
@@ -686,15 +809,24 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() { return i + 1 < argc ? argv[++i] : ""; };
-    if (a == "--table") table_path = next();
-    else if (a == "--frames") frames_path = next();
-    else if (a == "--library") library_path = next();
-    else if (a == "--bake") bake_path = next();
-    else if (a == "--replay") replay_dir = next();
-    else if (a == "--version") version = next();
-    else if (a == "--config") config_path = next();
-    else if (a == "--summary") summary = true;
-    else if (a == "--check-preset-parity") check_parity = true;
+    if (a == "--table")
+      table_path = next();
+    else if (a == "--frames")
+      frames_path = next();
+    else if (a == "--library")
+      library_path = next();
+    else if (a == "--bake")
+      bake_path = next();
+    else if (a == "--replay")
+      replay_dir = next();
+    else if (a == "--version")
+      version = next();
+    else if (a == "--config")
+      config_path = next();
+    else if (a == "--summary")
+      summary = true;
+    else if (a == "--check-preset-parity")
+      check_parity = true;
     else {
       std::printf("unknown argument '%s'\n", a.c_str());
       return 2;
@@ -708,13 +840,15 @@ int main(int argc, char** argv) {
                       : Cfg::from_yaml(YAML::LoadFile(config_path));
   check_cfg();
   check_belief();
+  check_plane_read();
   check_gaze();
   check_warp_identity();
   if (!config_path.empty()) check_config_roundtrip(config_path, check_parity);
 
   if (table_path.empty()) {
-    std::printf("\n%d failure(s). Pass --table <sys1_clips.npz> for the rest.\n",
-                failures);
+    std::printf(
+        "\n%d failure(s). Pass --table <sys1_clips.npz> for the rest.\n",
+        failures);
     return failures ? 1 : 0;
   }
 
@@ -734,7 +868,8 @@ int main(int argc, char** argv) {
   check_table(table);
   // BEFORE the checks below, which overwrite the stand row: a bundle carries
   // the library's pose and nothing else. v7's stance is per-robot and arrives
-  // at runtime from the controller's manifest, so the bundle stays version-agnostic.
+  // at runtime from the controller's manifest, so the bundle stays
+  // version-agnostic.
   if (!bake_path.empty()) {
     table.bake(bake_path);
     std::printf("baked -> %s\n", bake_path.c_str());
@@ -748,7 +883,8 @@ int main(int argc, char** argv) {
     check_enter_ramp(table);
     check_decide_is_pure(table);
   }
-  if (!replay_dir.empty() && replay(replay_dir, table, cfg, summary) != 0) ++failures;
+  if (!replay_dir.empty() && replay(replay_dir, table, cfg, summary) != 0)
+    ++failures;
 
   std::printf("\n%d failure(s)\n", failures);
   return failures ? 1 : 0;

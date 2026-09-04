@@ -16,8 +16,10 @@ Cfg Cfg::preset(const std::string& name) {
   if (name == "v6") return Cfg::v6();
   if (name == "v7") return Cfg::v7();
   if (name == "v7.1") return Cfg::v7_1();
-  throw std::runtime_error("repose planner: version must be v6 | v7 | v7.1, got '" +
-                           name + "'");
+  if (name == "v8") return Cfg::v8();
+  throw std::runtime_error(
+      "repose planner: version must be v6 | v7 | v7.1 | v8, got '" + name +
+      "'");
 }
 
 // ── The loader ───────────────────────────────────────────────────
@@ -34,7 +36,8 @@ Cfg Cfg::preset(const std::string& name) {
 namespace {
 
 /// Colour order IS the palette's row order, and the goal-colour one-hot's.
-const char* const kColors[6] = {"red", "orange", "green", "yellow", "blue", "pink"};
+const char* const kColors[6] = {"red",    "orange", "green",
+                                "yellow", "blue",   "pink"};
 
 void reject_unknown(const YAML::Node& n, const char* section,
                     const std::set<std::string>& known) {
@@ -45,18 +48,24 @@ void reject_unknown(const YAML::Node& n, const char* section,
   for (const auto& kv : n) {
     const std::string key = kv.first.as<std::string>();
     if (!known.count(key))
-      throw std::runtime_error(std::string("repose planner: unknown key '") +
-                               section + "." + key +
-                               "'. A knob that is not read is worse than one that "
-                               "is wrong — fix the name or delete the line");
+      throw std::runtime_error(
+          std::string("repose planner: unknown key '") + section + "." + key +
+          "'. A knob that is not read is worse than one that "
+          "is wrong — fix the name or delete the line");
   }
 }
 
 struct Reader {
   const YAML::Node& n;
-  void operator()(const char* k, float& v) const { if (n && n[k]) v = n[k].as<float>(); }
-  void operator()(const char* k, int& v) const { if (n && n[k]) v = n[k].as<int>(); }
-  void operator()(const char* k, bool& v) const { if (n && n[k]) v = n[k].as<bool>(); }
+  void operator()(const char* k, float& v) const {
+    if (n && n[k]) v = n[k].as<float>();
+  }
+  void operator()(const char* k, int& v) const {
+    if (n && n[k]) v = n[k].as<int>();
+  }
+  void operator()(const char* k, bool& v) const {
+    if (n && n[k]) v = n[k].as<bool>();
+  }
   void operator()(const char* k, std::string& v) const {
     if (n && n[k]) v = n[k].as<std::string>();
   }
@@ -73,17 +82,19 @@ std::array<float, 3> rgb(const YAML::Node& n, const std::string& what) {
 /// preset's row, so a deployment that only re-measured blue writes only blue.
 void read_palette(const YAML::Node& n, Palette& p) {
   if (!n) return;
-  reject_unknown(n, "observe.palette",
-                 {kColors[0], kColors[1], kColors[2], kColors[3], kColors[4], kColors[5]});
+  reject_unknown(
+      n, "observe.palette",
+      {kColors[0], kColors[1], kColors[2], kColors[3], kColors[4], kColors[5]});
   for (int c = 0; c < 6; ++c) {
     const YAML::Node row = n[kColors[c]];
     if (!row) continue;
     reject_unknown(row, (std::string("observe.palette.") + kColors[c]).c_str(),
                    {"lit", "shaded"});
     if (!row["lit"] || !row["shaded"])
-      throw std::runtime_error(std::string("repose planner: palette.") + kColors[c] +
-                               " needs both 'lit' and 'shaded' — the pair is what "
-                               "survives shading, and one alone silently halves it");
+      throw std::runtime_error(
+          std::string("repose planner: palette.") + kColors[c] +
+          " needs both 'lit' and 'shaded' — the pair is what "
+          "survives shading, and one alone silently halves it");
     const auto lit = rgb(row["lit"], std::string(kColors[c]) + ".lit");
     const auto sha = rgb(row["shaded"], std::string(kColors[c]) + ".shaded");
     for (int i = 0; i < 3; ++i) {
@@ -98,23 +109,32 @@ void read_palette(const YAML::Node& n, Palette& p) {
 Cfg Cfg::from_yaml(const YAML::Node& root) {
   if (root["knobs"])
     throw std::runtime_error(
-        "repose planner: 'knobs:' is the pre-split flat schema and is no longer read. "
-        "Move its entries under observe.gates / observe.geometry / belief / loop / "
+        "repose planner: 'knobs:' is the pre-split flat schema and is no "
+        "longer read. "
+        "Move its entries under observe.gates / observe.geometry / belief / "
+        "loop / "
         "seam — see config/repose_planner/g1.yaml");
 
-  Cfg c = Cfg::preset(root["version"] ? root["version"].as<std::string>() : "v7");
+  Cfg c =
+      Cfg::preset(root["version"] ? root["version"].as<std::string>() : "v7");
 
   const YAML::Node obs = root["observe"];
-  reject_unknown(obs, "observe",
-                 {"read", "proc_width", "palette", "gates", "geometry", "mask"});
+  reject_unknown(
+      obs, "observe",
+      {"read", "proc_width", "palette", "gates", "geometry", "mask", "plane"});
   Reader{obs}("proc_width", c.proc_width);
   if (obs && obs["read"]) {
     const std::string r = obs["read"].as<std::string>();
-    if (r == "blobs") c.read = Cfg::Read::BLOBS;
-    else if (r == "mask") c.read = Cfg::Read::MASK;
+    if (r == "blobs")
+      c.read = Cfg::Read::BLOBS;
+    else if (r == "mask")
+      c.read = Cfg::Read::MASK;
+    else if (r == "plane")
+      c.read = Cfg::Read::PLANE;
     else
-      throw std::runtime_error("repose planner: observe.read must be blobs | mask, got '" +
-                               r + "'");
+      throw std::runtime_error(
+          "repose planner: observe.read must be blobs | mask | plane, got '" +
+          r + "'");
   }
   read_palette(obs ? obs["palette"] : YAML::Node(), c.palette);
 
@@ -124,6 +144,18 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   r_mk("top_pct", c.mask_top_pct);
   r_mk("band_m", c.mask_band_m);
   r_mk("erode", c.mask_erode);
+
+  const YAML::Node pl = obs ? obs["plane"] : YAML::Node();
+  reject_unknown(pl, "observe.plane",
+                 {"floor_quantile", "ransac_dist_m", "top_band_m", "close_px",
+                  "fit_slack", "range_max_m"});
+  Reader r_pl{pl};
+  r_pl("floor_quantile", c.plane_floor_quantile);
+  r_pl("ransac_dist_m", c.plane_ransac_dist_m);
+  r_pl("top_band_m", c.plane_top_band_m);
+  r_pl("close_px", c.plane_close_px);
+  r_pl("fit_slack", c.plane_fit_slack);
+  r_pl("range_max_m", c.plane_range_max_m);
 
   const YAML::Node g = obs ? obs["gates"] : YAML::Node();
   reject_unknown(g, "observe.gates",
@@ -158,8 +190,8 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
   const YAML::Node l = root["loop"];
   reject_unknown(l, "loop",
                  {"nominal_stand", "pattern", "retry_limit", "arm_radius",
-                  "horizon_gain", "stance_band_m", "scan_sweep_deg", "settle_steps",
-                  "scan_steps", "hold_tail"});
+                  "horizon_gain", "stance_band_m", "scan_sweep_deg",
+                  "settle_steps", "scan_steps", "hold_tail"});
   Reader r_l{l};
   r_l("nominal_stand", c.nominal_stand);
   r_l("pattern", c.pattern);
@@ -174,8 +206,8 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
 
   const YAML::Node s = root["seam"];
   reject_unknown(s, "seam",
-                 {"blend_frames", "lead_in_rate", "lead_in_min_s", "lead_in_max_s",
-                  "enter_yaw_rate_deg", "enter_joint_rate"});
+                 {"blend_frames", "lead_in_rate", "lead_in_min_s",
+                  "lead_in_max_s", "enter_yaw_rate_deg", "enter_joint_rate"});
   Reader r_s{s};
   r_s("blend_frames", c.blend_frames);
   r_s("lead_in_rate", c.lead_in_rate);
@@ -191,22 +223,28 @@ Cfg Cfg::from_yaml(const YAML::Node& root) {
 bool Cfg::operator==(const Cfg& o) const {
   return read == o.read && mask_top_pct == o.mask_top_pct &&
          mask_band_m == o.mask_band_m && mask_erode == o.mask_erode &&
-         chroma_reject == o.chroma_reject &&
-         proc_width == o.proc_width && min_area_frac == o.min_area_frac &&
-         min_px_floor == o.min_px_floor && min_visible == o.min_visible &&
+         plane_floor_quantile == o.plane_floor_quantile &&
+         plane_ransac_dist_m == o.plane_ransac_dist_m &&
+         plane_top_band_m == o.plane_top_band_m &&
+         plane_close_px == o.plane_close_px &&
+         plane_fit_slack == o.plane_fit_slack &&
+         plane_range_max_m == o.plane_range_max_m &&
+         chroma_reject == o.chroma_reject && proc_width == o.proc_width &&
+         min_area_frac == o.min_area_frac && min_px_floor == o.min_px_floor &&
+         min_visible == o.min_visible &&
          min_visible_color == o.min_visible_color && min_value == o.min_value &&
          min_rel_sat == o.min_rel_sat && up_dot_min == o.up_dot_min &&
          big_max == o.big_max && z_min_m == o.z_min_m &&
          slab_frac == o.slab_frac && palette == o.palette &&
          nominal_stand == o.nominal_stand && belief_window == o.belief_window &&
-         belief_min_votes == o.belief_min_votes && omega_still == o.omega_still &&
-         pattern == o.pattern && retry_limit == o.retry_limit &&
-         arm_radius == o.arm_radius && horizon_gain == o.horizon_gain &&
-         stance_band_m == o.stance_band_m && scan_sweep_deg == o.scan_sweep_deg &&
-         settle_steps == o.settle_steps && scan_steps == o.scan_steps &&
-         hold_tail == o.hold_tail && blend_frames == o.blend_frames &&
-         lead_in_rate == o.lead_in_rate && lead_in_min_s == o.lead_in_min_s &&
-         lead_in_max_s == o.lead_in_max_s &&
+         belief_min_votes == o.belief_min_votes &&
+         omega_still == o.omega_still && pattern == o.pattern &&
+         retry_limit == o.retry_limit && arm_radius == o.arm_radius &&
+         horizon_gain == o.horizon_gain && stance_band_m == o.stance_band_m &&
+         scan_sweep_deg == o.scan_sweep_deg && settle_steps == o.settle_steps &&
+         scan_steps == o.scan_steps && hold_tail == o.hold_tail &&
+         blend_frames == o.blend_frames && lead_in_rate == o.lead_in_rate &&
+         lead_in_min_s == o.lead_in_min_s && lead_in_max_s == o.lead_in_max_s &&
          enter_yaw_rate_deg == o.enter_yaw_rate_deg &&
          enter_joint_rate == o.enter_joint_rate;
 }
@@ -217,11 +255,14 @@ void Cfg::validate() const {
   for (char c : pattern)
     if (!std::strchr("FBLR", c))
       throw std::runtime_error(
-          "repose planner: pattern must be drawn from FBLR (only the roll deltas are "
-          "retrievable), got '" + pattern + "'");
+          "repose planner: pattern must be drawn from FBLR (only the roll "
+          "deltas are "
+          "retrievable), got '" +
+          pattern + "'");
   if (scan_steps <= 2 * hold_tail)
     throw std::runtime_error(
-        "repose planner: a SCAN must outlast twice its hold tail — the sweep has to "
+        "repose planner: a SCAN must outlast twice its hold tail — the sweep "
+        "has to "
         "finish before the camera is quiet enough to read");
   if (settle_steps < 1)
     throw std::runtime_error("repose planner: settle_steps must be >= 1");
@@ -232,49 +273,74 @@ void Cfg::validate() const {
         "repose planner: need 1 <= belief_min_votes <= belief_window");
   if (omega_still <= 0.0f)
     throw std::runtime_error(
-        "repose planner: omega_still must be > 0 — a gate that never opens leaves the "
+        "repose planner: omega_still must be > 0 — a gate that never opens "
+        "leaves the "
         "planner blind and standing still forever");
   if (blend_frames < 0 || lead_in_rate < 0.0f)
-    throw std::runtime_error("repose planner: blend_frames / lead_in_rate must be >= 0");
+    throw std::runtime_error(
+        "repose planner: blend_frames / lead_in_rate must be >= 0");
   if (enter_yaw_rate_deg < 0.0f || enter_joint_rate <= 0.0f)
     throw std::runtime_error(
-        "repose planner: need enter_yaw_rate_deg >= 0 (0 is v7, the ramp off) and "
+        "repose planner: need enter_yaw_rate_deg >= 0 (0 is v7, the ramp off) "
+        "and "
         "enter_joint_rate > 0");
   if (lead_in_max_s < lead_in_min_s)
-    throw std::runtime_error("repose planner: lead_in_max_s must be >= lead_in_min_s");
+    throw std::runtime_error(
+        "repose planner: lead_in_max_s must be >= lead_in_min_s");
 
   // ── the knobs the yaml only just gained a way to get wrong ──
   if (min_value < 0 || min_value > 255)
-    throw std::runtime_error("repose planner: min_value is an 8-bit level, [0, 255]");
+    throw std::runtime_error(
+        "repose planner: min_value is an 8-bit level, [0, 255]");
   if (min_rel_sat < 0.0f || min_rel_sat >= 1.0f)
     throw std::runtime_error("repose planner: min_rel_sat must be in [0, 1)");
   if (min_area_frac <= 0.0f || min_area_frac > 1.0f)
     throw std::runtime_error("repose planner: min_area_frac must be in (0, 1]");
   if (min_px_floor < 3)
     throw std::runtime_error(
-        "repose planner: min_px_floor must be >= 3 — a plane fit needs three points");
+        "repose planner: min_px_floor must be >= 3 — a plane fit needs three "
+        "points");
   if (up_dot_min <= 0.0f || up_dot_min > 1.0f)
     throw std::runtime_error("repose planner: up_dot_min must be in (0, 1]");
   if (min_visible_color < 0.0f || min_visible_color > 1.0f)
-    throw std::runtime_error("repose planner: min_visible_color must be in [0, 1]");
+    throw std::runtime_error(
+        "repose planner: min_visible_color must be in [0, 1]");
   if (big_max < min_visible)
     throw std::runtime_error(
         "repose planner: big_max is the LONGEST rect side and min_visible the "
         "shortest, so big_max < min_visible rejects every square");
   if (slab_frac <= 0.0f || slab_frac > 1.0f)
     throw std::runtime_error(
-        "repose planner: slab_frac is a depth in cube edges and must be in (0, 1]");
+        "repose planner: slab_frac is a depth in cube edges and must be in (0, "
+        "1]");
   if (z_min_m <= 0.0f)
     throw std::runtime_error("repose planner: z_min_m must be > 0");
   if (chroma_reject < 0.0f)
     throw std::runtime_error(
-        "repose planner: chroma_reject must be >= 0 (0 is off, and is the shipping read)");
+        "repose planner: chroma_reject must be >= 0 (0 is off, and is the "
+        "shipping read)");
   if (mask_top_pct <= 0.0f || mask_top_pct > 100.0f)
-    throw std::runtime_error("repose planner: observe.mask.top_pct must be in (0, 100]");
+    throw std::runtime_error(
+        "repose planner: observe.mask.top_pct must be in (0, 100]");
   if (mask_band_m <= 0.0f)
     throw std::runtime_error("repose planner: observe.mask.band_m must be > 0");
   if (mask_erode < 0)
     throw std::runtime_error("repose planner: observe.mask.erode must be >= 0");
+  if (plane_floor_quantile <= 0.0f || plane_floor_quantile >= 1.0f)
+    throw std::runtime_error(
+        "repose planner: observe.plane.floor_quantile must be in (0, 1)");
+  if (plane_ransac_dist_m <= 0.0f || plane_top_band_m <= 0.0f)
+    throw std::runtime_error(
+        "repose planner: observe.plane ransac_dist_m / top_band_m must be > 0");
+  if (plane_close_px < 0)
+    throw std::runtime_error(
+        "repose planner: observe.plane.close_px must be >= 0");
+  if (plane_fit_slack < 0.0f || plane_fit_slack > 0.5f)
+    throw std::runtime_error(
+        "repose planner: observe.plane.fit_slack must be in [0, 0.5]");
+  if (plane_range_max_m <= 0.0f)
+    throw std::runtime_error(
+        "repose planner: observe.plane.range_max_m must be > 0");
   for (float v : palette)
     if (!(v >= 0.0f && v <= 255.0f))
       throw std::runtime_error(

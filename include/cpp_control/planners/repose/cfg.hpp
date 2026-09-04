@@ -30,7 +30,8 @@ struct Cfg {
   // ── perception ──
   int proc_width = 0;  ///< 0 = work at the depth plane's own size (the wire's)
   float min_area_frac = 0.002f;
-  int min_px_floor = 8;  ///< a blob is never smaller than this, whatever the frac
+  int min_px_floor =
+      8;  ///< a blob is never smaller than this, whatever the frac
   float min_visible = 0.60f;  ///< shortest rect side / cube edge, for a POSE
   /// Same gate for the COLOUR channel, which needs far less — the plane test
   /// already proved the face is the top one.
@@ -38,8 +39,9 @@ struct Cfg {
   int min_value = 30;
   float min_rel_sat = 0.22f;
   float up_dot_min = 0.90f;  ///< |n.z| for a fitted plane to BE the top face
-  float big_max = 1.4f;      ///< longest rect side / cube edge: above this it is floor
-  float z_min_m = 0.05f;     ///< depth nearer than this is not a measurement
+  float big_max =
+      1.4f;  ///< longest rect side / cube edge: above this it is floor
+  float z_min_m = 0.05f;  ///< depth nearer than this is not a measurement
   /// TOP SLAB depth, in cube edges, below the blob's `min_px`-th highest point.
   /// A same-coloured floor touching the cube is ONE component and the floor is
   /// the larger half, so the cut is by height.
@@ -50,26 +52,40 @@ struct Cfg {
   ///
   ///   BLOBS  colour first: six independent blob extractions, each gated on
   ///          geometry, and the HIGHEST surviving one wins. The shipping read.
-  ///   MASK   geometry first: one cube-top mask off every coloured pixel, then
-  ///          the modal colour over it.
+  ///   MASK   geometry first in name only: one cube-top mask off every pixel
+  ///          that already has a colour label, then the modal colour over it.
+  ///   PLANE  depth first: fit the floor from all valid depth, lift it by the
+  ///          known cube edge, fit a hole-tolerant square, THEN vote colour.
   ///
-  /// Measured on bags/sys1_observe (180 labelled hardware frames, 60 negatives):
-  /// BLOBS 55%, and no palette or gate setting moves it — 54 of 83 errors are
-  /// the true blob passing every gate and losing the height contest to a
-  /// spurious one. MASK with a re-measured palette, `chroma_reject` and a
+  /// Measured on bags/sys1_observe (180 labelled hardware frames, 60
+  /// negatives): BLOBS 55%, and no palette or gate setting moves it — 54 of 83
+  /// errors are the true blob passing every gate and losing the height contest
+  /// to a spurious one. MASK with a re-measured palette, `chroma_reject` and a
   /// loosened `min_rel_sat` reaches 84% at the same 0/60 false positives.
   /// Neither half works alone: MASK on the sim palette is 49%.
-  enum class Read { BLOBS, MASK };
+  enum class Read { BLOBS, MASK, PLANE };
   Read read = Read::BLOBS;
 
-  /// MASK only. The top face is a horizontal plane `mask_band_m` thick, found at
-  /// the `mask_top_pct`-th percentile of live height — a percentile, not the max,
-  /// because stray pixels put the max above the robot's root. Then the largest
-  /// connected component, eroded by `mask_erode` to drop the mixed pixels a
-  /// JPEG leaves on every edge.
+  /// MASK only. The top face is a horizontal plane `mask_band_m` thick, found
+  /// at the `mask_top_pct`-th percentile of live height — a percentile, not the
+  /// max, because stray pixels put the max above the robot's root. Then the
+  /// largest connected component, eroded by `mask_erode` to drop the mixed
+  /// pixels a JPEG leaves on every edge.
   float mask_top_pct = 97.0f;
   float mask_band_m = 0.08f;
   int mask_erode = 1;
+
+  /// PLANE only. The floor is the dominant horizontal plane among the lower
+  /// `plane_floor_quantile` of valid points. The cube top is one known edge
+  /// above it. Closing associates depth islands caused by the D435i's edge
+  /// dropout; the square fit keeps only the densest edge-sized window, so the
+  /// closing operation never invents 3-D measurements.
+  float plane_floor_quantile = 0.70f;
+  float plane_ransac_dist_m = 0.035f;
+  float plane_top_band_m = 0.08f;
+  int plane_close_px = 2;
+  float plane_fit_slack = 0.15f;
+  float plane_range_max_m = 2.30f;
 
   /// Chromaticity distance beyond which a pixel is NO colour rather than the
   /// nearest of six. 0 disables it, which is the shipping behaviour: the
@@ -79,8 +95,8 @@ struct Cfg {
   float chroma_reject = 0.0f;
 
   /// v7: hold the robot's NOMINAL STANCE in a still mode, not the library's
-  /// stand frame. The planner's own vocabulary — the borrowed pose was picked for
-  /// quietness and carries a waist that aims the head at the near ground.
+  /// stand frame. The planner's own vocabulary — the borrowed pose was picked
+  /// for quietness and carries a waist that aims the head at the near ground.
   /// Measured on THIS deployment's mount quat and its own baked stand row:
   ///
   ///     library frame 12953   waist +26.7 deg -> cam 71.2 deg down, -27.2 yaw
@@ -99,8 +115,9 @@ struct Cfg {
   // tip counted only on the consumed read, and camera staleness as a park
   // condition (docs/planners/repose/planner.md §3).
 
-  int belief_window = 8;     ///< reads kept; at 20 Hz this is the last 0.4 s
-  int belief_min_votes = 3;  ///< agreeing reads before the belief may be acted on
+  int belief_window = 8;  ///< reads kept; at 20 Hz this is the last 0.4 s
+  int belief_min_votes =
+      3;  ///< agreeing reads before the belief may be acted on
   /// rad/s of CAMERA motion above which a read is blur, not evidence. A held
   /// stance sits near 0.05, a 90 deg sweep at 0.96 — the gap is an order of
   /// magnitude, so this needs no tuning to separate them.
@@ -122,8 +139,9 @@ struct Cfg {
   int hold_tail = 15;
 
   // ── the seam (no sim twin: hardware has no teleport) ──
-  int blend_frames = 12;    ///< live->reference offset decay; only if no lead-in
-  float lead_in_rate = 1.5f;  ///< rad/s ramp onto a clip's entry; 0 = blend only
+  int blend_frames = 12;  ///< live->reference offset decay; only if no lead-in
+  float lead_in_rate =
+      1.5f;  ///< rad/s ramp onto a clip's entry; 0 = blend only
   float lead_in_min_s = 0.2f;
   float lead_in_max_s = 0.6f;
 
@@ -165,6 +183,15 @@ struct Cfg {
     Cfg c = v7();
     c.enter_yaw_rate_deg = 50.0f;
     c.lead_in_max_s = 1.2f;
+    return c;
+  }
+  /// v8 — v7's planner and controller, with only the depth-first observation
+  /// path changed. This deliberately does not add walking or alter the
+  /// scan/settle decision ladder: hardware can accept or reject localization
+  /// in isolation first.
+  static Cfg v8() {
+    Cfg c = v7();
+    c.read = Read::PLANE;
     return c;
   }
   static Cfg preset(const std::string& name);

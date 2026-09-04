@@ -1,0 +1,78 @@
+# v8 acceptance candidate: the measured D435i palette from g1_real.yaml, but
+# geometry comes from all valid depth before colour classification. Keep
+# g1_real.yaml as the v7 A/B baseline until a nominal-stand bag passes.
+version: v8
+target_color: 4
+rate_hz: 20.0
+stale_s: 1.0
+
+clips: data/sys1_clips.npz
+frames:
+  source: retargeted
+  path: data/retargeted_motions
+  library: data/sys1_library.npz
+
+camera:
+  host: 127.0.0.1
+  port: 5555
+mount:
+  xyz: [0.05, 0.0, 0.4318]
+  quat: [0.6533, 0.2706, -0.2706, -0.6533]
+
+observe:
+  read: plane
+  proc_width: 0
+  palette:
+    red:    {lit: [255, 120, 80], shaded: [255, 131, 114]}
+    orange: {lit: [255, 168, 9], shaded: [255, 189, 57]}
+    green:  {lit: [195, 255, 223], shaded: [224, 255, 240]}
+    yellow: {lit: [255, 252, 85], shaded: [255, 164, 94]}
+    blue:   {lit: [0, 190, 255], shaded: [32, 196, 255]}
+    pink:   {lit: [255, 159, 250], shaded: [253, 136, 255]}
+  gates:
+    min_value: 30
+    min_rel_sat: 0.15
+    min_area_frac: 0.002
+    min_px_floor: 8
+    chroma_reject: 0.06
+  geometry:
+    up_dot_min: 0.90
+    # The square fit removes depth fringe before measuring this. 0.70 rejects
+    # ambiguous partial faces without recreating v7's colour-mask starvation.
+    min_visible: 0.70
+    min_visible_color: 0.0
+    big_max: 1.4
+    slab_frac: 0.25
+    z_min_m: 0.05
+  plane:
+    floor_quantile: 0.70
+    ransac_dist_m: 0.035
+    top_band_m: 0.08
+    close_px: 2
+    fit_slack: 0.15
+    # The clip table's clean entries end at 0.83 m; 2.30 m leaves abundant
+    # localization headroom while rejecting the far background seen in the
+    # labelled negative controls.
+    range_max_m: 2.30
+
+belief:
+  window: 8
+  min_votes: 3
+  omega_still: 0.15
+
+loop:
+  pattern: RRF
+  retry_limit: 3
+  arm_radius: 0.30
+  horizon_gain: 0.3
+  stance_band_m: 0.70
+  scan_sweep_deg: 90.0
+  settle_steps: 40
+  scan_steps: 110
+  hold_tail: 15
+
+seam:
+  blend_frames: 12
+  lead_in_rate: 1.5
+  lead_in_min_s: 0.2
+  enter_joint_rate: 2.0

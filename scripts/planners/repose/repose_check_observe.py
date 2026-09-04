@@ -74,7 +74,7 @@ class Check(Node):
                             interpolation=cv2.INTER_NEAREST)
                  if self.labels is not None else np.zeros_like(left))
         canvas = np.hstack([left, right])
-        pad = np.full((150, canvas.shape[1], 3), 20, np.uint8)
+        pad = np.full((175, canvas.shape[1], 3), 20, np.uint8)
         canvas = np.vstack([canvas, pad])
         y = h + 26
 
@@ -100,6 +100,8 @@ class Check(Node):
             line(f'pose_ok {int(o.pose_ok)}   range {o.range_m:5.2f} m   '
                  f'bearing {np.degrees(o.bearing_rad):+6.1f} deg   '
                  f'phi {np.degrees(o.phi_rad):+5.1f} deg   n_px {o.n_px}')
+            line(f'cube xyz  {o.position[0]:+6.3f}  {o.position[1]:+6.3f}  '
+                 f'{o.position[2]:+6.3f} m', (170, 170, 170))
             # The candidates are the whole diagnosis: one face split across two
             # chromaticity cells shows up here as two rows and nowhere else.
             parts = []
