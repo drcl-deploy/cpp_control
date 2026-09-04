@@ -100,7 +100,7 @@ observe:
 
   geometry:
     up_dot_min: 0.90
-    min_visible: 0.60
+    min_visible: 0.4  # Hardware v7: tolerate partial/depth-blurred top masks.
     min_visible_color: 0.0
     big_max: 1.4
     slab_frac: 0.25
