@@ -175,7 +175,7 @@ CAM_EYE = float(os.environ.get("DRCL_CAM_EYE", 1.15))
 CAM_AIM = float(os.environ.get("DRCL_CAM_AIM", 0.72))
 
 
-def _chase_camera(az_deg=None, dist=None, eye=None, aim=None):
+def _chase_camera(az_deg=None, dist=None, eye=None, aim=None, center=(0.0, 0.0)):
     """Position and orientation for the `track` camera, as (pos, quat).
 
     Solved from a look-at rather than written down, because the orientation and
@@ -189,6 +189,15 @@ def _chase_camera(az_deg=None, dist=None, eye=None, aim=None):
     limitation: a clip that turns the robot turns it relative to the camera,
     because no fixed orientation can follow a heading. It stays in frame either
     way, which is what matters.
+
+    `center` is the ground point the shot is built around, and it is the robot's
+    own, not the origin. The camera's XML `pos` is a WORLD position at the reset
+    pose: MuJoCo bakes the tracking offset once, at compile time, as
+    `cam_pos0 = pos - subtree_com`, and then holds THAT offset for the run. So a
+    `pos` written about the origin frames the origin, and a scene whose robot
+    resets somewhere else -- which is every RSI scene, g1_jumps starts at
+    (-2.2, -4.1) -- gets a camera pointed at empty floor several metres away
+    with the robot outside the frame entirely.
     """
     import math
 
@@ -199,9 +208,10 @@ def _chase_camera(az_deg=None, dist=None, eye=None, aim=None):
     L = CAM_DIST if dist is None else dist
     eye = CAM_EYE if eye is None else eye
     aim = CAM_AIM if aim is None else aim
+    cx, cy = float(center[0]), float(center[1])
 
-    pos = np.array([-L * math.cos(az), -L * math.sin(az), eye])
-    fwd = np.array([0.0, 0.0, aim]) - pos
+    pos = np.array([cx - L * math.cos(az), cy - L * math.sin(az), eye])
+    fwd = np.array([cx, cy, aim]) - pos
     fwd /= np.linalg.norm(fwd)
     # MuJoCo cameras look down their own -z with +y up, so the frame is
     # [right, up, -forward] and `right` comes from the world vertical.
@@ -211,6 +221,42 @@ def _chase_camera(az_deg=None, dist=None, eye=None, aim=None):
     quat = np.zeros(4)
     mujoco.mju_mat2Quat(quat, np.column_stack([right, up, -fwd]).flatten())
     return pos.tolist(), quat.tolist()
+
+
+def _place_track_camera(spec):
+    """Frame the `track` camera on the pose this spec actually resets to.
+
+    Called on the FINAL spec of every unitree scene -- once for the plain one,
+    and again inside the bake, because the bake is what moves the robot. The
+    reset centre of mass is asked of a compiled copy rather than assumed: a
+    camera whose offset is measured from the origin frames the origin, and the
+    RSI scenes stand the robot wherever the clip's first frame puts it.
+
+    Selecting the camera is part of placing it, and without it the camera is
+    dead weight: simulate's AlignAndScaleView() reads vis.global.cameraid and
+    only sets cam.type = mjCAMERA_FIXED when it names a real camera. The
+    default, -1, is the free camera -- which does not move. Resolved by name
+    rather than assumed to be 0, because the id is a compile-order index and
+    the stock scene is free to grow a camera of its own.
+    """
+    import mujoco
+
+    if not any(cam.name == "track" for cam in spec.cameras):
+        return
+
+    model = spec.compile()
+    data = mujoco.MjData(model)
+    mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+    # subtree_com[0] is the whole model's centre of mass, which is the robot's:
+    # the terrain has geoms but no mass. It is also exactly the point trackcom
+    # follows, so the offset solved against it is the offset MuJoCo keeps.
+    com = data.subtree_com[0]
+
+    cam = spec.camera("track")
+    cam.pos, cam.quat = _chase_camera(center=(com[0], com[1]))
+    spec.visual.global_.cameraid = mujoco.mj_name2id(
+        spec.compile(), mujoco.mjtObj.mjOBJ_CAMERA, "track")
 
 
 def _make_unitree_scene(args):
@@ -257,25 +303,19 @@ def _make_unitree_scene(args):
     # missing-mesh error rather than anything about this script.
     spec.meshdir = os.path.join(os.path.dirname(src), "meshes") + os.sep
 
-    cam = spec.worldbody.add_camera()
-    cam.name = "track"
-    cam.mode = mujoco.mjtCamLight.mjCAMLIGHT_TRACKCOM
-    cam.pos, cam.quat = _chase_camera()
-
     # `trackcom` holds the camera at a CONSTANT world-axis offset from the
     # model's centre of mass with a fixed orientation, so the robot sits at the
     # same place on screen whatever direction it walks and however far it goes
     # -- only the background moves. Verified: displacing the free joint by
     # (+5, +2) m moves cam_xpos from (0, -3, 1.2) to (5, -1, 1.2).
     #
-    # Selecting it is a separate step, and without it the camera above is dead
-    # weight: simulate's AlignAndScaleView() reads vis.global.cameraid and only
-    # sets cam.type = mjCAMERA_FIXED when it names a real camera. The default,
-    # -1, is the free camera -- which does not move. Resolved by name rather
-    # than assumed to be 0, because the id is a compile-order index and the
-    # stock scene is free to grow a camera of its own.
-    spec.visual.global_.cameraid = mujoco.mj_name2id(
-        spec.compile(), mujoco.mjtObj.mjOBJ_CAMERA, "track")
+    # That offset is frozen at COMPILE time (cam_pos0 = pos - subtree_com), so
+    # where the robot resets decides what the camera looks at forever after.
+    # _place_track_camera() is therefore what places it, on the finished scene,
+    # and the bake calls it again after moving the robot.
+    cam = spec.worldbody.add_camera()
+    cam.name = "track"
+    cam.mode = mujoco.mjtCamLight.mjCAMLIGHT_TRACKCOM
 
     # The offscreen framebuffer the F9 recorder renders into is sized by the
     # MODEL, not by the recorder, and MuJoCo's default is 640x480 -- a viewport
@@ -284,6 +324,8 @@ def _make_unitree_scene(args):
     # 1080p DRCL_RECORD_SIZE and costs one buffer of GPU memory.
     spec.visual.global_.offwidth = 1920
     spec.visual.global_.offheight = 1080
+
+    _place_track_camera(spec)
 
     banner = (f"<!-- GENERATED by cpp_control/scripts/make_sim2sim_scene.py "
               f"--flavor unitree from\n     {src}\n"
@@ -403,6 +445,12 @@ def _bake_initial_pose(scene_path, config_path, banner,
     if root_pos is None:
         root_pos = [0.0, 0.0, _ground_root_z(spec, root)]
     root.pos = list(root_pos)
+
+    # The robot has just moved -- an RSI clip starts it wherever its first frame
+    # was recorded, metres from the origin -- so the follow camera is re-framed
+    # on it here. Skipped silently on the mj_sim flavour, whose scene has no
+    # `track` camera because run_mj_sim.py carries its own follow camera.
+    _place_track_camera(spec)
 
     out = os.path.join(os.path.dirname(scene_path), out_name)
     with open(out, "w") as f:

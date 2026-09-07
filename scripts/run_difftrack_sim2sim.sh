@@ -43,6 +43,15 @@
 #   -S PATH      -s only: back the REST state with a SONIC stand POLICY instead
 #                of the nominal-pose PD hold. A path under models/ (e.g.
 #                tracker/sonic/g1_sonic_base.onnx) or an absolute one.
+#   -B SECONDS   -s only: once the stand has taken the robot, interpolate the
+#                ARM position targets onto it over this long instead of snapping
+#                them there in one control period. Off (0) by default. The clip
+#                is untouched: it plays to its last frame with the policy owning
+#                every joint, and only then does this start. Arms only, and
+#                positions only -- gains, legs and waist go to the stand on the
+#                handover tick either way. For a clip that does not end where
+#                the stand's nominal pose is: g1_dance30s ends 1.4-2.8 rad away
+#                at the arms, and it looks like the snap it is.
 #   -E MODE      where the WORLD BASE POSE comes from — see WORLD STATE below.
 #                estimator (default) | ground_truth | compare
 #   -k           keep the logs and say where they are
@@ -174,6 +183,7 @@ KEEP=0
 WATCH=0
 STANDCYCLE=0
 STAND_ONNX=""
+ARM_BLEND=0.0
 FREERUN=0
 RECORD=0
 WORKFLOW=unitree
@@ -196,7 +206,7 @@ WORKFLOW=unitree
 #                 against the other. This is how you find out what the estimator
 #                 costs before letting it drive.
 ESTIMATOR=estimator
-while getopts "e:d:r:l:p:W:S:E:kwsfRh" opt; do
+while getopts "e:d:r:l:p:W:S:B:E:kwsfRh" opt; do
   case $opt in
     e) ENTRY=$OPTARG ;;
     d) DURATION=$OPTARG ;;
@@ -209,9 +219,10 @@ while getopts "e:d:r:l:p:W:S:E:kwsfRh" opt; do
     w) WATCH=1 ;;
     s) STANDCYCLE=1; WATCH=1 ;;
     S) STAND_ONNX=$OPTARG ;;
+    B) ARM_BLEND=$OPTARG ;;
     f) FREERUN=1 ;;
     R) RECORD=1 ;;
-    h) sed -n '2,125p' "$0"; exit 0 ;;
+    h) sed -n '2,136p' "$0"; exit 0 ;;
     *) exit 2 ;;
   esac
 done
@@ -238,6 +249,10 @@ if [ "$ESTIMATOR" != "ground_truth" ] && [ "$WORKFLOW" != "unitree" ]; then
 fi
 if [ -n "$STAND_ONNX" ] && [ "$STANDCYCLE" != "1" ]; then
   echo "-S is the stand cycle's rest-state policy; it does nothing without -s."
+  exit 2
+fi
+if [ "$ARM_BLEND" != "0.0" ] && [ "$ARM_BLEND" != "0" ] && [ "$STANDCYCLE" != "1" ]; then
+  echo "-B interpolates the arms onto the REST state, and only -s has one."
   exit 2
 fi
 SPEED=1.0
@@ -617,6 +632,7 @@ PYCFG
       ros2 launch cpp_control g1_difftrack.launch.py \
         motion:="$motion" auto_engage:=false start_in_stand:=true \
         play_duration:="$DURATION" exit_hold:="$EXIT_HOLD" exit_ramp:="$EXIT_RAMP" \
+        arm_blend:="$ARM_BLEND" \
         "${stand_args[@]}" "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" > "$ctllog" 2>&1 &
     elif [ "$WATCH" = "1" ]; then
       # No budget, no self-shutdown, no timeout: play_duration<0 runs a looping

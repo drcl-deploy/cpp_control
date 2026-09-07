@@ -186,6 +186,20 @@ between the robot standing after a walk clip and the robot on the floor. The
 measurements are in
 [`difftrack_running.md` §2c](difftrack_running.md#2c-the-stand-cycle--the-session-an-operator-actually-runs).
 
+**The arm handover** (`arm_blend`, off by default). A clip does not end where the
+stand begins, so the handover is a step in the joint targets: `g1_dance30s` puts
+the stand's first arm target 1.4-2.8 rad from where the arm actually is. The legs
+need that step and the arms do not, so `arm_blend` interpolates the **arm
+position targets** onto the stand over that many seconds, starting the instant
+the stand takes the robot. The clip is untouched — it runs to its last frame with
+the policy owning every joint — and gains, legs and waist go to the stand on the
+handover tick either way. It starts from the arms' **measured** angles: a
+tracking policy commands past the joint stops routinely, and interpolating from
+one of those drives the joint the wrong way first. It does not decide whether the
+robot stays up after a clip; see
+[`difftrack_running.md`](difftrack_running.md#the-arm-handover-arm_blend) for
+what does.
+
 Launch arguments:
 
 | argument | default | meaning |
@@ -201,6 +215,8 @@ Launch arguments:
 | `stand_onnx_path` | `''` | SONIC stand export backing the rest state; relative names resolve under `models/` |
 | `exit_hold` | `0.0` | seconds with the reference frozen at the end of a clip — **measured harmful** |
 | `exit_ramp` | `0.0` | seconds fading the gains back to the hold gains at the end of a clip |
+| `arm_blend` | `0.0` | seconds over which the **arm position targets** interpolate onto the SONIC stand once it has the robot. Arms only, positions only; the clip is untouched |
+| `arm_blend_joints` | `[shoulder, elbow, wrist]` | substrings of `joint_names` it owns; add `waist` for the torso |
 | `play_duration` | `-1` | seconds; ≤0 is the whole clip, or forever if it loops |
 | `lead_in_duration` | `0.0` | ramp the reference from the robot's velocity onto the clip's |
 | `fall_height` | export's | root height below which the run is called a fall |

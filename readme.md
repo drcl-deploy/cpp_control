@@ -231,6 +231,19 @@ clip ends: `exit_hold` and `exit_ramp` both default to 0 because every tick they
 spend is a tick nothing is balancing the robot. The measurements are in
 [docs/trackers/difftrack_running.md](docs/trackers/difftrack_running.md) §2c.
 
+One thing about the handover is not a balance question. **A clip does not end
+where the stand begins**, so the arm targets step — `g1_dance30s` puts the
+stand's first arm target 1.4-2.8 rad from where the arm actually is, in one
+control period. `arm_blend` (seconds, off by default) interpolates the **arm
+position targets** onto the stand instead, starting the instant the stand takes
+the robot. The clip is untouched, and gains, legs and waist go to the stand on
+the handover tick either way. It starts at the arms' measured angles, because a
+tracking policy's last target is routinely past the joint stops.
+
+```bash
+bash scripts/run_difftrack_sim2sim.sh -s -d 30 -B 1.0 g1_dance30s
+```
+
 ## docs
 
 | doc | what |

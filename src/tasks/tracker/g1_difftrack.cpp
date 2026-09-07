@@ -116,6 +116,9 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
     play_duration_ = this->declare_parameter("play_duration", play_duration_);
     exit_ramp_ = this->declare_parameter("exit_ramp", exit_ramp_);
     exit_hold_ = this->declare_parameter("exit_hold", exit_hold_);
+    arm_blend_ = this->declare_parameter("arm_blend", arm_blend_);
+    const std::vector<std::string> arm_blend_joints = this->declare_parameter(
+        "arm_blend_joints", std::vector<std::string>{"shoulder", "elbow", "wrist"});
     start_in_stand_ = this->declare_parameter("start_in_stand", start_in_stand_);
     anchor_motion_to_robot_ =
         this->declare_parameter("anchor_motion_to_robot", anchor_motion_to_robot_);
@@ -170,6 +173,35 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
         RCLCPP_INFO(this->get_logger(), "difftrack joint order: %s",
                     identity ? "policy == motor order (identity)"
                              : "policy != motor order (permuted, resolved by name)");
+    }
+
+    // ── which joints the arm handover owns ──
+    //
+    // By NAME against this node's own joint table, as the policy order is, and
+    // for the same reason: an interpolation over the wrong indices moves the
+    // wrong limb and reports nothing. Substrings rather than a fixed list, so a
+    // clip that wants the waist in it is a launch argument, not a code change.
+    if (arm_blend_ > 0.0)
+    {
+        for (int m = 0; m < num_motors(); ++m)
+            for (const auto& pattern : arm_blend_joints)
+                if (joint_names_[m].find(pattern) != std::string::npos)
+                {
+                    arm_motors_.push_back(m);
+                    break;
+                }
+        if (arm_motors_.empty())
+        {
+            std::string patterns;
+            for (const auto& pattern : arm_blend_joints)
+                patterns += (patterns.empty() ? "" : ", ") + pattern;
+            throw std::runtime_error(
+                "difftrack: arm_blend is " + std::to_string(arm_blend_) +
+                "s but arm_blend_joints [" + patterns +
+                "] matches none of this node's joint names — the interpolation would be "
+                "a silent no-op. Check the substrings against the yaml's joint_names.");
+        }
+        arm_from_.assign(num_motors(), 0.0f);
     }
 
     // ── default pose and action scale come from the export; gains do NOT ──
@@ -343,6 +375,15 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                      ? "gains fade to the hold gains over " + std::to_string(exit_ramp_) +
                            "s, then the rest state"
                      : std::string("straight to the rest state (no gain ramp)");
+    std::string arm_desc = "off — the rest state takes every joint on the tick the clip ends";
+    if (arm_blend_ > 0.0)
+    {
+        arm_desc = std::to_string(arm_blend_) + "s onto the stand, positions only, on " +
+                   std::to_string(arm_motors_.size()) + " joints (";
+        for (size_t i = 0; i < arm_motors_.size(); ++i)
+            arm_desc += (i ? ", " : "") + joint_names_[arm_motors_[i]];
+        arm_desc += ")";
+    }
     RCLCPP_INFO(this->get_logger(),
                 "difftrack loaded %s\n"
                 "  run          %s%s%s\n"
@@ -353,7 +394,8 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                 "  anchor       %s%s, observation in %s frame\n"
                 "  play         %s\n"
                 "  rest state   %s%s\n"
-                "  exit         %s",
+                "  exit         %s\n"
+                "  arm blend    %s",
                 model_dir_.c_str(), cfg.sourceRun.c_str(),
                 cfg.variant.empty() ? "" : "  variant=", cfg.variant.c_str(),
                 cfg.motionFile.c_str(), cfg.clipSteps, cfg.motionLengthS,
@@ -372,7 +414,14 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                             : "nominal-pose hold at the yaml's hold gains",
                 start_in_stand_ ? ", entered on the first state message"
                                 : " (press X, or R1 for the stand engine)",
-                exit_desc.c_str());
+                exit_desc.c_str(), arm_desc.c_str());
+
+    if (arm_blend_ > 0.0 && !has_stand())
+        RCLCPP_WARN(this->get_logger(),
+                    "arm_blend %.2fs has nothing to do without stand_onnx_path: the "
+                    "nominal-pose rest state already ramps EVERY joint from the measured "
+                    "pose over %.1fs, so there is no step for it to remove.",
+                    arm_blend_, settle_time_);
 
     if (auto_engage_ && start_in_stand_)
     {
@@ -728,6 +777,8 @@ void G1DiffTrackNode::engage_reset()
     fell_at_step_ = 0;
     anchor_ = MotionAnchor{};
     builder_.clearLeadIn();
+    // `A` during the interpolation: the clip owns the arms again from this tick.
+    arm_blending_ = false;
 
     DiffTrackState s;
     if (!read_state(s))
@@ -963,7 +1014,7 @@ void G1DiffTrackNode::finish(const char* why)
 //  The rest state
 // ══════════════════════════════════════════════════════════════
 
-void G1DiffTrackNode::enter_rest(const char* why)
+void G1DiffTrackNode::enter_rest(const char* why, bool from_clip)
 {
     phase_ = Phase::FINISHED;
     gain_blend_ = 0.0;
@@ -971,8 +1022,28 @@ void G1DiffTrackNode::enter_rest(const char* why)
     if (has_stand())
     {
         // An actively balancing policy, heading-aligned to the robot at engage.
-        // engage_stand() sets ControlMode::STAND itself.
+        // engage_stand() sets ControlMode::STAND itself — and cancels any
+        // interpolation, which is why starting one comes after it.
         engage_stand();
+
+        // THE ARM HANDOVER, and it starts HERE — the clip is over, the stand has
+        // the robot, and nothing above this line was touched by it. From the
+        // ENCODERS, because a tracking policy's last target is routinely outside
+        // the joint's range (g1_dance30s ends 0.2-0.4 rad past both elbow stops)
+        // and interpolating from one of those drives the joint backwards into
+        // its stop before it goes anywhere useful.
+        if (from_clip && arm_blend_ > 0.0)
+        {
+            for (const int m : arm_motors_)
+                arm_from_[m] = robot_state_.joint_positions[m];
+            arm_blending_ = true;
+            arm_blend_t_ = 0.0;
+            RCLCPP_INFO(this->get_logger(),
+                        "difftrack: %s -> REST on the SONIC stand policy; the arms "
+                        "interpolate onto it over %.2fs (%zu joints). `A` runs the clip "
+                        "again.", why, arm_blend_, arm_motors_.size());
+            return;
+        }
         RCLCPP_INFO(this->get_logger(),
                     "difftrack: %s -> REST on the SONIC stand policy. `A` runs the "
                     "clip again.", why);
@@ -1007,7 +1078,7 @@ void G1DiffTrackNode::on_first_state()
     RCLCPP_INFO(this->get_logger(),
                 "start_in_stand: entering the rest state from the robot's measured "
                 "pose, before the first command goes out.");
-    enter_rest("start_in_stand");
+    enter_rest("start_in_stand", /*from_clip=*/false);
 }
 
 RobotCommand G1DiffTrackNode::exit_control()
@@ -1037,6 +1108,92 @@ RobotCommand G1DiffTrackNode::exit_control()
     if (t >= 1.0)
         enter_rest("exit ramp complete");
     return cmd;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  The handover to the rest state
+// ══════════════════════════════════════════════════════════════
+
+RobotCommand G1DiffTrackNode::rest_command()
+{
+    // enter_rest() has just switched the mode, but the base node is still inside
+    // this tick's policy_control(), so THIS is what goes out on the handover
+    // tick. It has to be the rest state's own command.
+    //
+    // Returning hold_target() instead — the clip's last target, at whatever
+    // gain_blend_ enter_rest() left behind, i.e. the yaml's HOLD gains — is a
+    // torque spike, and a large one. A tracking policy's target sits a long way
+    // from the measured joint by design: its trained gains are soft (kp 29-99 on
+    // the legs) and a big commanded error is how it produces force. Multiply
+    // that same error by the hold gains (kp 300-400) for one control period and
+    // the legs get seven times the torque the policy was applying. Measured at
+    // the end of g1_dance30s: 45-52 Nm on the tick before the handover, 326-356
+    // Nm on the handover tick, into a robot the stand is at that moment trying
+    // to catch. It is one tick, and it is the tick that matters.
+    if (control_mode_ == ControlMode::STAND)
+        return stand_control();
+    if (control_mode_ == ControlMode::NOMINAL_POSE)
+        return nominal_pose_control();
+    return hold_target();
+}
+
+void G1DiffTrackNode::engage_stand()
+{
+    // Cancelled here rather than in enter_rest() so that EVERY route into the
+    // stand starts clean, including `R1` from an operator — that reaches
+    // G1Node::engage_stand() through the base node's joy callback with no idea
+    // an interpolation might be outstanding.
+    arm_blending_ = false;
+    G1Node::engage_stand();
+}
+
+RobotCommand G1DiffTrackNode::stand_control()
+{
+    RobotCommand cmd = G1Node::stand_control();
+    blend_arms(cmd);
+    return cmd;
+}
+
+void G1DiffTrackNode::blend_arms(RobotCommand& cmd)
+{
+    if (!arm_blending_)
+        return;
+
+    // A stand engine driving fewer joints than this node has would silently skip
+    // the arms. Say so and give up rather than index past the end of its command.
+    if (cmd.motor_commands.size() < arm_from_.size())
+    {
+        RCLCPP_WARN(this->get_logger(),
+                    "arm_blend: the stand engine commands %zu joints, this node has %zu "
+                    "— no interpolation.", cmd.motor_commands.size(), arm_from_.size());
+        arm_blending_ = false;
+        return;
+    }
+
+    const auto& cfg = builder_.config();
+    arm_blend_t_ += cfg.controlDt;
+    const double t = std::min(1.0, arm_blend_t_ / arm_blend_);
+    // Smoothstep, as the entry and exit ramps use: zero slope at both ends, so
+    // neither the start nor the end of it steps the commanded velocity.
+    const double a = t * t * (3.0 - 2.0 * t);
+
+    // POSITIONS ONLY. The gains are the stand's from the first tick and there is
+    // nothing to smooth there: the interpolation starts at the MEASURED pose, so
+    // the position error at t=0 is zero and no stiffness makes a torque out of
+    // it. Interpolating the gains as well would only drag the arms along at up
+    // to the yaml's hold stiffness, which is four times what the stand asks of
+    // an arm — more torque into the torso, not less.
+    for (const int m : arm_motors_)
+        cmd.motor_commands[m].q = static_cast<float>(
+            (1.0 - a) * arm_from_[m] + a * cmd.motor_commands[m].q);
+
+    if (t >= 1.0)
+    {
+        arm_blending_ = false;
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack: arms are on the stand after %.2fs; it has every joint.",
+                    arm_blend_);
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1091,7 +1248,7 @@ RobotCommand G1DiffTrackNode::policy_control()
         // finish() may have moved to SETTLE, which keeps the policy driving on
         // a frozen clock — fall through to the inference below in that case.
         if (phase_ != Phase::SETTLE)
-            return hold_target();
+            return rest_command();
     }
 
     // ── inference ──
@@ -1167,6 +1324,7 @@ RobotCommand G1DiffTrackNode::policy_control()
             else
             {
                 enter_rest("settle complete");
+                return rest_command();
             }
         }
     }

@@ -10,6 +10,11 @@ Usage:
     ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
         auto_engage:=true play_duration:=20 exit_when_finished:=true
 
+    # play the whole clip, then interpolate the arms onto the stand over a second
+    ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_dance30s \
+        stand_onnx_path:=tracker/sonic/g1_sonic_base.onnx \
+        start_in_stand:=true play_duration:=-1.0 arm_blend:=1.0
+
 `motion:=` names a directory under models/tracker/difftrack/ — the one the
 exporter wrote, holding difftrack_config.json, motion.bin and policy.onnx.
 Several policies for one clip are separate directories (`<clip>__<variant>`),
@@ -94,6 +99,21 @@ def generate_launch_description():
                                           'tick the clip ends — which is what a MOVING '
                                           'robot needs. Raise it only for a rest state '
                                           'that is passive and a clip that ends still'),
+        DeclareLaunchArgument('arm_blend', default_value='0.0',
+                              description='seconds to interpolate the ARM position '
+                                          'targets onto the SONIC stand, starting the '
+                                          'instant the stand takes the robot. The clip '
+                                          'itself is untouched — it runs to its last '
+                                          'frame with the policy owning every joint. '
+                                          '0, the default, snaps the arms to the stand '
+                                          "in one control period (g1_dance30s: 1.4-2.8 "
+                                          'rad). Positions only, arms only: gains, legs '
+                                          'and waist go to the stand on the handover '
+                                          'tick either way. Needs stand_onnx_path'),
+        DeclareLaunchArgument('arm_blend_joints',
+                              default_value='[shoulder, elbow, wrist]',
+                              description='substrings of joint_names the interpolation '
+                                          'owns. Add waist to include the torso'),
         DeclareLaunchArgument('stand_onnx_path', default_value='',
                               description='a SONIC stand export to back the rest state '
                                           'with an actively balancing policy, e.g. '
@@ -167,6 +187,9 @@ def generate_launch_description():
                 'start_in_stand': ParameterValue(LaunchConfiguration('start_in_stand'), value_type=bool),
                 'exit_hold': ParameterValue(LaunchConfiguration('exit_hold'), value_type=float),
                 'exit_ramp': ParameterValue(LaunchConfiguration('exit_ramp'), value_type=float),
+                'arm_blend': ParameterValue(LaunchConfiguration('arm_blend'), value_type=float),
+                'arm_blend_joints': ParameterValue(
+                    LaunchConfiguration('arm_blend_joints'), value_type=List[str]),
                 # A relative name is joined against models_dir in the node, the
                 # same way motion:= is joined against models_root. Which tree
                 # that is, is a launch-time fact — the INSTALLED share/ — and

@@ -126,6 +126,31 @@ namespace cpp_control
  * This mirrors what crl-humanoid-ros does with its ESTOP/STAND/DIFFTRACK FSM —
  * a resting controller the tracking state is entered from and handed back to —
  * without adding an FSM library to a package whose modes are an enum.
+ *
+ * THE ARM HANDOVER (`arm_blend`, off by default). The clip runs to its last
+ * frame untouched — the policy owns every joint until it is over, and nothing
+ * here reaches into the tracking. The instant the stand takes the robot, the
+ * ARM position targets start from the pose the arms are in and interpolate onto
+ * the stand's own over `arm_blend` seconds, on a smoothstep. Nothing else is
+ * interpolated: every gain, and every leg, waist and torso joint, is handed to
+ * the stand on that same tick, because the stand is the thing that catches a
+ * moving robot and slowing it down is measured to drop one.
+ *
+ * The arms are worth the trouble because a clip does not end where the stand
+ * begins and nothing is balancing on them. Measured on g1_dance30s, the stand's
+ * first arm target is 1.4-2.8 rad from where the arm actually is; at the stand's
+ * arm gains that is the arms snapping to attention in one control period.
+ *
+ * The interpolation starts from the ENCODERS. A tracking policy commands targets
+ * the joint cannot reach — normal, and harmless while the target is sweeping
+ * past, because the plant clips it — and g1_dance30s ends asking the left elbow
+ * for -1.24 rad against a -1.047 stop and holding the left shoulder 0.85 rad
+ * behind where the arm is. Interpolating FROM one of those drives the joint into
+ * its stop, or backwards, before it goes anywhere useful. A measured pose is a
+ * configuration the robot is in, so every point on the path is inside the range.
+ *
+ * `arm_blend_joints` names the joints, matched as substrings of this node's own
+ * joint names (default: shoulder, elbow, wrist).
  */
 class G1DiffTrackNode : public G1Node
 {
@@ -143,6 +168,18 @@ protected:
     /// `start_in_stand`: enter the rest state on the first tick that has a real
     /// robot behind it, so the first command out of this node holds it.
     void on_first_state() override;
+
+    /// The rest state's own tick, with the arm interpolation folded in.
+    RobotCommand stand_control() override;
+    /// Cancels an interpolation in flight, so `R1` from an operator always gets
+    /// a clean stand rather than the tail of one aimed at a clip that has
+    /// stopped. enter_rest() re-arms it straight afterwards when IT is calling.
+    void engage_stand() override;
+    /// Interpolate the ARM position targets, from the pose the arms were in when
+    /// the stand took the robot towards what the stand is asking for. Gains and
+    /// every other joint are left exactly as the stand set them. No-op unless an
+    /// interpolation is running.
+    void blend_arms(RobotCommand& cmd);
 
     /// Where the tracking run is within the episode.
     enum class Phase
@@ -166,7 +203,16 @@ protected:
     RobotCommand exit_control();
     /// Put the robot in the REST state: the SONIC stand if one is configured,
     /// otherwise the nominal-pose hold ramped from wherever the robot is now.
-    void enter_rest(const char* why);
+    /// @p from_clip is false only for the boot-time entry (`start_in_stand`),
+    /// where the robot is standing already and there is no clip pose to come off.
+    void enter_rest(const char* why, bool from_clip = true);
+    /// The command for whatever mode enter_rest() has just switched into, for
+    /// the one tick that is still inside policy_control(). THE REST STATE'S, not
+    /// the clip's last target: see the note at the call site, that one tick used
+    /// to go out as the policy's target driven at the yaml's HOLD gains, which
+    /// on g1_dance30s is a 330 Nm kick into a leg at the exact moment the stand
+    /// is trying to catch the robot.
+    RobotCommand rest_command();
     RobotCommand hold_target() const;
     /// Hold the joints exactly where the encoders say they are.
     RobotCommand hold_measured() const;
@@ -232,6 +278,14 @@ protected:
     int stat_steps_ = 0;
     int fell_at_step_ = 0;
     bool fell_ = false;
+
+    // --- the arm handover into the rest state (`arm_blend`) ---
+    double arm_blend_ = 0.0;        ///< seconds of interpolation; 0 disables it
+    std::vector<int> arm_motors_;   ///< MOTOR indices it owns
+    /// MOTOR order, the arm angles MEASURED when the stand took the robot.
+    std::vector<float> arm_from_;
+    double arm_blend_t_ = 0.0;
+    bool arm_blending_ = false;
 
     // --- parameters ---
     std::string entry_mode_ = "pose";

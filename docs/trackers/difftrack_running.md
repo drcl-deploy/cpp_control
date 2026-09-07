@@ -440,6 +440,10 @@ other shape, and it is the one the robot gets: **the robot stands, you press
 ```bash
 cd $WS
 bash src/cpp_control/scripts/run_difftrack_sim2sim.sh -s -d 10 g1_walk
+
+# a clip whose arms do not end where the stand's nominal pose is: interpolate
+# them on once the stand has the robot (-d 30 plays g1_dance30s whole)
+bash src/cpp_control/scripts/run_difftrack_sim2sim.sh -s -d 30 -B 1.0 g1_dance30s
 ```
 
 Nothing is automated: `auto_engage` is off, nothing exits on its own, and the
@@ -509,6 +513,179 @@ There is no gain jump to ramp away either, which is why 0 costs nothing: the
 stand engine brings its own gains out of its manifest (kp 14-99), and they are
 the same order as the tracking policy's trained ones.
 
+### the arm handover (`arm_blend`)
+
+The table above is about *balance*, and 0/0 is the answer. There is a second
+thing wrong with the handover that has nothing to do with balance, and it shows
+up the moment a clip is not a walk: **a clip does not end where the stand
+begins.** The stand's first command is its own nominal pose, and the robot is
+wherever the clip's last frame left it. The difference is published in one 20 ms
+period. Measured on `g1_dance30s`, the stand's first arm target sits 1.4-2.8 rad
+from where the arm actually is. That is the arms snapping to attention, and it
+is the jump you see at the end of a dance clip.
+
+`arm_blend` is the seconds over which the **arm position targets** interpolate
+onto the stand's instead, on a smoothstep.
+
+* **The clip is not touched.** It runs to its last frame with the policy owning
+  every joint. The interpolation begins on the tick the stand takes the robot
+  and not before — nothing here reaches into the tracking.
+* **Arms only, positions only.** Every gain, and every leg, waist and torso
+  joint, goes to the stand on the handover tick exactly as before. The stand is
+  the thing that catches a moving robot; §2c above is a table of what happens
+  when you slow that down.
+* **It starts at the encoders.** Not at the clip's last command — see below.
+
+```bash
+bash src/cpp_control/scripts/run_difftrack_sim2sim.sh -s -d 30 -B 1.0 g1_dance30s
+```
+
+#### it starts at the ENCODERS, not the clip's last command
+
+A tracking policy commands targets the joint cannot reach. That is normal and
+harmless while the target is sweeping past — the plant clips it, and a large
+commanded error is how a policy with soft trained gains produces force — and it
+is not harmless as the fixed start of a one-second ramp. At the end of
+`g1_dance30s`:
+
+```
+joint                     range           clip's last command   measured
+left_elbow_joint          [-1.05, +2.09]        -1.58            -0.62    0.53 rad past the stop
+right_elbow_joint         [-1.05, +2.09]        -1.43            ~-0.9    0.38 rad past the stop
+left_shoulder_pitch_joint [-3.09, +2.67]        -1.09            -0.24    0.85 rad BEHIND the arm
+```
+
+Interpolating from those pins both elbows in their hard stops for the first third
+of a second and drags the left shoulder 0.85 rad **backwards** before it starts
+forwards — the joint visibly going the wrong way first, at the yaml's hold
+stiffness, into the torso of a robot that is trying to catch itself. A measured
+pose is a configuration the robot is actually **in**, so it is inside the range
+by construction, the whole path is inside it, and the first commanded target is
+the one the arm is already at.
+
+The gains are the stand's from the first tick for the same reason: with the start
+at the measurement the position error is zero there, and no stiffness makes a
+torque out of zero, so there is no gain step to smooth away.
+
+#### the handover tick itself
+
+Fixed alongside, and it is not about the arms. `finish()` switches the mode while
+the base node is still inside that tick's `policy_control()`, so one command
+still has to go out from there. It used to be the clip's last target driven at
+the yaml's **hold** gains — the policy's error, which is deliberately large,
+multiplied by a stiffness four times the one that produced it:
+
+```
+                             tick before the handover      the handover tick
+leg kp                              29-99                       300-400
+peak leg spring torque             45-52 Nm                   326-356 Nm
+```
+
+Seven times the torque the policy was applying, into both legs, on the tick the
+stand is trying to catch the robot. That tick now publishes the **rest state's
+own** command, which is what the next tick was going to be anyway; the same
+measurement across three runs afterwards reads 144-204 Nm.
+
+#### measured
+
+`unitree_mujoco`, ground-truth world state, the whole 1498-step clip, handing
+over to the SONIC stand.
+
+```
+                                worst arm target   peak leg    pelvis at   pelvis
+                                vs. the encoders   torque      handover    +20 s     outcome
+before, arm_blend 0                0.996 rad       332 Nm       0.634 m    0.118 m   FELL
+before, arm_blend 0                0.716 rad       326 Nm       0.644 m    0.136 m   FELL
+before, arm_blend 0                0.555 rad       356 Nm       0.606 m    0.127 m   FELL
+after, handover tick only          1.893 rad       109 Nm       0.640 m    0.785 m   standing
+after, handover tick only          2.430 rad       160 Nm       0.583 m    0.154 m   FELL
+after, arm_blend 1.0               0.033 rad       144 Nm       0.596 m    0.117 m   FELL
+after, arm_blend 1.0               0.012 rad       156 Nm       0.583 m    0.161 m   FELL
+after, arm_blend 1.0               0.016 rad       204 Nm       0.506 m    0.078 m   FELL
+after, arm_blend 1.0               0.035 rad       161 Nm       0.607 m    0.142 m   FELL
+after, arm_blend 1.0               0.055 rad       129 Nm       0.650 m    0.785 m   standing
+```
+
+The first two columns are what these changes control and they do it completely:
+the arm target lands within 0.055 rad of where the arm is instead of up to
+2.4 rad from it, and the handover torque is a third of what it was.
+
+**The last column is not, and this is the part to read before blaming the
+handover for it.** Sort those rows by the pelvis at handover and the outcome
+falls out of a single number: **every run that arrived at 0.64 m or above stood
+up, and every run that arrived below it fell.** The fixes move that threshold —
+on the old code 0.644 m still fell, on the new one 0.640 m stands — but they
+cannot move where the clip delivers the robot, and it delivers it above 0.64 m
+about twice in ten.
+
+#### g1_dance30s falls after the clip, and the handover is not why
+
+The robot is already going down when the stand gets it. Pelvis height over the
+last second of the clip, the reference against six runs — three on the old code,
+three on the new, and they are indistinguishable:
+
+```
+t relative to the clip's end     -1.0s  -0.8s  -0.6s  -0.4s  -0.2s   0.0s
+reference (motion.bin)            0.77   0.74   0.78   0.76   0.77   0.80
+robot                             0.76   0.73   0.74   0.67   0.72   0.63
+                                  0.75   0.72   0.74   0.67   0.72   0.64
+                                  0.76   0.72   0.74   0.67   0.71   0.61
+                                  0.74   0.72   0.74   0.67   0.71   0.60
+                                  0.76   0.73   0.75   0.67   0.70   0.58
+                                  0.76   0.73   0.77   0.68   0.70   0.51
+```
+
+The choreography **stands up** into its last frame, 0.77 to 0.80 m. This
+checkpoint does not: it loses the final stand-up and drops 0.10-0.20 m in the
+last 200 ms, arriving at the handover at 0.51-0.65 m and still descending,
+against a threshold of about 0.64 m. The stand is being handed a falling robot,
+and no handover strategy repairs that — `arm_blend` off falls, `arm_blend` on
+falls, whole-body interpolation falls, and `exit_hold` puts it on the floor
+*before* the handover.
+
+The number to watch is therefore the pelvis height on the tick the clip ends, not
+the SUMMARY line's `mean_err`: 0.22 m of mean root error over 30 s says nothing
+about a 0.2 m collapse in the final fifth of a second, and that collapse is the
+whole outcome.
+
+The one thing that does work is handing over while the robot is still up. It is
+not a handover setting, it is `play_duration`: stopping at 28 s, on a frame the
+reference passes through upright and still, puts the robot at 0.77 m and the
+stand takes it 3 times out of 3. That is a workaround for a tracking failure in
+the clip's last 200 ms, not a fix for it — the fix is a checkpoint that tracks
+the ending, and until there is one, `mean_err` in the SUMMARY line does not tell
+you that the last fifth of a second is where this clip is lost.
+
+#### the rest of it
+
+`arm_blend` needs a stand. Without `stand_onnx_path` the rest state is the
+nominal-pose hold, which already ramps *every* joint from the measured pose over
+`settle_time`, so there is no step to remove — the node says so and carries on.
+
+Which joints it owns is `arm_blend_joints`, matched as substrings of the node's
+own `joint_names` — `[shoulder, elbow, wrist]` by default, 14 joints on the G1.
+A set that matches nothing is fatal at startup rather than a silent no-op. Add
+`waist` to bring the torso in:
+
+```bash
+ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_dance30s \
+    stand_onnx_path:=tracker/sonic/g1_sonic_base.onnx start_in_stand:=true \
+    play_duration:=-1.0 arm_blend:=1.0 arm_blend_joints:="[shoulder, elbow, wrist, waist]"
+```
+
+The startup banner prints the resolved set, and the handover prints the rest:
+
+```
+  arm blend    1.000000s onto the stand, positions only, on 14 joints (left_shoulder_pitch_joint, ...)
+  ...
+  difftrack: clip over -> REST on the SONIC stand policy; the arms interpolate
+             onto it over 1.00s (14 joints). `A` runs the clip again.
+  difftrack: arms are on the stand after 1.00s; it has every joint.
+```
+
+Pressing `A` during it cancels it — the clip owns the arms again from that tick —
+and so does `R1`, which engages the stand fresh from wherever the robot is.
+
 ### the weights are git-lfs
 
 `models/tracker/sonic/g1_sonic_base.onnx` is 56 MB and LFS-tracked
@@ -541,6 +718,8 @@ be driven by hand (§3) exactly as the script drives it.
 | `stand_onnx_path` | `''` | a SONIC stand export to back the rest state. A bare relative name resolves under the installed `models/` |
 | `exit_hold` | `0.0` | seconds with the reference clock frozen when the clip ends. **Measured harmful** — see above |
 | `exit_ramp` | `0.0` | seconds fading the gains back to the yaml's hold gains, ramping the joints to the nominal pose as it goes. For a rest state that is passive AND a clip that ends still |
+| `arm_blend` | `0.0` | seconds over which the **arm position targets** interpolate onto the SONIC stand's, starting the instant the stand takes the robot. The clip is untouched. Arms only, positions only — see above |
+| `arm_blend_joints` | `[shoulder, elbow, wrist]` | substrings of `joint_names` it owns. Add `waist` for the torso |
 
 `EXIT_HOLD` and `EXIT_RAMP` in the environment override the script's own.
 
