@@ -2,6 +2,7 @@
 
 #include "common/math_utils.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace cpp_control
@@ -191,6 +192,12 @@ void G1Node::subscribe_low_state(unitree_hg::msg::LowState::SharedPtr msg)
         robot_state_.joint_positions[i] = msg->motor_state[i].q;
         robot_state_.joint_velocities[i] = msg->motor_state[i].dq;
         robot_state_.joint_torques[i] = msg->motor_state[i].tau_est;
+        // MotorState carries two temperature sensors per motor (rotor and
+        // driver board); the hotter one is the one that derates the motor.
+        // unitree_mujoco leaves both at 0, so this column is empty in
+        // simulation by construction rather than by accident.
+        robot_state_.joint_temperature[i] = static_cast<float>(
+            std::max(msg->motor_state[i].temperature[0], msg->motor_state[i].temperature[1]));
     }
     robot_state_.tick = msg->tick;
     note_state_received();

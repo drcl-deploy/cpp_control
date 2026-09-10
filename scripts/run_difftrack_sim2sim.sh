@@ -57,6 +57,23 @@
 #   -k           keep the logs and say where they are
 #   motion ...   directories under models/tracker/difftrack (default: all)
 #
+# THE RUN LOG
+#
+#   Every run also writes an npz of its own control steps -- the reference, the
+#   state, the action and the command, one row per step -- into
+#   cpp_control/recordings/runs/, tagged `sim2sim_<-E mode>`. The SUMMARY line
+#   this script prints is four numbers out of that file; the file is what a
+#   hardware run is compared against later, because the robot writes the same
+#   one from the same node.
+#
+#       python3 scripts/analyze_tracking.py recordings/runs/*.npz
+#       python3 scripts/analyze_tracking.py --compare <sim>.npz <robot>.npz
+#
+#   RUN_LOG=0        turn it off
+#   RUN_LOG_DIR=DIR  put the files somewhere else
+#
+#   See docs/run_logs.md.
+#
 # WORLD STATE
 #
 #   These policies observe an ABSOLUTE world pose and twist (they were trained
@@ -222,7 +239,7 @@ while getopts "e:d:r:l:p:W:S:B:E:kwsfRh" opt; do
     B) ARM_BLEND=$OPTARG ;;
     f) FREERUN=1 ;;
     R) RECORD=1 ;;
-    h) sed -n '2,136p' "$0"; exit 0 ;;
+    h) sed -n '2,191p' "$0"; exit 0 ;;
     *) exit 2 ;;
   esac
 done
@@ -268,6 +285,12 @@ SPEED=1.0
 # state, 0/0 stands the robot up and 1.0/0.5 puts it on the floor.
 EXIT_HOLD=${EXIT_HOLD:-0.0}
 EXIT_RAMP=${EXIT_RAMP:-0.0}
+
+# The per-step run log (docs/run_logs.md). On by default and in the same place
+# every time, because the comparison this rig exists to support is a sim2sim run
+# against a hardware one, and that is only possible if the sim2sim runs were
+# kept. RUN_LOG=0 turns it off; RUN_LOG_DIR moves it.
+RUN_LOG=${RUN_LOG:-1}
 
 # The stand cycle is a STAND entry by construction: the robot is standing in the
 # rest state when you press A, not posed on the clip's first frame. Asking for
@@ -351,6 +374,16 @@ export DISPLAY=${DISPLAY:-:1}
 unset WAYLAND_DISPLAY XDG_SESSION_TYPE
 
 MODELS="$(ros2 pkg prefix cpp_control)/share/cpp_control/models/tracker/difftrack"
+
+# The run log, tagged with the world-state mode: a run measured against the
+# simulator's ground truth and one measured against the onboard estimator are
+# different measurements, and the tag is in every file name and every index
+# line so a directory of both stays readable.
+RUN_LOG_DIR=${RUN_LOG_DIR:-$PKG/recordings/runs}
+record_args=(record:=false)
+if [ "$RUN_LOG" = "1" ]; then
+  record_args=(record:=true record_dir:="$RUN_LOG_DIR" run_tag:="sim2sim_${ESTIMATOR}")
+fi
 
 # THE REST STATE for -s. Default to the SONIC stand, because it is the only
 # thing here that can catch a robot that is still moving when the clip ends —
@@ -633,7 +666,8 @@ PYCFG
         motion:="$motion" auto_engage:=false start_in_stand:=true \
         play_duration:="$DURATION" exit_hold:="$EXIT_HOLD" exit_ramp:="$EXIT_RAMP" \
         arm_blend:="$ARM_BLEND" \
-        "${stand_args[@]}" "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" > "$ctllog" 2>&1 &
+        "${stand_args[@]}" "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" \
+        "${record_args[@]}" > "$ctllog" 2>&1 &
     elif [ "$WATCH" = "1" ]; then
       # No budget, no self-shutdown, no timeout: play_duration<0 runs a looping
       # clip until you stop it, and a one-shot clip ends HOLDING the nominal pose
@@ -641,12 +675,14 @@ PYCFG
       # /robot_command with no publisher, and that is the limp robot.
       ros2 launch cpp_control g1_difftrack.launch.py \
         motion:="$motion" auto_engage:=true play_duration:=-1.0 \
-        "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" > "$ctllog" 2>&1 &
+        "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" \
+        "${record_args[@]}" > "$ctllog" 2>&1 &
     else
       timeout -s KILL "$TIMEOUT" \
         ros2 launch cpp_control g1_difftrack.launch.py \
           motion:="$motion" auto_engage:=true play_duration:="$DURATION" \
-          exit_when_finished:=true "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" > "$ctllog" 2>&1 &
+          exit_when_finished:=true "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" \
+          "${record_args[@]}" > "$ctllog" 2>&1 &
     fi
     ctlpid=$!
     # `if`, not `grep ... && break`: under `set -e` a failing && list at the end
@@ -857,6 +893,10 @@ echo "workflow=$WORKFLOW  plant=$([ "$WORKFLOW" = unitree ] && echo unitree_mujo
 state=$STATE_TOPIC  cmd=$CMD_TOPIC"
 echo "entry=$ENTRY  duration=${DURATION}s  lead_in=${LEADIN}s  entry_ramp=${ENTRY_RAMP}s  \
 speed=$([ "$FREERUN" = 1 ] && echo free-run || echo 1x)"
+if [ "$RUN_LOG" = "1" ]; then
+  echo "run logs: $RUN_LOG_DIR  (one npz per run, tagged sim2sim_${ESTIMATOR})"
+  echo "          python3 $HERE/analyze_tracking.py $RUN_LOG_DIR/*.npz"
+fi
 echo "to watch one instead of measuring all of them:  $0 -w -e $ENTRY <motion>"
 echo "to drive it yourself from a standing robot:     $0 -s -d $DURATION <motion>"
 if [ "$KEEP" = "1" ]; then

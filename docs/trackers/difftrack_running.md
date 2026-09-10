@@ -994,7 +994,39 @@ support: statically posing a standing robot into that puts it on the floor
 (measured in mj_sim — falls at step 0). Engaging straight from the nominal pose
 and letting the policy find the clip is what works.
 
-### 4.6 what the node refuses to do
+### 4.6 the run log — and the sim2sim run to compare it against
+
+Every run writes an npz of its own control steps, on hardware exactly as in
+sim2sim, and that pair is the transfer measurement. Two things to do about it
+before the robot moves:
+
+```bash
+# tag the session, and put the files somewhere that is not the robot's overlay
+ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
+    config_path:=$CFG optitrack_topic:=/optitrack_adaptor/mocap_frame \
+    optitrack_rigid_body_id:=<id> \
+    run_tag:=hw_optitrack record_dir:=~/runs
+```
+
+**Run the same clip in sim2sim first**, and against the SAME world-pose source
+the robot will use. A hardware run on OptiTrack compares against a `-E
+ground_truth` sim2sim run; a hardware run on the onboard estimator compares
+against `-E estimator`. Comparing a robot on `/odom` against a simulator on
+ground truth measures the estimator and the transfer together and reports it as
+one number.
+
+```bash
+python3 scripts/analyze_tracking.py --compare <sim>.npz <robot>.npz -o out/
+```
+
+The comparison pairs the two runs by clip step and splits the result into
+tracking (`E_root`, `E_jpos`, `mpjpe`) and execution (torque saturation, control
+period, dropped state messages, the PD's own following error, motor
+temperature). The second half is usually where a hardware number comes from, and
+it is invisible in the first. Full format and columns:
+[`../run_logs.md`](../run_logs.md).
+
+### 4.7 what the node refuses to do
 
 These are guards, not diagnostics — each stops the run rather than reporting it:
 
@@ -1009,7 +1041,7 @@ These are guards, not diagnostics — each stops the run rather than reporting i
   permutation is the one failure here that produces no error at all.
 - **Root height below `fall_height`** → the run finishes and the node damps.
 
-### 4.7 what is not verified here
+### 4.8 what is not verified here
 
 Written from the code and from sim2sim; **not run on a robot**. Things to treat
 as unverified until you have:
@@ -1080,5 +1112,7 @@ sim2sim failure at your desk instead of a surprise in the lab.
 | scene: weld cleared (drcl), or unitree's model + track camera (`--flavor unitree`) | `scripts/make_sim2sim_scene.py` |
 | the unitree workflow's install | [`workflows/unitree.md`](../../workflows/unitree.md), and [`workflows/conda_env/README.md`](../../workflows/conda_env/README.md) for a machine without apt Humble |
 | parity self-test | `tests/difftrack_selftest.cpp` |
+| the per-run log, and why it is in the node | `include/common/run_recorder.hpp`, [`../run_logs.md`](../run_logs.md) |
+| tracking error + transfer metrics from those runs | `scripts/analyze_tracking.py` |
 | reference (export, observation, entry) | [`difftrack.md`](difftrack.md) |
 | the exporter, in diffsimrl | `code/scripts/export_to_drcl_cpp_control.py` |

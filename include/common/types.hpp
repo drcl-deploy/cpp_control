@@ -35,6 +35,14 @@ struct RobotState
     std::vector<float> joint_velocities;
     std::vector<float> joint_torques;
 
+    // Motor temperature in degrees C, the hotter of each motor's two sensors.
+    // Zero on any backend that does not report one — every simulator — and a
+    // hardware-only quantity by nature. It is here because it is one of the few
+    // things that changes WITHIN a hardware session: a G1 whose leg motors have
+    // climbed 30 C over twenty runs is not the plant the first run measured, and
+    // without the number that shows up as a policy that "got worse".
+    std::vector<float> joint_temperature;
+
     uint32_t tick = 0;
 };
 

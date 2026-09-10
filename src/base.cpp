@@ -38,6 +38,7 @@ void BaseNode::init()
     robot_state_.joint_positions.resize(n, 0.0f);
     robot_state_.joint_velocities.resize(n, 0.0f);
     robot_state_.joint_torques.resize(n, 0.0f);
+    robot_state_.joint_temperature.resize(n, 0.0f);
     actions_.resize(n, 0.0f);
     last_actions_.resize(n, 0.0f);
     pre_nominal_pos_.resize(n, 0.0f);
@@ -84,7 +85,8 @@ void BaseNode::control_loop()
     }
 
     RobotCommand cmd;
-    switch (control_mode_)
+    stepped_mode_ = control_mode_;
+    switch (stepped_mode_)
     {
         case ControlMode::ZEROING:
             cmd = zeroing_control();
@@ -106,6 +108,7 @@ void BaseNode::control_loop()
             break;
     }
     publish_command(cmd);
+    on_control_step(cmd);
 }
 
 RobotCommand BaseNode::zeroing_control()

@@ -10,12 +10,14 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "cnpy/cnpy.h"
 #include "common/deploy_manifest.hpp"
+#include "common/run_recorder.hpp"
 #include "common/g1/joint_orders.hpp"
 #include "common/g1/motion.hpp"
 #include "common/math_utils.hpp"
@@ -254,6 +256,93 @@ static void test_tokenizer_layout()
     std::puts("ok  tokenizer layout");
 }
 
+// ── RunRecorder: a run round-trips through an npz ───────────────
+
+static void test_run_recorder()
+{
+    const std::string dir = tmp_path("cpp_control_runlog_selftest");
+    std::filesystem::remove_all(dir);
+
+    std::string path;
+    {
+        run_log::RunRecorder rec(dir, {{"t", 1}, {"v", 3}, {"q", 2}}, /*max_rows=*/4);
+        CHECK(rec.ok());
+        CHECK(rec.stride() == 6);
+        rec.attach("export_json", "{\"hello\": 1}");
+
+        const int t = rec.offset("t");
+        const int v = rec.offset("v");
+        const int q = rec.offset("q");
+        CHECK(t == 0 && v == 1 && q == 4);
+
+        // A name the schema does not have is a typo, and it throws rather than
+        // handing back an offset that would write into another column.
+        bool threw = false;
+        try { rec.offset("nope"); } catch (const std::exception&) { threw = true; }
+        CHECK(threw);
+
+        // Nothing is recorded before begin().
+        CHECK(rec.row() == nullptr);
+
+        rec.begin("selftest_run");
+        for (int i = 0; i < 6; ++i)   // two more than the capacity
+        {
+            float* r = rec.row();
+            if (r == nullptr)
+                continue;
+            const double vv[3] = {i * 1.0, i * 2.0, i * 3.0};
+            const float qq[2] = {static_cast<float>(-i), 0.5f};
+            run_log::put(r, t, i * 0.02);
+            run_log::put(r, v, vv, 3);
+            run_log::put(r, q, qq, 2);
+            rec.commit();
+        }
+        // The capacity is a hard bound, reported rather than grown into.
+        CHECK(rec.rows() == 4);
+        CHECK(rec.truncated());
+
+        run_log::Json meta;
+        meta.add("motion", "g1_walk").add("mean_err", 0.31).add("fell", false);
+        // JSON has no NaN; an unmeasurable number is null.
+        meta.add("nothing", std::nan(""));
+        path = rec.end(meta.str(), "{\"motion\": \"g1_walk\"}");
+        CHECK(!path.empty());
+    }   // the writer thread is joined here, so the file is on disk below
+
+    CHECK(std::filesystem::exists(path));
+    auto npz = cnpy::npz_load(path);
+    CHECK(npz.count("t") && npz.count("v") && npz.count("q"));
+    CHECK(npz["t"].shape.size() == 1 && npz["t"].shape[0] == 4);
+    CHECK(npz["v"].shape.size() == 2 && npz["v"].shape[0] == 4 && npz["v"].shape[1] == 3);
+
+    const float* tv = npz["t"].data<float>();
+    const float* vv = npz["v"].data<float>();
+    const float* qv = npz["q"].data<float>();
+    for (int i = 0; i < 4; ++i)
+    {
+        CHECK(std::fabs(tv[i] - i * 0.02f) < 1e-6f);
+        CHECK(vv[i * 3 + 0] == i * 1.0f && vv[i * 3 + 2] == i * 3.0f);
+        CHECK(qv[i * 2 + 0] == -static_cast<float>(i) && qv[i * 2 + 1] == 0.5f);
+    }
+
+    const auto text = [&](const std::string& key) {
+        const auto& a = npz[key];
+        return std::string(a.data<char>(), a.num_bytes());
+    };
+    CHECK(text("meta_json").find("\"motion\": \"g1_walk\"") != std::string::npos);
+    CHECK(text("meta_json").find("\"nothing\": null") != std::string::npos);
+    CHECK(text("export_json") == "{\"hello\": 1}");
+
+    std::ifstream index(dir + "/index.jsonl");
+    std::string line;
+    CHECK(static_cast<bool>(std::getline(index, line)));
+    CHECK(line.find("selftest_run.npz") != std::string::npos);
+    CHECK(line.find("\"rows\": 4") != std::string::npos);
+
+    std::filesystem::remove_all(dir);
+    std::puts("ok  run recorder");
+}
+
 // ── Optional: real export smoke run ─────────────────────────────
 
 static void smoke_run(const std::string& onnx, const std::string& manifest_path)
@@ -294,6 +383,7 @@ int main(int argc, char** argv)
     test_motion();
     test_joint_orders();
     test_tokenizer_layout();
+    test_run_recorder();
 
     if (argc > 1)
     {

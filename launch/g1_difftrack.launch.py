@@ -15,6 +15,19 @@ Usage:
         stand_onnx_path:=tracker/sonic/g1_sonic_base.onnx \
         start_in_stand:=true play_duration:=-1.0 arm_blend:=1.0
 
+Every run writes an npz of its own control steps — the reference, the state, the
+action and the command, one row per step — under `record_dir` (default
+`<cwd>/recordings/runs`). Tag it with what it is, because the point of the log
+is comparing a simulated run against a hardware one:
+
+    ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
+        run_tag:=hw_optitrack record_dir:=~/runs
+
+    python3 scripts/analyze_tracking.py ~/runs/*.npz          # one table
+    python3 scripts/analyze_tracking.py --compare A.npz B.npz # sim vs robot
+
+`record:=false` turns it off. See docs/run_logs.md.
+
 `motion:=` names a directory under models/tracker/difftrack/ — the one the
 exporter wrote, holding difftrack_config.json, motion.bin and policy.onnx.
 Several policies for one clip are separate directories (`<clip>__<variant>`),
@@ -156,6 +169,34 @@ def generate_launch_description():
                               description="'' keeps the yaml's value; 'none' or "
                                           "'sportmode_imu' overrides it"),
 
+        # The run log: one npz per run, holding every control step of it. On by
+        # default, hardware included — see docs/run_logs.md.
+        DeclareLaunchArgument('record', default_value='true',
+                              description='write a run log per clip'),
+        DeclareLaunchArgument('record_dir', default_value='',
+                              description='where the run npz files go; empty = '
+                                          '$CPP_CONTROL_RECORD_DIR, else '
+                                          '<cwd>/recordings/runs'),
+        DeclareLaunchArgument('run_tag', default_value='run',
+                              description='free-form tag in every file name and '
+                                          'every index line — name the plant and '
+                                          'the room, e.g. sim2sim or hw_optitrack. '
+                                          'It is what tells a simulated run from a '
+                                          'hardware one in a directory of both'),
+        DeclareLaunchArgument('record_obs', default_value='true',
+                              description="log the policy's 849-dim input as well. "
+                                          'It is recomputable from the rest of the '
+                                          'row, and having it means not having to'),
+        DeclareLaunchArgument('record_max_seconds', default_value='60.0',
+                              description='hard capacity of one run. The buffer is '
+                                          'reserved up front and never grows, so a '
+                                          'longer run stops appending and says so'),
+        DeclareLaunchArgument('record_tail', default_value='3.0',
+                              description='seconds to keep logging after the rest '
+                                          'state takes the robot. The handover is '
+                                          'where a robot that survived the clip '
+                                          'still falls'),
+
         # Unattended runs
         DeclareLaunchArgument('auto_engage', default_value='false'),
         DeclareLaunchArgument('auto_engage_delay', default_value='1.0',
@@ -211,6 +252,13 @@ def generate_launch_description():
                     LaunchConfiguration('odom_twist_frame'), value_type=str),
                 'unitree_world_state': ParameterValue(
                     LaunchConfiguration('unitree_world_state'), value_type=str),
+                'record': ParameterValue(LaunchConfiguration('record'), value_type=bool),
+                'record_dir': ParameterValue(LaunchConfiguration('record_dir'), value_type=str),
+                'run_tag': ParameterValue(LaunchConfiguration('run_tag'), value_type=str),
+                'record_obs': ParameterValue(LaunchConfiguration('record_obs'), value_type=bool),
+                'record_max_seconds': ParameterValue(
+                    LaunchConfiguration('record_max_seconds'), value_type=float),
+                'record_tail': ParameterValue(LaunchConfiguration('record_tail'), value_type=float),
                 'auto_engage': ParameterValue(LaunchConfiguration('auto_engage'), value_type=bool),
                 'auto_engage_delay': ParameterValue(LaunchConfiguration('auto_engage_delay'), value_type=float),
                 'exit_when_finished': ParameterValue(LaunchConfiguration('exit_when_finished'), value_type=bool),

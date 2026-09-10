@@ -76,6 +76,20 @@ protected:
     /// ZEROING, i.e. limp — reaching the robot first.
     virtual void on_first_state() {}
 
+    /// Called once per control step, AFTER the command has been published.
+    ///
+    /// The one place a task can see a whole control step as it actually
+    /// happened: the mode that ran, the command that went out, and the state it
+    /// was computed from, all from the same tick. That is what a run log needs
+    /// and what a per-mode hook cannot give — the rest state, the entry ramp and
+    /// the policy are three different functions, and a robot that falls during
+    /// the handover falls in the one nobody instrumented.
+    ///
+    /// After publish, deliberately: whatever a task does here is between the
+    /// robot and the next control period, never between a computed command and
+    /// the robot receiving it.
+    virtual void on_control_step(const RobotCommand& /*cmd*/) {}
+
     // --- Robot-level stand mode (ControlMode::STAND) ---
     // Level 1 provides an engine (e.g. g1::SonicStand); base wires RB to it.
     // Tasks with their own stand semantics simply leave it unconfigured.
@@ -95,6 +109,15 @@ protected:
     std::unique_ptr<ONNXPolicy> policy_;
 
     ControlMode control_mode_ = ControlMode::ZEROING;
+    /// The mode that produced the command on_control_step() is handed.
+    ///
+    /// Not the same thing as control_mode_ by the time that hook runs: a mode
+    /// function is free to switch modes as its last act, and the two that
+    /// matter both do — a fall goes to DAMPING and the end of a clip goes to
+    /// the rest state, from inside the tick whose command has already been
+    /// computed. Reading control_mode_ afterwards mislabels exactly the tick a
+    /// handover is read from.
+    ControlMode stepped_mode_ = ControlMode::ZEROING;
     float alpha_ = 0.0f;
     float settle_time_ = 2.0f;
 

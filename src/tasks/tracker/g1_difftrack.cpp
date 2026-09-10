@@ -1,11 +1,18 @@
 #include "cpp_control/tasks/tracker/g1_difftrack.hpp"
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <sstream>
 
 namespace cpp_control
 {
@@ -21,6 +28,23 @@ double heading_yaw(const Eigen::Quaterniond& q)
 {
     const double x = q.x(), y = q.y(), z = q.z(), w = q.w();
     return std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
+}
+
+/// The name an operator calls a motion: the export directory's own.
+std::string dir_name(const std::string& path)
+{
+    return std::filesystem::path(path).filename().string();
+}
+
+/// Strip anything that would make a file name awkward to type or to glob.
+std::string sanitize(const std::string& s)
+{
+    std::string out;
+    for (const char c : s)
+        out += (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '.')
+                   ? c
+                   : '_';
+    return out;
 }
 
 }  // namespace
@@ -134,6 +158,22 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
     auto_engage_ = this->declare_parameter("auto_engage", auto_engage_);
     auto_engage_delay_ = this->declare_parameter("auto_engage_delay", auto_engage_delay_);
     exit_when_finished_ = this->declare_parameter("exit_when_finished", exit_when_finished_);
+
+    // ── the run log ──
+    //
+    // On by DEFAULT, on hardware included. A run that was not recorded cannot be
+    // compared with anything afterwards, and the runs worth comparing are the
+    // ones nobody expected to need: the third clip of a session, the one where
+    // the robot went down. See docs/run_logs.md.
+    record_ = this->declare_parameter("record", record_);
+    record_obs_ = this->declare_parameter("record_obs", record_obs_);
+    record_max_seconds_ = this->declare_parameter("record_max_seconds", record_max_seconds_);
+    record_tail_ = this->declare_parameter("record_tail", record_tail_);
+    record_dir_ = this->declare_parameter("record_dir", std::string());
+    // Free-form, and it is what tells one plant's runs from another's in a
+    // directory full of them. `run_difftrack_sim2sim.sh` passes sim2sim; pass
+    // something naming the robot and the room on hardware.
+    run_tag_ = sanitize(this->declare_parameter("run_tag", run_tag_));
 
     if (anchor_yaw_to_robot_ && !observe_in_reference_frame_)
         RCLCPP_WARN(this->get_logger(),
@@ -482,6 +522,18 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                         entry_mode_.c_str());
         }
     }
+
+    if (record_)
+        record_setup();
+}
+
+G1DiffTrackNode::~G1DiffTrackNode()
+{
+    // Ctrl-C during a clip is how a hardware run normally ends, and it is the
+    // run most worth having. The recorder itself drops an unfinished buffer
+    // rather than write one with no metadata, so closing it is done HERE, where
+    // the metadata still exists.
+    record_end("node shutdown");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -764,6 +816,11 @@ RobotCommand G1DiffTrackNode::hold_measured() const
 void G1DiffTrackNode::engage_reset()
 {
     const auto& cfg = builder_.config();
+    // `A` pressed during the tail of the previous run: close its file before the
+    // counters it reports are cleared three lines below.
+    record_end("superseded");
+    log_summary_ = RunSummary{};
+    log_tail_left_ = -1;
     episode_step_ = 0;
     lead_in_steps_ = 0;
     entry_t_ = 0.0;
@@ -825,6 +882,11 @@ void G1DiffTrackNode::engage_reset()
 
     if (phase_ == Phase::TRACK)
         resolve_anchor(s);
+
+    // After the anchor, so the run's metadata carries the placement the clip was
+    // actually played at — without it the reference columns cannot be checked
+    // against the clip they came from.
+    record_begin();
 }
 
 void G1DiffTrackNode::resolve_anchor(const DiffTrackState& s)
@@ -933,6 +995,31 @@ void G1DiffTrackNode::finish(const char* why)
                 stat_steps_, play_steps_ == std::numeric_limits<int>::max() ? -1 : play_steps_,
                 stat_steps_ ? err_sum_ / stat_steps_ : 0.0, err_max_, min_height_, fell_at, why);
 
+    // Snapshot for the run log, taken HERE rather than read at close: `A`
+    // pressed during the tail runs engage_reset(), which clears every counter
+    // above, and the file has not been written yet at that point.
+    log_summary_.set = true;
+    log_summary_.steps = stat_steps_;
+    log_summary_.played = play_steps_ == std::numeric_limits<int>::max() ? -1 : play_steps_;
+    log_summary_.mean_err = stat_steps_ ? err_sum_ / stat_steps_ : 0.0;
+    log_summary_.max_err = err_max_;
+    log_summary_.min_height = min_height_;
+    log_summary_.fell = fell_;
+    log_summary_.fell_at = fell_ ? fell_at_step_ : -1;
+    log_summary_.reason = why;
+
+    // Two ends that never reach enter_rest(), and so would never arm the tail
+    // there: a fall goes to DAMPING, and an unattended run shuts the node down
+    // on this tick. Everything else is armed when the rest state takes the
+    // robot, which is where the interesting part of the handover starts.
+    if (recorder_ && recorder_->recording())
+    {
+        if (exit_when_finished_)
+            log_tail_left_ = 0;
+        else if (fell_)
+            log_tail_left_ = static_cast<int>(std::lround(record_tail_ / cfg.controlDt));
+    }
+
     if (fell_)
     {
         // No ramp: the robot is already down, and the only useful thing left is
@@ -1018,6 +1105,14 @@ void G1DiffTrackNode::enter_rest(const char* why, bool from_clip)
 {
     phase_ = Phase::FINISHED;
     gain_blend_ = 0.0;
+
+    // The run log keeps going for record_tail seconds from HERE, not from the
+    // end of the clip: with exit_hold or exit_ramp set the policy is still
+    // driving in between, and a robot that survived the clip and went down as
+    // the stand took it is a transfer failure that belongs in the same file.
+    if (recorder_ && recorder_->recording() && log_tail_left_ < 0)
+        log_tail_left_ =
+            static_cast<int>(std::lround(record_tail_ / builder_.config().controlDt));
 
     if (has_stand())
     {
@@ -1222,6 +1317,13 @@ RobotCommand G1DiffTrackNode::policy_control()
     }
     last_policy_tick_ = now;
 
+    // The phase this tick is about to run in, for the run log. Taken before the
+    // dispatch because entry_control() and exit_control() both leave a
+    // different one behind, and refreshed at the inference below for the tick
+    // where finish() moves TRACK on to SETTLE.
+    log_phase_ = static_cast<int>(phase_);
+    log_phase_valid_ = true;
+
     if (phase_ == Phase::ENTRY)
         return entry_control();
     if (phase_ == Phase::EXIT)
@@ -1276,12 +1378,17 @@ RobotCommand G1DiffTrackNode::policy_control()
         act[p] = static_cast<double>(action[p]);
     builder_.actionToJointTarget(act, joint_target_);
 
-    // ── diagnostics ──
-    Eigen::Vector3d ref_pos;
-    Eigen::Quaterniond ref_quat;
-    Eigen::VectorXd ref_dof;
-    builder_.referencePose(episode_step_, anchor_, ref_pos, ref_quat, ref_dof);
-    const double err = (s.rootPos - ref_pos).norm();
+    // ── diagnostics, and the reference this tick was measured against ──
+    //
+    // Straight into the run-log members: the row is written after the command
+    // has gone out, by which time episode_step_ has advanced and this reference
+    // is no longer the one that produced the action.
+    builder_.referencePose(episode_step_, anchor_, log_ref_pos_, log_ref_quat_, log_ref_dof_);
+    log_action_ = act;
+    log_clip_step_ = clip_step;
+    log_phase_ = static_cast<int>(phase_);
+    log_tick_valid_ = true;
+    const double err = (s.rootPos - log_ref_pos_).norm();
     if (clip_step >= 0 && phase_ == Phase::TRACK)
     {
         err_sum_ += err;
@@ -1334,6 +1441,575 @@ RobotCommand G1DiffTrackNode::policy_control()
     }
     gain_blend_ = 1.0;
     return command_from_target(joint_target_, 1.0);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  The run log
+// ══════════════════════════════════════════════════════════════
+
+void G1DiffTrackNode::record_setup()
+{
+    const auto& cfg = builder_.config();
+    const int nA = cfg.numActions;
+    const int nM = num_motors();
+
+    if (record_dir_.empty())
+    {
+        const char* env = std::getenv("CPP_CONTROL_RECORD_DIR");
+        record_dir_ = (env && *env)
+                          ? std::string(env)
+                          : (std::filesystem::current_path() / "recordings" / "runs").string();
+    }
+
+    // One row is one control step. Everything in it is either what the policy
+    // was given, what it produced, or what the robot did about it — nothing
+    // derived, so a metric that turns out to be the wrong one can be recomputed
+    // rather than re-measured on a robot.
+    std::vector<run_log::Channel> schema = {
+        {"t", 1},             // seconds since the run began, ROS clock
+        {"t_wall", 1},        // the same, steady clock — a stalled loop shows here
+        {"step", 1},          // episode step (lead-in included), NaN off-policy
+        {"clip_step", 1},     // step within the clip; negative during a lead-in
+        {"phase", 1},         // Phase, or NaN when the policy is not driving
+        {"mode", 1},          // ControlMode
+        {"policy_tick", 1},   // 1 when this row carries an inference
+        {"state_tick", 1},    // the plant's own counter, relative to the run's first
+        {"world_valid", 1},   // the world pose was usable this tick
+        {"world_age", 1},     // seconds since the last external world pose
+
+        // The world state the CONTROLLER used, after the staleness check and
+        // any frame rotation — not the raw topic.
+        {"root_pos", 3},
+        {"root_quat", 4},      // wxyz
+        {"root_lin_vel", 3},   // world frame
+        {"root_ang_vel", 3},   // world frame
+
+        // The reference, anchored into the world exactly as the policy saw it.
+        {"ref_root_pos", 3},
+        {"ref_root_quat", 4},
+        {"ref_dof_pos", nA},   // POLICY joint order
+
+        {"imu_quat", 4},
+        {"imu_gyro", 3},       // body frame, raw
+        {"imu_accel", 3},
+
+        // MOTOR order, as the robot reports and receives them. The permutation
+        // onto policy order is in the metadata; nothing is reordered on the way
+        // in, so nothing can be reordered wrongly.
+        {"q", nM},
+        {"dq", nM},
+        {"tau", nM},           // tau_est
+        {"temp", nM},          // motor temperature, C — hardware only
+
+        {"cmd_q", nM},
+        {"cmd_dq", nM},
+        {"cmd_tau", nM},
+        {"cmd_kp", nM},        // which gains went out, and therefore which mode
+        {"cmd_kd", nM},
+
+        {"action", nA},        // raw policy output, POLICY order
+        {"target", nA},        // default + scale * action, POLICY order
+    };
+    if (record_obs_)
+        schema.push_back({"obs", cfg.numObs});
+
+    // Capacity, and it is a hard bound: a run that outgrows it stops appending
+    // rather than reallocating under a walking robot. Sized for whichever is
+    // longer — the ceiling, or the run this node is configured to do — because
+    // a budgeted run that silently lost its last seconds to a buffer bound
+    // would be the worst of both.
+    int rows = static_cast<int>(std::lround(record_max_seconds_ / cfg.controlDt));
+    if (play_steps_ != std::numeric_limits<int>::max())
+    {
+        const double extra =
+            entry_ramp_ + lead_in_duration_ + exit_hold_ + exit_ramp_ + record_tail_ + 2.0;
+        rows = std::max(rows,
+                        play_steps_ + static_cast<int>(std::lround(extra / cfg.controlDt)));
+    }
+
+    recorder_ = std::make_unique<run_log::RunRecorder>(record_dir_, schema, rows);
+    if (!recorder_->ok())
+    {
+        RCLCPP_WARN(this->get_logger(), "run log OFF: %s", recorder_->error().c_str());
+        recorder_.reset();
+        return;
+    }
+
+    col_.t = recorder_->offset("t");
+    col_.t_wall = recorder_->offset("t_wall");
+    col_.step = recorder_->offset("step");
+    col_.clip_step = recorder_->offset("clip_step");
+    col_.phase = recorder_->offset("phase");
+    col_.mode = recorder_->offset("mode");
+    col_.policy_tick = recorder_->offset("policy_tick");
+    col_.state_tick = recorder_->offset("state_tick");
+    col_.world_valid = recorder_->offset("world_valid");
+    col_.world_age = recorder_->offset("world_age");
+    col_.root_pos = recorder_->offset("root_pos");
+    col_.root_quat = recorder_->offset("root_quat");
+    col_.root_lin_vel = recorder_->offset("root_lin_vel");
+    col_.root_ang_vel = recorder_->offset("root_ang_vel");
+    col_.ref_root_pos = recorder_->offset("ref_root_pos");
+    col_.ref_root_quat = recorder_->offset("ref_root_quat");
+    col_.ref_dof_pos = recorder_->offset("ref_dof_pos");
+    col_.imu_quat = recorder_->offset("imu_quat");
+    col_.imu_gyro = recorder_->offset("imu_gyro");
+    col_.imu_accel = recorder_->offset("imu_accel");
+    col_.q = recorder_->offset("q");
+    col_.dq = recorder_->offset("dq");
+    col_.tau = recorder_->offset("tau");
+    col_.temp = recorder_->offset("temp");
+    col_.cmd_q = recorder_->offset("cmd_q");
+    col_.cmd_dq = recorder_->offset("cmd_dq");
+    col_.cmd_tau = recorder_->offset("cmd_tau");
+    col_.cmd_kp = recorder_->offset("cmd_kp");
+    col_.cmd_kd = recorder_->offset("cmd_kd");
+    col_.action = recorder_->offset("action");
+    col_.target = recorder_->offset("target");
+    col_.obs = record_obs_ ? recorder_->offset("obs") : -1;
+
+    log_ref_dof_.setZero(nA);
+    log_action_.setZero(nA);
+
+    // The export's own config travels INSIDE every run file. It is 16 kB, it
+    // carries the kinematic table the body-space metrics need, and a run
+    // analysed six months later on another machine will not have the model
+    // directory beside it.
+    {
+        const std::string cfg_path =
+            (std::filesystem::path(model_dir_) / "difftrack_config.json").string();
+        std::ifstream f(cfg_path, std::ios::binary);
+        if (f)
+        {
+            std::ostringstream buf;
+            buf << f.rdbuf();
+            recorder_->attach("difftrack_config_json", buf.str());
+        }
+    }
+
+    const double mb = static_cast<double>(rows) * recorder_->stride() * sizeof(float) / (1024 * 1024);
+    RCLCPP_INFO(this->get_logger(),
+                "run log -> %s\n"
+                "  tag          %s\n"
+                "  columns      %d floats/step over %zu channels%s\n"
+                "  capacity     %d steps (%.0fs), 2 x %.1f MB reserved, written off the "
+                "control thread",
+                record_dir_.c_str(), run_tag_.c_str(), recorder_->stride(),
+                recorder_->schema().size(),
+                record_obs_ ? " (observation included)" : " (no observation: record_obs:=true)",
+                rows, rows * cfg.controlDt, mb);
+}
+
+void G1DiffTrackNode::record_begin()
+{
+    if (!recorder_)
+        return;
+
+    ++run_index_;
+    run_t0_ = this->get_clock()->now();
+    run_wall0_ = std::chrono::steady_clock::now();
+    run_tick0_ = robot_state_.tick;
+    log_tail_left_ = -1;
+
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_r(&now, &tm);
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
+
+    const auto& cfg = builder_.config();
+    std::string name = std::string(stamp) + "_" + run_tag_ + "_" + sanitize(dir_name(model_dir_));
+    if (!cfg.variant.empty())
+        name += "_" + sanitize(cfg.variant);
+    char suffix[16];
+    std::snprintf(suffix, sizeof(suffix), "_r%02d", run_index_);
+    recorder_->begin(name + suffix);
+}
+
+void G1DiffTrackNode::record_end(const char* closed_by)
+{
+    if (!recorder_ || !recorder_->recording())
+        return;
+
+    // A run that never reached finish() — an abort, or Ctrl-C in the middle of
+    // a clip — still HAS its statistics: the counters live until the next
+    // engage clears them. Reporting the steps that did happen beats reporting
+    // nothing, and `reason` says which kind of end it was.
+    if (!log_summary_.set)
+    {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        log_summary_.set = true;
+        log_summary_.steps = stat_steps_;
+        log_summary_.played =
+            play_steps_ == std::numeric_limits<int>::max() ? -1 : play_steps_;
+        log_summary_.mean_err = stat_steps_ ? err_sum_ / stat_steps_ : nan;
+        log_summary_.max_err = stat_steps_ ? err_max_ : nan;
+        log_summary_.min_height = stat_steps_ ? min_height_ : nan;
+        log_summary_.fell = fell_;
+        log_summary_.fell_at = fell_ ? fell_at_step_ : -1;
+        log_summary_.reason = closed_by;
+    }
+
+    const int rows = recorder_->rows();
+    const bool truncated = recorder_->truncated();
+    const std::string path =
+        recorder_->end(record_meta_json(closed_by), record_index_json(closed_by));
+    log_tail_left_ = -1;
+
+    if (path.empty())
+        return;
+    RCLCPP_INFO(this->get_logger(), "run log: %d steps (%.1fs) -> %s%s", rows,
+                rows * builder_.config().controlDt, path.c_str(),
+                truncated ? "  TRUNCATED — raise record_max_seconds" : "");
+}
+
+void G1DiffTrackNode::on_control_step(const RobotCommand& cmd)
+{
+    if (!recorder_)
+        return;
+
+    if (float* r = recorder_->row())
+    {
+        const auto& cfg = builder_.config();
+        const int nA = cfg.numActions;
+        const int nM = num_motors();
+        const rclcpp::Time now = this->get_clock()->now();
+
+        run_log::put(r, col_.t, (now - run_t0_).seconds());
+        run_log::put(r, col_.t_wall,
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - run_wall0_)
+                         .count());
+        run_log::put(r, col_.mode, static_cast<int>(stepped_mode_));
+        run_log::put(r, col_.policy_tick, log_tick_valid_);
+        // Relative to the run's first tick, and that is not a cosmetic choice:
+        // the robot's counter is milliseconds since ITS boot, which stops being
+        // exactly representable in a float32 about four hours in.
+        run_log::put(r, col_.state_tick,
+                     static_cast<double>(static_cast<uint32_t>(robot_state_.tick - run_tick0_)));
+
+        // The world pose exactly as read_state() would have taken it.
+        double age = 0.0;
+        if (world_pose_external_ && robot_state_.base_state_valid)
+            age = (now - mocap_last_rx_).seconds();
+        const bool world_ok =
+            robot_state_.base_state_valid &&
+            (!world_pose_external_ || mocap_timeout_ <= 0.0 || age <= mocap_timeout_);
+        run_log::put(r, col_.world_valid, world_ok);
+        run_log::put(r, col_.world_age, age);
+        run_log::put(r, col_.root_pos, robot_state_.base_pos_w.data(), 3);
+        run_log::put(r, col_.root_quat, robot_state_.base_quat_w.data(), 4);
+        run_log::put(r, col_.root_lin_vel, robot_state_.base_lin_vel_w.data(), 3);
+        run_log::put(r, col_.root_ang_vel, robot_state_.base_ang_vel_w.data(), 3);
+
+        run_log::put(r, col_.imu_quat, robot_state_.imu_quaternion.data(), 4);
+        run_log::put(r, col_.imu_gyro, robot_state_.imu_gyroscope.data(), 3);
+        run_log::put(r, col_.imu_accel, robot_state_.imu_accelerometer.data(), 3);
+
+        run_log::put(r, col_.q, robot_state_.joint_positions.data(), nM);
+        run_log::put(r, col_.dq, robot_state_.joint_velocities.data(), nM);
+        run_log::put(r, col_.tau, robot_state_.joint_torques.data(), nM);
+        run_log::put(r, col_.temp, robot_state_.joint_temperature.data(), nM);
+
+        const int nc = std::min<int>(nM, static_cast<int>(cmd.motor_commands.size()));
+        for (int m = 0; m < nc; ++m)
+        {
+            const MotorCommand& mc = cmd.motor_commands[m];
+            r[col_.cmd_q + m] = mc.q;
+            r[col_.cmd_dq + m] = mc.dq;
+            r[col_.cmd_tau + m] = mc.tau;
+            r[col_.cmd_kp + m] = mc.kp;
+            r[col_.cmd_kd + m] = mc.kd;
+        }
+
+        // The policy's own block. NaN rather than zero when this tick had no
+        // inference behind it — the rest state and the ramps publish a joint
+        // target too, and a zero reference position is a plausible-looking
+        // number that would quietly enter a mean.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        r[col_.phase] = log_phase_valid_ ? static_cast<float>(log_phase_) : nan;
+        if (log_tick_valid_)
+        {
+            run_log::put(r, col_.step, log_clip_step_ + lead_in_steps_);
+            run_log::put(r, col_.clip_step, log_clip_step_);
+            run_log::put(r, col_.ref_root_pos, log_ref_pos_.data(), 3);
+            r[col_.ref_root_quat + 0] = static_cast<float>(log_ref_quat_.w());
+            r[col_.ref_root_quat + 1] = static_cast<float>(log_ref_quat_.x());
+            r[col_.ref_root_quat + 2] = static_cast<float>(log_ref_quat_.y());
+            r[col_.ref_root_quat + 3] = static_cast<float>(log_ref_quat_.z());
+            run_log::put(r, col_.ref_dof_pos, log_ref_dof_.data(),
+                         std::min<int>(nA, static_cast<int>(log_ref_dof_.size())));
+            run_log::put(r, col_.action, log_action_.data(),
+                         std::min<int>(nA, static_cast<int>(log_action_.size())));
+            run_log::put(r, col_.target, joint_target_.data(),
+                         std::min<int>(nA, static_cast<int>(joint_target_.size())));
+            if (col_.obs >= 0 && static_cast<int>(obs_.size()) >= cfg.numObs)
+                run_log::put(r, col_.obs, obs_.data(), cfg.numObs);
+        }
+        else
+        {
+            r[col_.step] = nan;
+            r[col_.clip_step] = nan;
+            for (int i = 0; i < 3; ++i)
+                r[col_.ref_root_pos + i] = nan;
+            for (int i = 0; i < 4; ++i)
+                r[col_.ref_root_quat + i] = nan;
+            for (int i = 0; i < nA; ++i)
+            {
+                r[col_.ref_dof_pos + i] = nan;
+                r[col_.action + i] = nan;
+                r[col_.target + i] = nan;
+            }
+            if (col_.obs >= 0)
+                for (int i = 0; i < cfg.numObs; ++i)
+                    r[col_.obs + i] = nan;
+        }
+        recorder_->commit();
+    }
+
+    // THE RUN ENDS HERE when something outside this node takes the robot. `B`
+    // (zeroing), `Y` (damping), `X` (nominal pose) and `R1` (stand) all switch
+    // the mode straight out of POLICY without passing through finish(), and so
+    // does the entry ramp's own "lost the world state" abort. Nothing else in
+    // this node would ever close the file on those paths: it would sit open
+    // until the next `A` or until the node exited. An aborted run is the run
+    // most worth having on disk — something went wrong in it, and hitting `Y`
+    // is the reaction to exactly that.
+    //
+    // Only while nothing is already counting down. A fall and a normal clip end
+    // ALSO leave POLICY, and finish() and enter_rest() have deliberately armed
+    // a tail for them; closing here would cut the handover out of the file,
+    // which is the part worth keeping.
+    if (recorder_->recording() && log_tail_left_ < 0 && stepped_mode_ != ControlMode::POLICY)
+    {
+        const char* why = "aborted";
+        switch (stepped_mode_)
+        {
+            case ControlMode::ZEROING: why = "aborted (zeroing)"; break;
+            case ControlMode::DAMPING: why = "aborted (damping)"; break;
+            case ControlMode::NOMINAL_POSE: why = "aborted (nominal pose)"; break;
+            case ControlMode::STAND: why = "aborted (stand)"; break;
+            default: break;
+        }
+        record_end(why);
+    }
+    // The tail: keep logging for record_tail seconds after the rest state has
+    // the robot, then close the file. Counted down AFTER the row so the last
+    // step of the tail is in it.
+    else if (log_tail_left_ >= 0)
+    {
+        if (log_tail_left_ == 0)
+            record_end(log_summary_.set ? log_summary_.reason.c_str() : "tail");
+        else
+            --log_tail_left_;
+    }
+    log_tick_valid_ = false;
+    log_phase_valid_ = false;
+
+    // The writer has no logger of its own, and a run silently not appearing on
+    // disk is the one failure mode of this whole arrangement.
+    if (const std::string err = recorder_->take_write_error(); !err.empty())
+        RCLCPP_ERROR(this->get_logger(), "run log write failed: %s", err.c_str());
+}
+
+std::string G1DiffTrackNode::record_meta_json(const char* closed_by) const
+{
+    const auto& cfg = builder_.config();
+    const int nA = cfg.numActions;
+    const auto vec = [](const Eigen::VectorXd& v) {
+        return std::vector<double>(v.data(), v.data() + v.size());
+    };
+
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&now, &tm);
+    char stamp[40];
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    char host[256] = {0};
+    gethostname(host, sizeof(host) - 1);
+
+    run_log::Json run;
+    run.add("schema", "difftrack.run.v1")
+        .add("tag", run_tag_)
+        .add("index", run_index_)
+        .add("closed_by", closed_by)
+        .add("closed_utc", std::string(stamp))
+        .add("host", std::string(host))
+        .add("pid", static_cast<int>(getpid()))
+        .add("node", std::string(this->get_name()))
+        .add("control_dt", cfg.controlDt)
+        .add("rows", recorder_->rows())
+        .add("truncated", recorder_->truncated())
+        .add("max_rows", recorder_->max_rows())
+        .add("record_tail", record_tail_);
+
+    // What the world pose came from. The single biggest difference between a
+    // sim2sim number and a hardware one, so it is a first-class field rather
+    // than something to be inferred from which topic is non-empty.
+    std::string world_source = "backend";
+    if (odom_sub_)
+        world_source = "odom";
+    else if (mocap_sub_)
+        world_source = "mocap_pose";
+#ifdef HAS_OPTITRACK
+    else if (optitrack_sub_)
+        world_source = "optitrack";
+#endif
+    run_log::Json world;
+    world.add("source", world_source)
+        .add("external", world_pose_external_)
+        .add("timeout", mocap_timeout_)
+        .add("lowpass", mocap_lowpass_)
+        .add("odom_twist_frame", odom_twist_in_child_ ? "child" : "world")
+        // What is in FORCE, not what the yaml says: `unitree_world_state:=none`
+        // on the launch line is exactly how a sim2sim run on the onboard
+        // estimator is set up, and the yaml still says sportmode_imu.
+        .add("unitree_world_state", world_state_from_sportmode() ? "sportmode_imu" : "none")
+        .add("unitree_world_state_yaml",
+             config_ ? config_->unitree_world_state : std::string())
+        .add("workflow", config_ ? config_->workflow : std::string())
+        .add("lowstate_topic", config_ ? config_->lowstate_topic : std::string())
+        .add("lowcmd_topic", config_ ? config_->lowcmd_topic : std::string())
+        .add("state_decimation", config_ ? config_->state_decimation : 0);
+
+    run_log::Json exp;
+    exp.add("model_dir", model_dir_)
+        .add("motion", dir_name(model_dir_))
+        .add("source_run", cfg.sourceRun)
+        .add("train_run", cfg.trainRun)
+        .add("variant", cfg.variant)
+        .add("checkpoint_iter", cfg.checkpointIter)
+        .add("motion_file", cfg.motionFile)
+        .add("clip_steps", cfg.clipSteps)
+        .add("motion_length_s", cfg.motionLengthS)
+        .add("loop_wrap", cfg.loopWrap)
+        .add("num_obs", cfg.numObs)
+        .add("num_actions", nA)
+        .add("char_obs_dim", cfg.charObsDim)
+        .add("tar_feat_dim", cfg.tarFeatDim)
+        .add("tar_obs_steps", cfg.tarObsSteps)
+        .add("action_scale", cfg.actionScale)
+        .add("action_clipping", cfg.actionClipping)
+        .add("global_obs", cfg.globalObs)
+        .add("termination_height", cfg.terminationHeight);
+
+    run_log::Json joints;
+    joints.add("policy_joint_names", cfg.policyJointNames)
+        .add("motor_joint_names", joint_names_)
+        .add("policy_to_motor", policy_to_motor_)
+        .add("num_motors", num_motors());
+
+    run_log::Json gains;
+    gains.add("policy_kp", vec(cfg.jointStiffness))
+        .add("policy_kd", vec(cfg.jointDamping))
+        .add("torque_limit", vec(cfg.jointTorqueLimit))
+        .add("policy_default_angles", vec(cfg.defaultAngles))
+        .add("hold_kp", kps_)
+        .add("hold_kd", kds_)
+        .add("node_default_angles", default_angles_);
+
+    run_log::Json params;
+    params.add("entry", entry_mode_)
+        .add("entry_ramp", entry_ramp_)
+        .add("lead_in_duration", lead_in_duration_)
+        .add("play_duration", play_duration_)
+        .add("play_steps", play_steps_ == std::numeric_limits<int>::max() ? -1 : play_steps_)
+        .add("exit_hold", exit_hold_)
+        .add("exit_ramp", exit_ramp_)
+        .add("arm_blend", arm_blend_)
+        .add("start_in_stand", start_in_stand_)
+        .add("anchor_motion_to_robot", anchor_motion_to_robot_)
+        .add("anchor_yaw_to_robot", anchor_yaw_to_robot_)
+        .add("observe_in_reference_frame", observe_in_reference_frame_)
+        .add("fall_height", fall_height_)
+        .add("auto_engage", auto_engage_)
+        .add("exit_when_finished", exit_when_finished_)
+        .add("rest_state", has_stand() ? "sonic_stand" : "nominal_pose_hold")
+        .add("stand_onnx_path", config_ ? config_->stand_onnx_path : std::string());
+
+    run_log::Json anchor;
+    anchor.add("yaw", anchor_.yaw)
+        .add("translation", std::vector<double>{anchor_.translation.x(), anchor_.translation.y()})
+        .add("identity", anchor_.identity)
+        .add("lead_in_steps", lead_in_steps_);
+
+    run_log::Json summary;
+    summary.add("set", log_summary_.set)
+        .add("steps", log_summary_.steps)
+        .add("play_steps", log_summary_.played)
+        .add("mean_err", log_summary_.mean_err)
+        .add("max_err", log_summary_.max_err)
+        .add("min_height", log_summary_.min_height)
+        .add("fell", log_summary_.fell)
+        .add("fell_at", log_summary_.fell_at)
+        .add("reason", log_summary_.reason);
+
+    // The column layout, so the file explains itself without this source.
+    std::string channels = "[";
+    int off = 0;
+    for (size_t i = 0; i < recorder_->schema().size(); ++i)
+    {
+        const auto& ch = recorder_->schema()[i];
+        run_log::Json c;
+        c.add("name", ch.name).add("width", ch.width).add("offset", off);
+        channels += (i ? ", " : "") + c.str();
+        off += ch.width;
+    }
+    channels += "]";
+
+    run_log::Json j;
+    j.raw("run", run.str())
+        .raw("world", world.str())
+        .raw("export", exp.str())
+        .raw("joints", joints.str())
+        .raw("gains", gains.str())
+        .raw("params", params.str())
+        .raw("anchor", anchor.str())
+        .raw("summary", summary.str())
+        .raw("channels", channels)
+        .raw("phase_enum",
+             R"({"0": "entry", "1": "track", "2": "settle", "3": "exit", "4": "finished"})")
+        .raw("mode_enum",
+             R"({"0": "zeroing", "1": "damping", "2": "nominal_pose", "3": "standing_up", )"
+             R"("4": "stand", "5": "policy"})");
+    return j.str();
+}
+
+std::string G1DiffTrackNode::record_index_json(const char* closed_by) const
+{
+    const auto& cfg = builder_.config();
+    char host[256] = {0};
+    gethostname(host, sizeof(host) - 1);
+    std::string world_source = "backend";
+    if (odom_sub_)
+        world_source = "odom";
+    else if (mocap_sub_)
+        world_source = "mocap_pose";
+#ifdef HAS_OPTITRACK
+    else if (optitrack_sub_)
+        world_source = "optitrack";
+#endif
+
+    run_log::Json j;
+    j.add("tag", run_tag_)
+        .add("motion", dir_name(model_dir_))
+        .add("variant", cfg.variant)
+        .add("train_run", cfg.trainRun)
+        .add("world", world_source)
+        .add("host", std::string(host))
+        .add("seconds", recorder_->rows() * cfg.controlDt)
+        .add("steps", log_summary_.steps)
+        .add("mean_err", log_summary_.set ? log_summary_.mean_err
+                                          : std::numeric_limits<double>::quiet_NaN())
+        .add("max_err", log_summary_.set ? log_summary_.max_err
+                                         : std::numeric_limits<double>::quiet_NaN())
+        .add("min_height", log_summary_.set ? log_summary_.min_height
+                                            : std::numeric_limits<double>::quiet_NaN())
+        .add("fell", log_summary_.fell)
+        .add("fell_at", log_summary_.fell_at)
+        .add("reason", log_summary_.set ? log_summary_.reason : std::string("incomplete"))
+        .add("closed_by", closed_by)
+        .add("truncated", recorder_->truncated());
+    return j.str();
 }
 
 // ══════════════════════════════════════════════════════════════

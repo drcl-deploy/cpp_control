@@ -17,6 +17,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)   # difftrack world pose from an onboard state estimator
 find_package(yaml-cpp REQUIRED)
 find_package(ZLIB REQUIRED)  # cnpy (npz motion clips)
+find_package(Threads REQUIRED)  # run_recorder writes its npz off the control thread
 
 # Optional robot-specific message packages
 find_package(unitree_hg QUIET)
@@ -107,10 +108,12 @@ add_library(cpp_control_deploy STATIC
   src/common/onnx_session.cpp
   src/common/g1/motion.cpp
   src/common/g1/sonic_stand.cpp
+  src/common/run_recorder.cpp
   thirdparty/cnpy/cnpy.cpp)
 target_include_directories(cpp_control_deploy PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
-target_link_libraries(cpp_control_deploy ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB::ZLIB)
+target_link_libraries(cpp_control_deploy
+  ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB::ZLIB Threads::Threads)
 
 # Deploy self-test (unit checks; optionally smoke-runs a real export):
 #   ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
@@ -274,6 +277,10 @@ install(DIRECTORY launch config models include
 install(PROGRAMS
   scripts/make_sim2sim_scene.py
   scripts/run_difftrack_sim2sim.sh
+  scripts/compare_action_smoothness.sh
+  scripts/record_policy_actions.py
+  scripts/analyze_action_smoothness.py
+  scripts/analyze_tracking.py
   scripts/probe_hold_gains.py
   scripts/run_mj_sim.py
   scripts/npz_motion_publisher.py

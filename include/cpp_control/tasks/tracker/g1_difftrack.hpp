@@ -6,11 +6,14 @@
 #include <optitrack_msgs/msg/mocap_frame_data.hpp>
 #endif
 
+#include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "common/g1/difftrack_obs.hpp"
+#include "common/run_recorder.hpp"
 #include "cpp_control/robots/g1.hpp"
 
 namespace cpp_control
@@ -151,11 +154,33 @@ namespace cpp_control
  *
  * `arm_blend_joints` names the joints, matched as substrings of this node's own
  * joint names (default: shoulder, elbow, wrist).
+ *
+ * THE RUN LOG (`record`, on by default). Every control step of every run is
+ * written to one npz per run under `record_dir` — the reference the policy was
+ * given, the state it observed, the action it produced and the command that
+ * went out, on the same row because they are the same tick. This is the same
+ * node and the same code in sim2sim and on the robot, so the two are directly
+ * comparable, which is the whole point: a transfer result is a sim run and a
+ * hardware run of ONE policy measured the same way. See
+ * common/run_recorder.hpp for why it is in here rather than on the wire, and
+ * docs/run_logs.md for the columns and the analysis.
+ *
+ * A run is one engage-to-handover cycle: it starts when `A` is pressed (or when
+ * an unattended run engages) and is written on whichever comes first — the clip
+ * finishing or the robot falling (plus `record_tail` seconds, so the handover
+ * to the rest state, where a robot that survived the clip still falls, is
+ * inside the file rather than after it), an abort taking the robot out of the
+ * policy (`B`, `Y`, `X`, `R1` — closed on that tick, no tail), `A` again, or
+ * the node shutting down.
  */
 class G1DiffTrackNode : public G1Node
 {
 public:
     explicit G1DiffTrackNode(const std::string& node_name = "g1_difftrack_node");
+    /// Closes an unfinished run properly. Ctrl-C during a clip is the normal
+    /// way a hardware run ends, and the data from it is exactly the data worth
+    /// having — a dropped buffer there would lose the run that went wrong.
+    ~G1DiffTrackNode() override;
 
 protected:
     RobotCommand policy_control() override;
@@ -180,6 +205,9 @@ protected:
     /// every other joint are left exactly as the stand set them. No-op unless an
     /// interpolation is running.
     void blend_arms(RobotCommand& cmd);
+
+    /// One run-log row per control step, after the command has gone out.
+    void on_control_step(const RobotCommand& cmd) override;
 
     /// Where the tracking run is within the episode.
     enum class Phase
@@ -327,6 +355,85 @@ protected:
     /// (already rotated). Anything else is rejected at startup rather than
     /// guessed, because both readings produce a plausible-looking number.
     bool odom_twist_in_child_ = true;
+
+    // --- the run log (see docs/run_logs.md) ---
+    /// Build the schema and open the recorder. Called once, from the
+    /// constructor, when `record` is on.
+    void record_setup();
+    /// Start a run's file. Called at engage, once the anchor has been resolved.
+    void record_begin();
+    /// Close it and hand it to the writer thread. Safe to call when idle.
+    void record_end(const char* closed_by);
+    /// Everything needed to interpret the columns three weeks later.
+    std::string record_meta_json(const char* closed_by) const;
+    /// The one line this run adds to index.jsonl.
+    std::string record_index_json(const char* closed_by) const;
+
+    std::unique_ptr<run_log::RunRecorder> recorder_;
+    /// Column offsets, resolved once — a name lookup per column per tick is the
+    /// kind of cost that has no business in a control loop.
+    struct LogColumns
+    {
+        int t, t_wall, step, clip_step, phase, mode, policy_tick, state_tick;
+        int world_valid, world_age;
+        int root_pos, root_quat, root_lin_vel, root_ang_vel;
+        int ref_root_pos, ref_root_quat, ref_dof_pos;
+        int imu_quat, imu_gyro, imu_accel;
+        int q, dq, tau, temp;
+        int cmd_q, cmd_dq, cmd_tau, cmd_kp, cmd_kd;
+        int action, target, obs;
+    } col_{};
+
+    bool record_ = true;
+    bool record_obs_ = true;
+    double record_max_seconds_ = 60.0;
+    double record_tail_ = 3.0;
+    std::string record_dir_;
+    std::string run_tag_ = "run";
+    int run_index_ = 0;
+    rclcpp::Time run_t0_;
+    std::chrono::steady_clock::time_point run_wall0_;
+    /// The plant's own tick when the run started. Logged as a difference from
+    /// this: the robot's counter is milliseconds since ITS boot, which stops
+    /// being exactly representable in a float32 about four hours in.
+    uint32_t run_tick0_ = 0;
+    /// Control steps still to log after the clip ended; <0 means not counting.
+    int log_tail_left_ = -1;
+
+    /// What THIS tick's inference used, stashed by policy_control() for the row
+    /// on_control_step() writes after the command has been published. The two
+    /// cannot be merged: episode_step_ has already advanced by then, and the
+    /// command is not known until policy_control() has returned it.
+    bool log_tick_valid_ = false;
+    int log_clip_step_ = 0;
+    /// The phase the tick RAN in, not the one it left behind: the fall check
+    /// and the end of a clip both call finish() after the action is computed,
+    /// and a row labelled FINISHED for the step that was still tracking would
+    /// drop that step out of every tracking mean. Captured before the dispatch
+    /// so the entry and exit ramps — which return before any inference — are
+    /// labelled too, and refreshed after finish() for the one tick that ends a
+    /// clip.
+    int log_phase_ = 0;
+    bool log_phase_valid_ = false;
+    Eigen::Vector3d log_ref_pos_ = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond log_ref_quat_ = Eigen::Quaterniond::Identity();
+    Eigen::VectorXd log_ref_dof_;
+    Eigen::VectorXd log_action_;
+
+    /// The SUMMARY as finish() computed it. Kept apart from the live counters
+    /// because `A` pressed during the tail resets those before the file closes.
+    struct RunSummary
+    {
+        bool set = false;
+        int steps = 0;
+        int played = 0;
+        double mean_err = 0.0;
+        double max_err = 0.0;
+        double min_height = 0.0;
+        bool fell = false;
+        int fell_at = 0;
+        std::string reason;
+    } log_summary_;
 
     // --- headless testing: drive the FSM without a joystick ---
     rclcpp::TimerBase::SharedPtr auto_engage_timer_;

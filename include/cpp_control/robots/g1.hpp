@@ -109,6 +109,21 @@ namespace cpp_control
 #endif
 
     protected:
+        /// Whether the UNITREE backend is assembling the world base state from
+        /// SportModeState + the IMU, as it stands AFTER the launch line has had
+        /// its say. `unitree_world_state:=none` overrides the yaml — which is
+        /// exactly how a sim2sim run on the onboard estimator is set up — so
+        /// anything reporting the config's own field would name a source that
+        /// is not in force. False on any backend that has no such mode.
+        bool world_state_from_sportmode() const
+        {
+#ifdef HAS_UNITREE_HG
+            return world_state_from_sportmode_;
+#else
+            return false;
+#endif
+        }
+
         /// Level 2 calls this when IT owns the world base pose — an onboard
         /// estimator on `odom_topic`, OptiTrack, any mocap.
         ///

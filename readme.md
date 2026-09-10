@@ -136,6 +136,10 @@ ros2 launch cpp_control g1_vibe_sonic.launch.py \
     onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
 ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 
+# every run is kept: one npz per run, sim2sim and hardware alike
+python3 scripts/analyze_tracking.py recordings/runs/*.npz
+python3 scripts/analyze_tracking.py --compare <sim>.npz <robot>.npz -o out/
+
 # deploy infra self-test (+ optional smoke of a real export)
 ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
 
@@ -204,7 +208,49 @@ runs the onboard state estimator in a container so the number means something on
 a robot; build the image once with `bash docker/estimator/build.sh`, or pass
 `-E ground_truth` to measure against the simulator's own pose instead.
 
-**4. on hardware**, the same node and the same export — the config and the world
+**4. keep every run**, because a transfer result is one policy measured the
+same way in two plants. Every run — sim2sim and hardware, the same node and the
+same code — writes an npz of its own control steps: the reference the policy was
+given, the state it observed, the action it produced and the command that went
+out, one row per control step. It is on by default and lands in
+`recordings/runs/`.
+
+```bash
+python3 scripts/analyze_tracking.py recordings/runs/*.npz      # a table per run
+python3 scripts/analyze_tracking.py --compare <sim>.npz <robot>.npz -o out/
+```
+
+The comparison pairs the two runs by clip step and splits the answer in two:
+tracking (root, joint and body-space error against the reference) and execution
+(torque saturation, control-period jitter, dropped state messages, the PD's own
+following error, motor temperature). The second half is where a sim2real gap
+usually comes from, and no tracking number contains it. Full format:
+[docs/run_logs.md](docs/run_logs.md).
+
+**5. measure how SMOOTH the actions are**, when the question is jitter rather
+than tracking error. One command runs each policy in sim2sim, records every
+action it emits, and draws the comparison:
+
+```bash
+bash src/cpp_control/scripts/compare_action_smoothness.sh -d 13 g1_dance15s g1_walk
+bash src/cpp_control/scripts/compare_action_smoothness.sh -a -o <that dir>   # redraw only
+```
+
+Actions are recovered from `/lowcmd`, where the controller has already put them
+(`q* = default_angles + action_scale * a`, invertible exactly), so nothing about
+the measured build changes to measure it. Only samples carrying the
+checkpoint's own trained gains are kept — every hold mode publishes a joint
+target too, and the gains are what tell them apart.
+
+Five figures and two csv files land in `recordings/action_smoothness/<stamp>/`.
+The number that matters for a regulariser is the **reversal rate**: the share of
+control steps on which `a[t] - a[t-1]` changes sign. A fast clip holds one sign
+for many steps; jitter flips every step, and a flip every step is a 25 Hz square
+wave on the joint target. Every rate is also reported against the SAME quantity
+computed on that policy's own reference clip, so "the clip is busier" cannot
+pass for "the policy is jitterier".
+
+**6. on hardware**, the same node and the same export — the config and the world
 pose are what change:
 
 ```bash
@@ -254,6 +300,8 @@ bash scripts/run_difftrack_sim2sim.sh -s -d 30 -B 1.0 g1_dance30s
 | [docs/trackers/custom_sonic.md](docs/trackers/custom_sonic.md) | vibe.onnx.v1 manifest contract, export flow, tracker usage |
 | [docs/trackers/difftrack.md](docs/trackers/difftrack.md) | diffsimrl tracking policies: export, world-state requirement, entry, sim2sim |
 | [docs/trackers/difftrack_running.md](docs/trackers/difftrack_running.md) | **run-book**: sim2sim, the stand cycle, by hand, and hardware bring-up with OptiTrack |
+| [docs/run_logs.md](docs/run_logs.md) | **keeping runs**: one npz per run from the controller itself, the columns, and the sim2sim-against-hardware comparison |
+| `scripts/compare_action_smoothness.sh -h` | action smoothness: what the figures show, what each number means, and how to read one against an action-rate regulariser |
 | [docs/trackers/difftrack_state_estimation.md](docs/trackers/difftrack_state_estimation.md) | running difftrack with NO motion capture: what the onboard estimator can and cannot observe |
 | [docker/estimator/README.md](docker/estimator/README.md) | **install**: the onboard-estimator container, on this machine and on the robot |
 | [workflows/unitree.md](workflows/unitree.md) | installing the workflow: MuJoCo, unitree_sdk2, unitree_mujoco, this package |
