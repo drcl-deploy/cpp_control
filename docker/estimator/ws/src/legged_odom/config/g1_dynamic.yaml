@@ -1,0 +1,79 @@
+# G1 onboard estimator parameters for jumping and running clips (g1_jumps*,
+# g1_run*), selected by run_difftrack_sim2sim.sh and mounted with
+# docker/estimator/run.sh -c. Everything is g1.yaml except two contact values:
+#
+#   contact.zmp_length_x/y        0.08 / 0.025 -> 0.12 / 0.04
+#   contact.sensor_noise_position 0.002        -> 0.05
+#
+# Why. The ZMP-within-the-footprint test decides whether a foot is a fixed
+# contact. The stock footprint is smaller than a G1 sole, so a foot rolling onto
+# its toe or heel at takeoff and landing is dropped as a contact and the filter
+# dead-reckons through the jump: the 1.3-2.4 m position teleport that knocks
+# g1_jumps21 over on the estimator. The larger footprint keeps those contacts;
+# trusting the leg kinematics less (sensor noise) removes the snap when a
+# contact is re-acquired at landing.
+#
+# Replayed on ground-truth sensor bags (stock -> these), recordings/estimator_tuning/:
+#   g1_jumps21  0.2 s xy jump 1.36 -> 0.18 m, drift 1.04 -> 0.14 m, horizontal
+#               velocity 0.66 -> 0.12 m/s rms, height error 0.60 -> 0.11 m max,
+#               vertical velocity 0.48 -> 0.19 m/s rms
+#   g1_run      0.2 s xy jump 0.14 -> 0.06 m, horizontal velocity 0.11 -> 0.09
+#               m/s rms, height error 0.16 -> 0.09 m max, vertical velocity
+#               0.26 -> 0.15 m/s rms; drift 0.23 -> 0.26 m
+#
+# Closed loop, stand cycle on the estimator (clean runs, stock -> these, with the
+# controller's world-state guard on): g1_jumps21 0/6 -> 6/6 at 0.23 m mean root
+# error (4/4 at 0.19-0.22 m on ground truth), g1_run 2/6 -> 5/6. See
+# docs/trackers/difftrack_state_estimation.md section 10.
+legged_odom:
+  ros__parameters:
+    urdf_path: /opt/ros/jazzy/share/unitree_description/urdf/g1/main.urdf
+    base_name: pelvis
+    six_dof_contact_names:
+    - LL_FOOT
+    - LR_FOOT
+    joint_names:
+    - left_hip_pitch_joint
+    - left_hip_roll_joint
+    - left_hip_yaw_joint
+    - left_knee_joint
+    - left_ankle_pitch_joint
+    - left_ankle_roll_joint
+    - right_hip_pitch_joint
+    - right_hip_roll_joint
+    - right_hip_yaw_joint
+    - right_knee_joint
+    - right_ankle_pitch_joint
+    - right_ankle_roll_joint
+    - waist_yaw_joint
+    - waist_roll_joint
+    - waist_pitch_joint
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - left_wrist_roll_joint
+    - left_wrist_pitch_joint
+    - left_wrist_yaw_joint
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_roll_joint
+    - right_wrist_pitch_joint
+    - right_wrist_yaw_joint
+    lowstate_topic: /lowstate
+    odom_topic: /odom
+    odom_frame: odom
+    publish_decimation: 1
+    publish_tf: false
+    nominal_dt: 0.002
+    max_dt: 0.05
+    estimation:
+      gm_cutoff_frequency: 10.0
+      position:
+        noise: 0.01
+      contact:
+        zmp_length_x: 0.12
+        zmp_length_y: 0.04
+        sensor_noise_position: 0.05

@@ -84,6 +84,22 @@ PASS
 
 **A fresh export that "does nothing" is a skipped rebuild**, every time.
 
+The second self-test needs neither the trace nor ONNX Runtime, and holds the
+observation to the symmetry the stand cycle rests on — turn the robot and the
+clip together about gravity and not one of the 849 channels may move:
+
+```bash
+./build/cpp_control/difftrack_yaw_selftest \
+    $(ros2 pkg prefix cpp_control)/share/cpp_control/models/tracker/difftrack/g1_fight
+# PASS: 5 steps x 6 angles, worst |dobs| 0.000e+00 (tolerance 0.000e+00)
+```
+
+That is what makes `anchor_yaw_to_robot` safe on a clip whose recorded heading is
+165 degrees from the robot's, and it is worth having as a test because when it
+breaks it looks exactly like a policy that cannot do the motion. Exact zero, not
+a tolerance: the anchor's rotation and its inverse cancel in the same double
+precision, so anything else is a bug and not round-off.
+
 ---
 
 ## 2. sim2sim on the drcl plant — RETIRED, kept for its numbers
@@ -706,6 +722,112 @@ Without it `-s` still runs, warns, and falls back to the nominal-pose hold —
 which stands the robot up and holds it, and drops it the first time a clip ends
 with the robot moving.
 
+### the motion blends (`-b` / `-o`), and what a standing start costs
+
+`arm_blend` above, `exit_ramp` and `entry_ramp` all change the **command** — what
+goes to the motors after the policy has spoken, or instead of running it at all.
+The motion blends change what the **policy is shown**, and that is a different
+lever with a different failure mode.
+
+```bash
+# ease the reference onto the robot's pose at engage, and off the clip onto a
+# standing pose before the handover. Both default to 0 — without these flags the
+# reference is the clip, from its first frame to its last.
+bash src/cpp_control/scripts/run_difftrack_sim2sim.sh -s -b 1.0 -o 1.0 g1_dance15s
+```
+
+**`-b` (blend in)** — for the first N seconds the reference is the clip *plus*
+the robot's own disagreement with clip frame 0, faded out on a smoothstep:
+
+```
+reference(j) = clip(j) + a(j) * (robot_at_engage - clip(0)),   a(0)=1, a(N)=0
+```
+
+root position, root orientation and joint angles alike. Step 0 is exactly the
+pose the robot is standing in, so the tracking error starts at zero instead of at
+a clip's worth of mid-stride pose — and the clip's own clock still runs at **1x
+from step 0**. Nothing is delayed and nothing is played slow. That is the whole
+difference from `lead_in_duration`, and it is why this works where the lead-in
+does not: a lead-in prepends a synthesised approach, the policy spends it being
+asked to move slowly, and a tracking policy has no slow gear. Measured, both
+variants of slowing the reference are worse than no blend at all — a lead-in of
+0.5 s puts g1_fight on the floor at clip step 21, and a run-up that plays the
+clip's first second at 0.5x puts it there at step 39, against 73 with nothing.
+
+The clip is **not** moved. The obvious idea — a standing robot cannot have the
+clip's entry velocity, so set the clip back by the travel it gives up while it
+accelerates — measures wrong: the robot does not chase the reference root, it
+executes the motion, and the motion carries the root the clip's own distance
+whatever the root reference says. Setting the clip back leaves a permanent 0.47 m
+offset where the plain anchor settles to 0.1 m.
+
+**`-o` (blend out)** — the mirror. Over the last N seconds the reference is
+*interpolated* onto a standing frame: the export's default pose, upright on the
+heading the clip has there, at the height that pose stands at with its feet on
+the floor, at the clip's own last horizontal position. Unlike `exit_hold`, which
+freezes the reference on a single-support frame and measures worse than doing
+nothing, this gives the policy somewhere to go. It is an interpolation rather than
+a fading offset on purpose: an offset would leave the clip at full amplitude into
+the last step and then ask the reference to reach the standing pose in one of
+them.
+
+Measured on unitree_mujoco, SONIC stand, ground-truth world state, `A` after a 4 s
+settle:
+
+| | fell at | max root err | mean |
+|---|---|---|---|
+| g1_fight, no blend | clip step 73/748 | 1.82 m | 0.695 |
+| g1_fight, `-b 0.3` | 95/748 | 1.74 m | 0.695 |
+| g1_fight, `-b 0.5` | 114/748 | 0.70 m | 0.509 |
+| g1_fight, `-b 1.0` | 113/748 | 0.76 m | 0.551 |
+| g1_fight, `-b 1.5` | 61/748 | 1.34 m | 0.613 |
+| g1_fight, `-b 2.5` | 58/748 | 1.40 m | 0.612 |
+| g1_dance15s (13 s), no blend | — | 0.377 m | 0.175 |
+| g1_dance15s (13 s), `-b 1.0 -o 1.0` | — | 0.276 m | 0.138 |
+
+Around 1 s, and it is a real optimum rather than a monotone knob: too short leaves
+the step change in, too long leaves the reference in a pose that is neither the
+robot's nor the clip's for long enough to matter. On g1_dance15s the blend-out
+takes the robot from 2.2 rad to 1.2 rad away from the stand's pose at the moment
+of the handover, with the run itself unharmed.
+
+**Both are off unless you ask for them**, on every clip, and there is no
+per-motion default anywhere — you get a blend when you type `-b` or `-o` and not
+otherwise. They replace the reference the tracking error is measured against, so
+a run taken with one is not comparable with a run taken without one, and every
+number elsewhere in this file and in `recordings/icra_q1/` was taken without; a
+default that switched itself on for some clips and not others would make the
+column mean two different things down the same table.
+
+#### g1_fight still does not survive a standing start, and here is what it costs
+
+The blend is a large improvement on that clip and it is **not** a fix. What the
+run log says, step by step:
+
+* Under `-e rsi` — the robot teleported onto clip frame 0, which is how these
+  policies were trained and evaluated — g1_fight plays all 748 steps, mean root
+  error 0.36 m, no fall. It does so in **either** observation frame: forcing the
+  stand cycle's `observe_in_reference_frame:=true anchor_yaw_to_robot:=true` onto
+  an RSI run changes the mean by 0.008 m and nothing else. The reference-frame
+  path is not what costs the clip its run. `difftrack_yaw_selftest` holds that to
+  the bit — the observation is exactly equivariant under a yaw of the whole
+  configuration, at 5, 23, 90, 165, −165 and 180 degrees.
+* From the rest state it is the **opening** that cannot be started. The clip's
+  root turns 170 degrees in its first 1.8 s and accelerates to 1.5 m/s; the robot
+  turns 9 degrees in that time and never recovers the phase, and goes down on the
+  lunge at clip step 111–114. RSI gets away with it because the robot is already
+  standing in the middle of that turn, leaning and weighted onto the right foot.
+* Nothing that puts the robot in the clip's frame-0 pose *before* engaging helps:
+  `-p 1.5` (statically ramping the joints onto frame 0 at the hold gains) falls at
+  step 32, `-p 1.0 -b 1.0` at 83. The static transition drags the feet — the
+  robot's heading moves 71 degrees during a 1.5 s ramp — and a tracking policy
+  cannot hold the pose it is left in.
+
+Which leaves the honest summary: **the blend removes the engage transient, and
+the remaining gap is the clip's opening move, not the handover.** A stand-cycle
+row for g1_fight needs either a policy trained with that entry or a rest state
+that can walk the robot into the motion; neither is a reference blend.
+
 ### the parameters
 
 All of these are launch arguments on `g1_difftrack.launch.py`, so the cycle can
@@ -720,6 +842,8 @@ be driven by hand (§3) exactly as the script drives it.
 | `exit_ramp` | `0.0` | seconds fading the gains back to the yaml's hold gains, ramping the joints to the nominal pose as it goes. For a rest state that is passive AND a clip that ends still |
 | `arm_blend` | `0.0` | seconds over which the **arm position targets** interpolate onto the SONIC stand's, starting the instant the stand takes the robot. The clip is untouched. Arms only, positions only — see above |
 | `arm_blend_joints` | `[shoulder, elbow, wrist]` | substrings of `joint_names` it owns. Add `waist` for the torso |
+| `motion_blend_in` | `0.0` | seconds of **reference** eased onto the robot's own pose at engage (`-b`). The clip's clock runs at 1x throughout — see above |
+| `motion_blend_out` | `0.0` | seconds of **reference** interpolated off the clip and onto a standing pose before the handover (`-o`) |
 
 `EXIT_HOLD` and `EXIT_RAMP` in the environment override the script's own.
 

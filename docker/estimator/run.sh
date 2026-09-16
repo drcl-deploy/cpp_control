@@ -9,6 +9,9 @@
 #   -d ID        ROS_DOMAIN_ID (default: $ROS_DOMAIN_ID, else 0)
 #   -t TAG       image tag (default g1-estimator)
 #   -n NAME      container name (default g1-estimator)
+#   -c FILE      run with this parameter file instead of the image's g1.yaml —
+#                mounted read-only, no image rebuild. A full legged_odom yaml,
+#                e.g. ws/src/legged_odom/config/g1_dynamic.yaml (jumps, run).
 #   -D           detached; prints the container id and returns
 #   -q           quiet: no container log on stdout
 #   -h           this help
@@ -30,16 +33,18 @@ tag=g1-estimator
 name=g1-estimator
 detach=0
 quiet=0
+params=""
 
-while getopts "i:d:t:n:Dqh" opt; do
+while getopts "i:d:t:n:c:Dqh" opt; do
     case "$opt" in
         i) iface=$OPTARG ;;
         d) domain=$OPTARG ;;
         t) tag=$OPTARG ;;
         n) name=$OPTARG ;;
+        c) params=$OPTARG ;;
         D) detach=1 ;;
         q) quiet=1 ;;
-        h) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        h) sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) exit 2 ;;
     esac
 done
@@ -85,5 +90,20 @@ if docker ps --format '{{.Names}}' | grep -qx "$name"; then
     exit 1
 fi
 
-echo "estimator: iface=$iface domain=$domain image=$tag"
-exec docker run "${run_args[@]}" "$tag" "$@"
+# -c: the node straight from a mounted parameter file. The launch file only
+# knows files baked into the image, and a tuning change should not need a
+# rebuild. An explicit command after the options still wins.
+cmd=("$@")
+if [ -n "$params" ]; then
+    if [ ! -f "$params" ]; then
+        echo "run.sh: no parameter file '$params'" >&2
+        exit 2
+    fi
+    run_args+=(-v "$(realpath "$params"):/estimator/params.yaml:ro")
+    if [ ${#cmd[@]} -eq 0 ]; then
+        cmd=(ros2 run legged_odom legged_odom_node --ros-args --params-file /estimator/params.yaml)
+    fi
+fi
+
+echo "estimator: iface=$iface domain=$domain image=$tag params=${params:-g1.yaml (image default)}"
+exec docker run "${run_args[@]}" "$tag" "${cmd[@]}"

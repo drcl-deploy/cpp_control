@@ -80,6 +80,25 @@ def generate_launch_description():
                               description='>0 also ramps onto the clip first frame — '
                                           'measures badly, the clips start mid-stride'),
         DeclareLaunchArgument('lead_in_duration', default_value='0.0'),
+        DeclareLaunchArgument('motion_blend_in', default_value='0.0',
+                              description='seconds of REFERENCE interpolated onto the '
+                                          "robot's own pose at engage. The clip's clock "
+                                          'runs at 1x from step 0 — what is faded out is '
+                                          'the difference between the robot and clip '
+                                          'frame 0 — and the clip is placed the half '
+                                          'stride back that a standing start costs, so '
+                                          'the reference does not run away while the '
+                                          'robot gets up to speed. This is what a clip '
+                                          'that enters fast (g1_fight, 0.93 m/s) needs '
+                                          'to be playable from a stand'),
+        DeclareLaunchArgument('motion_blend_out', default_value='0.0',
+                              description='seconds of REFERENCE interpolated off the clip '
+                                          'and onto a standing pose — upright, default '
+                                          'pose, decelerating to a stop — before the rest '
+                                          'state takes the robot. The mirror of '
+                                          'motion_blend_in, and unlike exit_hold it gives '
+                                          'the policy somewhere to go rather than freezing '
+                                          'it mid-stride'),
 
         # Reference placement
         DeclareLaunchArgument('anchor_motion_to_robot', default_value='true'),
@@ -162,6 +181,16 @@ def generate_launch_description():
         DeclareLaunchArgument('odom_twist_frame', default_value='child',
                               description='which frame the publisher puts twist in: '
                                           '"child" (REP-105, the body frame) or "world"'),
+        # The world-state guard (external world pose only, while tracking): at
+        # most world_guard_max_m of xy motion the reference does not explain may
+        # pass in any world_guard_window_s; the rest is held out. While that
+        # correction is fresh (world_guard_hold_s) the horizontal velocity stays
+        # within world_guard_vel_dev of the reference's.
+        DeclareLaunchArgument('world_guard', default_value='true'),
+        DeclareLaunchArgument('world_guard_max_m', default_value='0.5'),
+        DeclareLaunchArgument('world_guard_window_s', default_value='0.2'),
+        DeclareLaunchArgument('world_guard_vel_dev', default_value='0.5'),
+        DeclareLaunchArgument('world_guard_hold_s', default_value='0.5'),
         # Overrides the config yaml's own unitree_world_state. Set it to `none`
         # whenever odom_topic is in use under the unitree workflow, or the
         # simulator's ground truth and the estimator both write the base state.
@@ -221,6 +250,10 @@ def generate_launch_description():
                 'entry': ParameterValue(LaunchConfiguration('entry'), value_type=str),
                 'entry_ramp': ParameterValue(LaunchConfiguration('entry_ramp'), value_type=float),
                 'lead_in_duration': ParameterValue(LaunchConfiguration('lead_in_duration'), value_type=float),
+                'motion_blend_in': ParameterValue(
+                    LaunchConfiguration('motion_blend_in'), value_type=float),
+                'motion_blend_out': ParameterValue(
+                    LaunchConfiguration('motion_blend_out'), value_type=float),
                 'anchor_motion_to_robot': ParameterValue(LaunchConfiguration('anchor_motion_to_robot'), value_type=bool),
                 'anchor_yaw_to_robot': ParameterValue(LaunchConfiguration('anchor_yaw_to_robot'), value_type=bool),
                 'observe_in_reference_frame': ParameterValue(LaunchConfiguration('observe_in_reference_frame'), value_type=bool),
@@ -250,6 +283,15 @@ def generate_launch_description():
                 'odom_topic': ParameterValue(LaunchConfiguration('odom_topic'), value_type=str),
                 'odom_twist_frame': ParameterValue(
                     LaunchConfiguration('odom_twist_frame'), value_type=str),
+                'world_guard': ParameterValue(LaunchConfiguration('world_guard'), value_type=bool),
+                'world_guard_max_m': ParameterValue(
+                    LaunchConfiguration('world_guard_max_m'), value_type=float),
+                'world_guard_window_s': ParameterValue(
+                    LaunchConfiguration('world_guard_window_s'), value_type=float),
+                'world_guard_vel_dev': ParameterValue(
+                    LaunchConfiguration('world_guard_vel_dev'), value_type=float),
+                'world_guard_hold_s': ParameterValue(
+                    LaunchConfiguration('world_guard_hold_s'), value_type=float),
                 'unitree_world_state': ParameterValue(
                     LaunchConfiguration('unitree_world_state'), value_type=str),
                 'record': ParameterValue(LaunchConfiguration('record'), value_type=bool),

@@ -43,6 +43,29 @@
 #   -S PATH      -s only: back the REST state with a SONIC stand POLICY instead
 #                of the nominal-pose PD hold. A path under models/ (e.g.
 #                tracker/sonic/g1_sonic_base.onnx) or an absolute one.
+#   -b SECONDS   MOTION BLEND IN: for the first SECONDS, show the policy the clip
+#                plus the robot's own disagreement with clip frame 0, faded out
+#                on a smoothstep -- so the reference starts exactly on the pose
+#                the robot is standing in rather than on a frame it is a clip's
+#                worth of mid-stride away from. The clip's clock still runs at 1x
+#                throughout: nothing is delayed and nothing is played slow, which
+#                is what separates this from -l and is why it works where -l does
+#                not. Around 1 s is the measured optimum and it is a real one --
+#                on g1_fight, 0.5 s and 1.0 s reach clip step 114 and 113 against
+#                73 with no blend, while 1.5 s and 2.5 s drop back to 61 and 58.
+#                Off (0) by default -- see MOTION BLENDS below.
+#   -o SECONDS   MOTION BLEND OUT: over the last SECONDS of the run, interpolate
+#                the REFERENCE off the clip and onto a standing frame -- the
+#                policy's default pose, upright on the clip's heading, at the
+#                height that pose stands at -- so the rest state is handed a
+#                robot that has been asked to stop rather than one cut off
+#                mid-stride. The mirror of -b, and the reference-side counterpart
+#                to -B, which moves the arms AFTER the handover. Unlike EXIT_HOLD
+#                it gives the policy somewhere to go instead of freezing it on a
+#                single-support frame: on g1_dance15s it takes the robot from 2.2
+#                to 1.2 rad away from the stand's pose at the handover, with the
+#                run itself unharmed (650/650 clean, mean error 0.138 m against
+#                0.175 m without). Off (0) by default.
 #   -B SECONDS   -s only: once the stand has taken the robot, interpolate the
 #                ARM position targets onto it over this long instead of snapping
 #                them there in one control period. Off (0) by default. The clip
@@ -53,9 +76,33 @@
 #                the stand's nominal pose is: g1_dance30s ends 1.4-2.8 rad away
 #                at the arms, and it looks like the snap it is.
 #   -E MODE      where the WORLD BASE POSE comes from — see WORLD STATE below.
-#                estimator (default) | ground_truth | compare
+#                estimator (default) | ground_truth | compare | mixed
+#   -H           HEADLESS: unitree_mujoco with no viewer window — no GLFW, no
+#                display, no GL context on the GPU. Same physics, same 1x
+#                pacing, same numbers; for sweeps. Needs the binary built with
+#                workflows/patches/unitree_mujoco-headless.patch. Not with -R.
 #   -k           keep the logs and say where they are
 #   motion ...   directories under models/tracker/difftrack (default: all)
+#
+# MOTION BLENDS
+#
+#   BOTH ARE OFF UNLESS YOU ASK FOR THEM, on every clip, and there is no
+#   per-motion default anywhere: -b and -o replace the reference the tracking
+#   error is measured against, so a run taken with one is not comparable with a
+#   run taken without one -- and every number in
+#   docs/trackers/difftrack_running.md and recordings/icra_q1/ was taken without.
+#   A default that switched itself on for some clips and not others would make
+#   the column mean two different things down the same table.
+#
+#   The clip they were built for is g1_fight, and it is worth knowing what they
+#   do and do not buy it. From the rest state that clip opens with a 170 deg spin
+#   at up to 1.5 m/s; a standing robot cannot start that, loses the phase in the
+#   first second and goes down at clip step 73 of 748. `-b 1.0 -o 1.0` removes
+#   the step change at engage -- max root error 1.82 m -> 0.76 m, and the fall
+#   moves out to step 113 -- but it does NOT make the clip survivable from a
+#   stand. Under -e rsi, where the robot is teleported onto frame 0 already in
+#   the motion, the same policy plays all 748 steps. See
+#   docs/trackers/difftrack_running.md.
 #
 # THE RUN LOG
 #
@@ -74,6 +121,13 @@
 #
 #   See docs/run_logs.md.
 #
+# THE FALL CUT-OUT
+#
+#   A run ends -- and the robot goes limp in DAMPING -- the first tick the root
+#   drops below the export's termination height (0.3 m for the g1 clips).
+#   FALL_HEIGHT=0 turns that off, FALL_HEIGHT=0.2 just lowers it; see the notes
+#   at the assignment below.
+#
 # WORLD STATE
 #
 #   These policies observe an ABSOLUTE world pose and twist (they were trained
@@ -91,6 +145,13 @@
 #                 THAT. The same estimate, from the same container, that the
 #                 robot will run. Needs the image built once:
 #                     bash docker/estimator/build.sh
+#                 g1_jumps*/g1_run* run with the parameters tuned for jumping
+#                 and running (docker/estimator/.../config/g1_dynamic.yaml,
+#                 mounted with run.sh -c); everything else with the stock
+#                 g1.yaml. ESTIMATOR_PARAMS=stock|<file> overrides that.
+#                 The controller's world-state guard (world_guard:=true,
+#                 WorldStateGuard in difftrack_obs.hpp) holds a glitching
+#                 estimate out of the observation on every clip.
 #
 #   ground_truth  the simulator's own pose (SportModeState + IMU), which is what
 #                 this script measured before. Still the right mode for
@@ -102,6 +163,17 @@
 #                 alongside untrusted, and scripts/compare_odom_ground_truth.py
 #                 scores one against the other. Run this FIRST on any new clip:
 #                 it tells you what the estimator costs without letting it drive.
+#
+#   mixed         ONE CHANNEL AT A TIME. The policy reads four things out of the
+#                 world state that the IMU does not give it -- pos_xy (under
+#                 every tar_obs frame), pos_z (root height), vel_xy and vel_z --
+#                 and `estimator` swaps all four at once. ODOM_MIX picks a
+#                 source per channel; unnamed ones stay on ground truth:
+#                     ODOM_MIX="vel_z=est" bash scripts/run_difftrack_sim2sim.sh -E mixed ...
+#                 scripts/odom_channel_mixer.py does the mixing, and logs ground
+#                 truth and the estimate side by side, one csv per run, to
+#                 MIX_CSV_DIR (default <run log dir>/odom_mix). With every
+#                 channel on `est` it is `estimator` plus that log.
 #
 #   See docs/trackers/difftrack_state_estimation.md for what the estimator can
 #   and cannot observe (height and tilt yes; x, y and heading drift).
@@ -201,8 +273,11 @@ WATCH=0
 STANDCYCLE=0
 STAND_ONNX=""
 ARM_BLEND=0.0
+BLEND_IN=0.0
+BLEND_OUT=0.0
 FREERUN=0
 RECORD=0
+HEADLESS=0
 WORKFLOW=unitree
 # Where the WORLD BASE POSE comes from, and it defaults to the honest one.
 #
@@ -223,7 +298,7 @@ WORKFLOW=unitree
 #                 against the other. This is how you find out what the estimator
 #                 costs before letting it drive.
 ESTIMATOR=estimator
-while getopts "e:d:r:l:p:W:S:B:E:kwsfRh" opt; do
+while getopts "e:d:r:l:p:W:S:B:b:o:E:kwsfRHh" opt; do
   case $opt in
     e) ENTRY=$OPTARG ;;
     d) DURATION=$OPTARG ;;
@@ -237,9 +312,12 @@ while getopts "e:d:r:l:p:W:S:B:E:kwsfRh" opt; do
     s) STANDCYCLE=1; WATCH=1 ;;
     S) STAND_ONNX=$OPTARG ;;
     B) ARM_BLEND=$OPTARG ;;
+    b) BLEND_IN=$OPTARG ;;
+    o) BLEND_OUT=$OPTARG ;;
     f) FREERUN=1 ;;
     R) RECORD=1 ;;
-    h) sed -n '2,191p' "$0"; exit 0 ;;
+    H) HEADLESS=1 ;;
+    h) sed -n '2,/^set -eo pipefail/p' "$0" | sed '$d'; exit 0 ;;
     *) exit 2 ;;
   esac
 done
@@ -257,9 +335,41 @@ case "$WORKFLOW" in
   *) echo "unknown workflow '$WORKFLOW'"; exit 2 ;;
 esac
 case "$ESTIMATOR" in
-  estimator|ground_truth|compare) ;;
-  *) echo "unknown -E mode '$ESTIMATOR' (estimator | ground_truth | compare)"; exit 2 ;;
+  estimator|ground_truth|compare|mixed) ;;
+  *) echo "unknown -E mode '$ESTIMATOR' (estimator | ground_truth | compare | mixed)"; exit 2 ;;
 esac
+# -E mixed: which of the four estimator-fed channels come from the estimate.
+# The run tag names the channels on `est`, so a directory of a sweep reads.
+RUN_TAG_MODE=$ESTIMATOR
+MIX_ARGS=()
+MIX_TAG=""
+if [ "$ESTIMATOR" = "mixed" ]; then
+  declare -A MIX=([pos_xy]=gt [pos_z]=gt [vel_xy]=gt [vel_z]=gt)
+  for kv in ${ODOM_MIX//,/ }; do
+    ch=${kv%%=*}; src=${kv#*=}
+    case "$ch" in
+      pos_xy|pos_z|vel_xy|vel_z) ;;
+      *) echo "ODOM_MIX: unknown channel '$ch' (pos_xy pos_z vel_xy vel_z)"; exit 2 ;;
+    esac
+    case "$src" in
+      gt|est) ;;
+      *) echo "ODOM_MIX: $ch must be gt or est, got '$src'"; exit 2 ;;
+    esac
+    MIX[$ch]=$src
+  done
+  est_ch=()
+  for ch in pos_xy pos_z vel_xy vel_z; do
+    MIX_ARGS+=("--${ch/_/-}" "${MIX[$ch]}")
+    if [ "${MIX[$ch]}" = "est" ]; then est_ch+=("$ch"); fi
+  done
+  if [ ${#est_ch[@]} -eq 0 ]; then MIX_TAG=none; else MIX_TAG=$(IFS=-; echo "${est_ch[*]}"); fi
+  RUN_TAG_MODE="mixed_est-${MIX_TAG}"
+elif [ -n "${ODOM_MIX:-}" ]; then
+  echo "ODOM_MIX is only read under -E mixed (this is -E $ESTIMATOR)."; exit 2
+fi
+if [ "$HEADLESS" = "1" ] && [ "$RECORD" = "1" ]; then
+  echo "-R records the viewer, and -H has none."; exit 2
+fi
 # The estimator listens to rt/lowstate, which only the unitree plant publishes.
 if [ "$ESTIMATOR" != "ground_truth" ] && [ "$WORKFLOW" != "unitree" ]; then
   echo "-E $ESTIMATOR needs the unitree plant (it reads LowState)."; exit 2
@@ -286,11 +396,41 @@ SPEED=1.0
 EXIT_HOLD=${EXIT_HOLD:-0.0}
 EXIT_RAMP=${EXIT_RAMP:-0.0}
 
+# The fall cut-out. The node watches the root height every tick and, the first
+# time it drops below this, calls it a fall: the run ends and the control mode
+# goes to DAMPING, which is the robot going limp on the floor. The threshold
+# comes from the export (`termination_height` in difftrack_config.json, 0.3 m
+# for the g1 clips) unless something overrides it, and <0 here means exactly
+# that -- keep the export's number.
+#
+#   FALL_HEIGHT=0    disable the cut-out entirely: no fall is ever declared, no
+#                    DAMPING, and the policy keeps being asked to track from
+#                    wherever the robot ended up. This is what you want when a
+#                    clip legitimately goes low -- a jump landing, a crouch --
+#                    or when you want to WATCH the recovery instead of having
+#                    the run cut at the moment it got interesting. It also
+#                    means a genuine fall no longer stops anything, so the
+#                    SUMMARY's fell/fell_at columns go quiet.
+#   FALL_HEIGHT=0.2  keep the cut-out, just lower.
+FALL_HEIGHT=${FALL_HEIGHT:--1.0}
+
 # The per-step run log (docs/run_logs.md). On by default and in the same place
 # every time, because the comparison this rig exists to support is a sim2sim run
 # against a hardware one, and that is only possible if the sim2sim runs were
 # kept. RUN_LOG=0 turns it off; RUN_LOG_DIR moves it.
 RUN_LOG=${RUN_LOG:-1}
+
+# One-off launch arguments, appended after everything this script sets, so they
+# WIN over it -- `ros2 launch` takes the last spelling of a repeated argument.
+# For trying a parameter the script has no flag for without editing it:
+#
+#   EXTRA_LAUNCH_ARGS="observe_in_reference_frame:=true anchor_yaw_to_robot:=true" \
+#       bash scripts/run_difftrack_sim2sim.sh -e rsi g1_fight
+#
+# Deliberately unvalidated and deliberately last: it is an escape hatch for an
+# experiment, not a supported configuration, and anything worth keeping belongs
+# in a flag.
+read -r -a extra_args <<< "${EXTRA_LAUNCH_ARGS:-}"
 
 # The stand cycle is a STAND entry by construction: the robot is standing in the
 # rest state when you press A, not posed on the clip's first frame. Asking for
@@ -325,6 +465,12 @@ TIMEOUT=$((DURATION * 3 + 120))
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "$HERE/.." && pwd)"
 ESTIMATOR_IMAGE=${ESTIMATOR_IMAGE:-g1-estimator}
+# The estimator's parameters. Jumps and run get the file tuned on them
+# (recordings/estimator_tuning/) whenever it exists; every other clip keeps the
+# image's stock g1.yaml. ESTIMATOR_PARAMS overrides the choice for every clip:
+#   auto (default) | stock | <path to a legged_odom yaml>
+DYNAMIC_ESTIMATOR_PARAMS=$PKG/docker/estimator/ws/src/legged_odom/config/g1_dynamic.yaml
+ESTIMATOR_PARAMS=${ESTIMATOR_PARAMS:-auto}
 # The middleware is chosen HERE, before anything starts. `setup.sh` in sim mode
 # switches to rmw_cyclonedds_cpp on `lo` — without that the controller and
 # unitree_mujoco are on different middlewares, every node starts cleanly, and not
@@ -352,6 +498,16 @@ if [ "$WORKFLOW" = "unitree" ]; then
   # -R needs the F9 recorder patch in the binary. Checked here rather than
   # discovered as a missing mp4 after the run: the string is in main.cc's
   # environment lookup, so it is present exactly when the patch is built in.
+  # -H likewise needs its patch built in; the option's own name is in the binary
+  # exactly when it is.
+  if [ "$HEADLESS" = "1" ] && ! grep -qa "headless,H" "$SIM_BIN"; then
+    echo "-H needs unitree_mujoco's --headless, and $SIM_BIN was built without it."
+    echo "  Apply it and rebuild:"
+    echo "      cd $UNITREE_MUJOCO"
+    echo "      git apply $PKG/workflows/patches/unitree_mujoco-headless.patch"
+    echo "      cd simulate/build && make unitree_mujoco -j4"
+    exit 2
+  fi
   if [ "$RECORD" = "1" ] && ! grep -qa DRCL_RECORD_AUTOSTART "$SIM_BIN"; then
     echo "-R needs the F9 recorder, and $SIM_BIN was built without it."
     echo "  Apply it and rebuild:"
@@ -382,8 +538,9 @@ MODELS="$(ros2 pkg prefix cpp_control)/share/cpp_control/models/tracker/difftrac
 RUN_LOG_DIR=${RUN_LOG_DIR:-$PKG/recordings/runs}
 record_args=(record:=false)
 if [ "$RUN_LOG" = "1" ]; then
-  record_args=(record:=true record_dir:="$RUN_LOG_DIR" run_tag:="sim2sim_${ESTIMATOR}")
+  record_args=(record:=true record_dir:="$RUN_LOG_DIR" run_tag:="sim2sim_${RUN_TAG_MODE}")
 fi
+MIX_CSV_DIR=${MIX_CSV_DIR:-$RUN_LOG_DIR/odom_mix}
 
 # THE REST STATE for -s. Default to the SONIC stand, because it is the only
 # thing here that can catch a robot that is still moving when the clip ends —
@@ -468,7 +625,9 @@ stop_estimator() {
   docker rm -f "$ESTIMATOR_CONTAINER" >/dev/null 2>&1 || true
 }
 start_estimator() {
-  local log=$1
+  local log=$1 params=${2:-}
+  local param_args=()
+  if [ -n "$params" ]; then param_args=(-c "$params"); fi
   if ! docker image inspect "$ESTIMATOR_IMAGE" >/dev/null 2>&1; then
     echo "  no '$ESTIMATOR_IMAGE' image. Build it once:"
     echo "      bash $PKG/docker/estimator/build.sh"
@@ -481,7 +640,7 @@ start_estimator() {
   # rt/lowstate. On the robot it is the robot's own interface — see
   # docs/trackers/difftrack_state_estimation.md.
   bash "$PKG/docker/estimator/run.sh" \
-       -n "$ESTIMATOR_CONTAINER" -t "$ESTIMATOR_IMAGE" \
+       -n "$ESTIMATOR_CONTAINER" -t "$ESTIMATOR_IMAGE" "${param_args[@]}" \
        -i "${ESTIMATOR_IFACE:-lo}" -D > "$log" 2>&1 || return 1
 
   # Then CHECK IT IS STILL THERE. `docker run -d` succeeds the moment the
@@ -512,9 +671,54 @@ start_estimator() {
   docker logs "$ESTIMATOR_CONTAINER" 2>&1 | grep -v "type hash" | tail -n 15 | sed 's/^/    /'
   return 1
 }
+# Python ROS tools that touch a unitree message (the channel mixer, the odom
+# comparator) have to run on the interpreter the workspace was BUILT for.
+# $WS/install's setup files were generated by a colcon run under conda's
+# drclros python, so after setup.sh the python3 on PATH is that env's 3.11 and
+# PYTHONPATH carries its Humble rclpy ahead of /opt/ros/jazzy's. That rclpy then
+# loads unitree_go's Jazzy/CPython-3.12 typesupport and SEGFAULTS in
+# create_subscription -- silently, in a background process, while the rest of
+# the rig looks healthy. pubcounts() above only needs rclpy and is unaffected.
+ros_py() {
+  local pp="" entry IFS=:
+  for entry in ${PYTHONPATH:-}; do
+    case "$entry" in *conda*) ;; *) pp="${pp:+$pp:}$entry" ;; esac
+  done
+  env PYTHONPATH="$pp" /usr/bin/python3 "$@"
+}
+
+# -E mixed's channel mixer. A survivor is the same hazard as a surviving
+# estimator: it keeps publishing /odom_mixed into the next run. The bracket in
+# the pkill pattern keeps it from matching pkill's own command line.
+MIXER_PID=""
+start_mixer() {
+  local csv=$1 log=$2
+  mkdir -p "$(dirname "$csv")"
+  ros_py -u "$HERE/odom_channel_mixer.py" "${MIX_ARGS[@]}" --out /odom_mixed \
+    --csv "$csv" > "$log" 2>&1 &
+  MIXER_PID=$!
+  local _
+  for _ in $(seq 1 50); do
+    if grep -q "odom mixer:" "$log"; then return 0; fi
+    if ! kill -0 "$MIXER_PID" 2>/dev/null; then break; fi
+    sleep 0.2
+  done
+  echo "  the odom channel mixer never came up — see $log"
+  tail -n 15 "$log" | sed 's/^/    /'
+  return 1
+}
+stop_mixer() {
+  if [ -n "$MIXER_PID" ]; then
+    kill -TERM "$MIXER_PID" 2>/dev/null || true
+    wait "$MIXER_PID" 2>/dev/null || true
+    MIXER_PID=""
+  fi
+  pkill -f "[o]dom_channel_mixer.py" 2>/dev/null || true
+}
 cleanup() {
   kill_sims -TERM
   pkill -f g1_difftrack_node 2>/dev/null || true
+  stop_mixer
   stop_estimator
   sleep 1
   kill_sims -KILL
@@ -612,18 +816,31 @@ PYCFG
       # the identity, because a lead-in has to solve for it.
       entry_args=(entry:=direct
                   anchor_motion_to_robot:=true anchor_yaw_to_robot:=false
-                  observe_in_reference_frame:=false
-                  lead_in_duration:="$LEADIN")
+                  observe_in_reference_frame:=false)
     else
       entry_args=(entry:=pose entry_ramp:="$ENTRY_RAMP"
                   anchor_motion_to_robot:=true anchor_yaw_to_robot:=true
                   observe_in_reference_frame:=true)
     fi
 
+    # The reference's own shape, and it is the same question in both entry modes:
+    # what the policy is shown between the robot standing there and the clip
+    # running. All three are 0 unless asked for, so the reference is the clip
+    # from its first frame to its last and every number this rig has ever
+    # reported still means what it meant.
+    #
+    # The lead-in used to be rsi-only because the node refused it alongside the
+    # reference-frame observation; it is built in the clip's frame now and works
+    # from a stand too.
+    entry_args+=(lead_in_duration:="$LEADIN"
+                 motion_blend_in:="$BLEND_IN"
+                 motion_blend_out:="$BLEND_OUT")
+
     # The workflow's config. Empty under drcl, where the launch file's own
     # default (g1_difftrack.yaml) already selects drcl_deploy.
     config_args=()
     if [ -n "$CONFIG_PATH" ]; then config_args=(config_path:="$CONFIG_PATH"); fi
+    config_args+=(fall_height:="$FALL_HEIGHT")
 
     # Where the world base pose comes from. Under `estimator` the controller
     # reads /odom and the simulator's ground-truth path is turned OFF at the
@@ -633,13 +850,31 @@ PYCFG
     # known-good run) and the estimator only rides along to be scored.
     odom_args=()
     est_log="$LOGDIR/${motion}_${rep}_est.log"
+    # Which estimator parameters this clip runs with (see ESTIMATOR_PARAMS).
+    est_params=""
+    case "$ESTIMATOR_PARAMS" in
+      auto)
+        case "$motion" in
+          g1_jumps*|g1_run*)
+            if [ -f "$DYNAMIC_ESTIMATOR_PARAMS" ]; then est_params=$DYNAMIC_ESTIMATOR_PARAMS; fi ;;
+        esac ;;
+      stock) ;;
+      *) est_params=$ESTIMATOR_PARAMS ;;
+    esac
     case "$ESTIMATOR" in
       estimator)
         odom_args=(odom_topic:=/odom odom_twist_frame:=child unitree_world_state:=none)
-        start_estimator "$est_log" || exit 2
+        start_estimator "$est_log" "$est_params" || exit 2
         ;;
       compare)
-        start_estimator "$est_log" || exit 2
+        start_estimator "$est_log" "$est_params" || exit 2
+        ;;
+      mixed)
+        # The mixer publishes a WORLD-frame twist; see odom_channel_mixer.py.
+        odom_args=(odom_topic:=/odom_mixed odom_twist_frame:=world unitree_world_state:=none)
+        start_estimator "$est_log" "$est_params" || exit 2
+        start_mixer "$MIX_CSV_DIR/$(date +%Y%m%d-%H%M%S)_${motion}_r$(printf %02d "$rep")_est-${MIX_TAG}.csv" \
+                    "$LOGDIR/${motion}_${rep}_mix.log" || exit 2
         ;;
     esac
 
@@ -667,7 +902,7 @@ PYCFG
         play_duration:="$DURATION" exit_hold:="$EXIT_HOLD" exit_ramp:="$EXIT_RAMP" \
         arm_blend:="$ARM_BLEND" \
         "${stand_args[@]}" "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" \
-        "${record_args[@]}" > "$ctllog" 2>&1 &
+        "${record_args[@]}" "${extra_args[@]}" > "$ctllog" 2>&1 &
     elif [ "$WATCH" = "1" ]; then
       # No budget, no self-shutdown, no timeout: play_duration<0 runs a looping
       # clip until you stop it, and a one-shot clip ends HOLDING the nominal pose
@@ -676,13 +911,13 @@ PYCFG
       ros2 launch cpp_control g1_difftrack.launch.py \
         motion:="$motion" auto_engage:=true play_duration:=-1.0 \
         "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" \
-        "${record_args[@]}" > "$ctllog" 2>&1 &
+        "${record_args[@]}" "${extra_args[@]}" > "$ctllog" 2>&1 &
     else
       timeout -s KILL "$TIMEOUT" \
         ros2 launch cpp_control g1_difftrack.launch.py \
           motion:="$motion" auto_engage:=true play_duration:="$DURATION" \
           exit_when_finished:=true "${config_args[@]}" "${odom_args[@]}" "${entry_args[@]}" \
-          "${record_args[@]}" > "$ctllog" 2>&1 &
+          "${record_args[@]}" "${extra_args[@]}" > "$ctllog" 2>&1 &
     fi
     ctlpid=$!
     # `if`, not `grep ... && break`: under `set -e` a failing && list at the end
@@ -754,8 +989,10 @@ PYCFG
                  "DRCL_RECORD_DIR=${DRCL_RECORD_DIR:-$PKG/recordings}"
                  "DRCL_RECORD_PREFIX=${motion}_${ENTRY}_${rep}")
       fi
+      sim_flags=()
+      if [ "$HEADLESS" = "1" ]; then sim_flags=(--headless); fi
       env -u LD_LIBRARY_PATH "${rec_env[@]}" \
-        "$SIM_BIN" -r g1 -t 1 -c -i "$ROS_DOMAIN_ID" -n lo -s "$SCENE_ABS" \
+        "$SIM_BIN" -r g1 -t 1 -c -i "$ROS_DOMAIN_ID" -n lo -s "$SCENE_ABS" "${sim_flags[@]}" \
         > "$simlog" 2>&1 &
       simpid=$!
     else
@@ -855,7 +1092,7 @@ PYCFG
     # Slightly shorter than the tracking budget so it finishes first.
     if [ "$ESTIMATOR" = "compare" ]; then
       cmp_secs=$(python3 -c "print(max(3.0, $DURATION - 1.0))")
-      python3 "$HERE/compare_odom_ground_truth.py" -d "$cmp_secs" \
+      ros_py "$HERE/compare_odom_ground_truth.py" -d "$cmp_secs" \
               --csv "$LOGDIR/${motion}_${rep}_odom.csv" 2>&1 | sed 's/^/  /' &
       cmppid=$!
     fi
@@ -874,6 +1111,7 @@ PYCFG
     disown "$simpid" 2>/dev/null || true
     kill -9 "$simpid" 2>/dev/null || true
     kill_sims -KILL
+    stop_mixer
 
     line=$(grep -o 'SUMMARY .*' "$ctllog" | tail -1 || true)
     if [ -z "$line" ]; then
@@ -893,8 +1131,15 @@ echo "workflow=$WORKFLOW  plant=$([ "$WORKFLOW" = unitree ] && echo unitree_mujo
 state=$STATE_TOPIC  cmd=$CMD_TOPIC"
 echo "entry=$ENTRY  duration=${DURATION}s  lead_in=${LEADIN}s  entry_ramp=${ENTRY_RAMP}s  \
 speed=$([ "$FREERUN" = 1 ] && echo free-run || echo 1x)"
+echo "motion blend: in=${BLEND_IN}s  out=${BLEND_OUT}s"
+echo "world state: -E $ESTIMATOR$([ "$ESTIMATOR" = mixed ] && echo " (on the estimator: $MIX_TAG; csvs in $MIX_CSV_DIR)")  \
+viewer: $([ "$HEADLESS" = 1 ] && echo headless || echo window)"
+if [ "$ESTIMATOR" != "ground_truth" ]; then
+  echo "estimator params: ESTIMATOR_PARAMS=$ESTIMATOR_PARAMS$([ "$ESTIMATOR_PARAMS" = auto ] && \
+echo " (g1_jumps*/g1_run*: $([ -f "$DYNAMIC_ESTIMATOR_PARAMS" ] && echo g1_dynamic.yaml || echo 'stock -- no g1_dynamic.yaml yet'); others: stock g1.yaml)")"
+fi
 if [ "$RUN_LOG" = "1" ]; then
-  echo "run logs: $RUN_LOG_DIR  (one npz per run, tagged sim2sim_${ESTIMATOR})"
+  echo "run logs: $RUN_LOG_DIR  (one npz per run, tagged sim2sim_${RUN_TAG_MODE})"
   echo "          python3 $HERE/analyze_tracking.py $RUN_LOG_DIR/*.npz"
 fi
 echo "to watch one instead of measuring all of them:  $0 -w -e $ENTRY <motion>"

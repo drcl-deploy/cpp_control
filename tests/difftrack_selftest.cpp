@@ -147,13 +147,14 @@ int main(int argc, char** argv)
     const char* out_names[] = {"actions"};
 
     std::printf("model dir     %s\n"
-                "run           %s%s%s\n"
+                "run           %s%s%s  alg=%s\n"
                 "motion        %s (%d steps%s)\n"
                 "obs           %d = %d char + %zu x %d tar\n"
                 "trace         %d rows%s\n"
                 "tolerance     %g\n\n",
                 dir.c_str(), cfg.sourceRun.c_str(),
                 cfg.variant.empty() ? "" : "  variant=", cfg.variant.c_str(),
+                cfg.trainAlg.c_str(),
                 cfg.motionFile.c_str(), cfg.clipSteps, builder.loops() ? ", LOOPING" : "",
                 cfg.numObs, cfg.charObsDim, cfg.tarObsSteps.size(), cfg.tarFeatDim,
                 num_rows, has_actions ? " (with actions)" : "", tol);

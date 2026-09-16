@@ -211,9 +211,18 @@ and `pos_drift` goes quadratic.
 | `estimator` (**default**) | `/odom` | what the robot will do |
 | `ground_truth` | SportModeState + IMU | separating a policy problem from an estimator problem |
 | `compare` | ground truth, estimator scored alongside | validating the estimator |
+| `mixed` | per channel (`ODOM_MIX`): ground truth or the estimate, for `pos_xy` `pos_z` `vel_xy` `vel_z` | attributing an `estimator` failure to one channel |
 
 `estimator` is the default because measuring against a pose no robot can produce
 reports an upper bound, not a transfer result.
+
+`mixed` exists because `estimator` swaps all four estimator-fed observation
+channels at once. `scripts/odom_channel_mixer.py` assembles the world state
+channel by channel (orientation and angular velocity are the IMU's either way —
+the estimator does not filter them) and logs ground truth and the estimate side
+by side, including on runs the estimate is driving, which `compare` cannot show.
+The channel ablation built on it, its sweeps and its analysis live in
+`recordings/estimator_ablation/`. Sweeps want `-H` (headless unitree_mujoco).
 
 ### Measurements
 
@@ -305,6 +314,119 @@ control period, which puts a whole control step of age on the newest sample.
 
 The policies this ships with were trained with `action_latency_rand` and
 `obs_latency_rand`, which is the margin this is spending.
+
+## 9. The world-state guard — the estimator does not only drift
+
+Drift was the expected failure (§4). The one that knocks a jumping policy over
+is different: at the takeoff and landing of a jump the estimate's horizontal
+position **teleports 1.3–2.4 m within 0.1–0.2 s** (30–66 m/s), its horizontal
+velocity error spikes to ~2 m/s at the same moment, and the position error then
+stays. Measured with `-E mixed` (every channel on the estimate, ground truth
+logged alongside) on `g1_jumps21`, a policy that plays the clip 4/4 on ground
+truth at 0.19 m and falls 6/6 on the estimator at steps 139–223: before the jump
+the estimate is within 0.1–0.4 m; after it the policy sees itself 1–2 m off a
+clip it has never been more than 0.40 m from, lunges after it and falls within
+10–30 steps. Replaying the recorded sensor stream into the estimator reproduces
+the jump open loop (1.39 m within 0.2 s on the jumps bag).
+
+So the controller holds glitches out, on every clip, before the observation is
+built (`WorldStateGuard`, `include/common/g1/difftrack_obs.hpp`):
+
+* Each control tick it takes the robot's xy displacement **beyond the
+  reference's own displacement**. At most `world_guard_max_m` of that may pass
+  in any `world_guard_window_s`; the excess is held out as a persistent xy
+  correction (the estimator's error does not come back on its own; a jump the
+  other way cancels it). Height is untouched.
+* While a correction is fresh (`world_guard_hold_s` after the last rejection)
+  the horizontal velocity is held within `world_guard_vel_dev` of the
+  reference's.
+* External world-state sources only (odom, mocap), and new rejections only while
+  the clip's clock runs. Reset at every engage.
+
+The defaults come from ground truth, not from taste:
+
+| over any 0.2 s window, robot xy motion beyond the reference | max |
+|---|---|
+| g1_dance15s / g1_dance30s / g1_fight (ground truth) | 0.19 / 0.29 / 0.19 m |
+| g1_jumps / g1_run (ground truth) | 0.28 / 0.30 m |
+| g1_run_bundle, 3.75 m/s (ground truth) | 0.39 m |
+| **g1_jumps21 on the estimator** | **2.1 m p99, 2.6 m max** |
+
+| parameter | default | |
+|---|---|---|
+| `world_guard` | `true` | `false` restores the raw estimate |
+| `world_guard_max_m` | `0.5` | |
+| `world_guard_window_s` | `0.2` | |
+| `world_guard_vel_dev` | `0.5` | m/s; genuine deviations reach 1.4 m/s p99 on g1_run, so it applies only while a correction is fresh |
+| `world_guard_hold_s` | `0.5` | the glitch's velocity error outlasts its position jump |
+
+Every run log carries `world_guard_offset` (the xy correction; subtract it from
+`root_pos` for what the policy saw) and `world_guard_active`; the metadata's
+`world` block has the parameters and `guard_reject_ticks` / `guard_max_offset`;
+the SUMMARY line ends in `guard_max=… guard_ticks=…`. `difftrack_guard_selftest`
+holds the guard to both properties: motion at 0.42 m per 0.2 s beyond the
+reference passes bit-for-bit, and a 2 m glitch leaks at most 0.5 m.
+
+Measured, it is a safety net and not the fix. It rejected nothing on 187 clean
+ground-truth runs of every clip (and on a fresh all-clip check through the odom
+path). On the stock estimator it does hold the jump out — 0.9–2.7 m of
+correction per run — but g1_jumps21 still falls 6/6: after the jump the stock
+filter's horizontal velocity stays 1–2.5 m/s wrong for over a second, which
+drags the position at a rate the budget allows, and height swings ±0.3 m. A
+tighter or longer budget was evaluated offline and rejected: 0.5 m per 1 s
+fires on 109 of the 187 ground-truth runs (g1_run lags its clip by ~1 m in the
+first second from a stand), and post-detection containment made the corrected
+state no closer to the truth. What removes the glitch is the estimator's own
+contact model (§10).
+
+## 10. Estimator parameters per clip
+
+`docker/estimator/run.sh -c <file>` mounts a full `legged_odom` parameter file
+instead of the image's `g1.yaml` — no rebuild. `run_difftrack_sim2sim.sh` uses
+`ws/src/legged_odom/config/g1_dynamic.yaml` for `g1_jumps*` and `g1_run*`
+whenever that file exists and the stock `g1.yaml` for everything else;
+`ESTIMATOR_PARAMS=stock|<file>` overrides the choice for every clip. The tuning
+that produced `g1_dynamic.yaml` — replaying ground-truth sensor bags into the
+container under candidate parameters and scoring against ground truth — lives in
+`recordings/estimator_tuning/`.
+
+`g1_dynamic.yaml` changes two contact values and nothing else:
+
+| | `g1.yaml` | `g1_dynamic.yaml` |
+|---|---|---|
+| `contact.zmp_length_x` / `zmp_length_y` | 0.08 / 0.025 | 0.12 / 0.04 |
+| `contact.sensor_noise_position` | 0.002 | 0.05 |
+
+The ZMP-within-the-footprint test decides whether a foot is a fixed contact, and
+the stock footprint is smaller than a G1 sole: a foot rolling onto its toe or heel
+at takeoff and landing is dropped and the filter dead-reckons through the jump —
+the teleport of §9. The footprint alone halves the replay errors but does not
+change the closed-loop outcome (g1_jumps21 still 0/6); trusting the leg
+kinematics less as well is what does.
+
+Open loop, replayed on ground-truth sensor bags (stock → dynamic):
+
+| | g1_jumps21 | g1_run |
+|---|---|---|
+| xy error jump within 0.2 s | 1.36 → 0.18 m | 0.14 → 0.06 m |
+| drift over the clip | 1.04 → 0.14 m | 0.23 → 0.26 m |
+| horizontal velocity error, rms | 0.66 → 0.12 m/s | 0.11 → 0.09 m/s |
+| height error, max | 0.60 → 0.11 m | 0.16 → 0.09 m |
+| vertical velocity error, rms | 0.48 → 0.19 m/s | 0.26 → 0.15 m/s |
+
+Closed loop, stand cycle on the estimator, clean runs (mean root error):
+
+| | g1_jumps21 | g1_run |
+|---|---|---|
+| g1.yaml, guard off | 0/6 | 3/6 |
+| g1.yaml, guard on | 0/6 | 2/6 |
+| g1_dynamic.yaml, guard off | 6/7 (0.23 m) | 6/6 (0.37 m) |
+| **g1_dynamic.yaml, guard on** | **6/6 (0.23 m)** | **5/6 (0.38 m)** |
+
+For scale, g1_jumps21 on ground truth: 4/4 at 0.19–0.22 m. The one fall in the
+shipped configuration (g1_run, step 643) had no guard activity. Replay-only and
+not validated: `sensor_noise_position: 0.1` with the same footprint scored better
+still on the jumps bag.
 
 ## See also
 

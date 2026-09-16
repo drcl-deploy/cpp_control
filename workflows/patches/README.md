@@ -8,12 +8,13 @@ than something that quietly diverged.
 cd $UNITREE_ROS2/unitree_mujoco
 git apply /path/to/cpp_control/workflows/patches/unitree_mujoco-startup-window.patch
 git apply /path/to/cpp_control/workflows/patches/unitree_mujoco-f9-recording.patch
+git apply /path/to/cpp_control/workflows/patches/unitree_mujoco-headless.patch
 cd simulate/build && make unitree_mujoco -j4
 ```
 
-**In that order.** Both touch `simulate/src/main.cc`, and the recording patch's
-context lines are the startup-window patch's output. `git apply --check` first
-if the checkout has moved on.
+**In that order.** All three touch `simulate/src/main.cc`, and each patch's
+context lines are the previous one's output. `git apply --check` first if the
+checkout has moved on.
 
 ---
 
@@ -136,3 +137,31 @@ all of it. Upstream-worthy on its own.
 **What it does NOT change:** the physics, the model, the message contract, the
 PD law in the bridge, or anything about startup. Recording costs one extra scene
 draw plus a readback at the capture rate (30 Hz), on a thread of its own.
+
+---
+
+## `unitree_mujoco-headless.patch`
+
+**Why:** every sim2sim run opened a MuJoCo window. For a sweep -- the estimator
+channel ablation in `recordings/estimator_ablation/` is ~70 runs -- a window per
+run is pure cost: a GL context on a GPU that is usually training something, a
+window taking focus every run, and no run at all on a machine without a display.
+
+**What it adds:** `--headless` / `-H`. Load the scene, `mj_forward`, then step
+at 1x against the wall clock with the viewer loop's own re-sync policy (re-sync
+instead of bursting once more than 0.1 s behind, and say so on stdout). No GLFW,
+no `mj::Simulate`. `run_difftrack_sim2sim.sh -H` passes it.
+
+**Why a separate loop rather than a hidden window:** `mj::Simulate::Load` hands
+the model to the RENDER thread and blocks until that thread has taken it, and the
+`GlfwAdapter` that `Simulate` is built on creates its window in the constructor.
+So the headless path branches off in `main()` before either exists.
+
+**Unchanged:** the DDS bridge (it reads `m`/`d` and never took `sim.mtx`),
+`--wait-for-cmd`, the model, the physics. **Not applied** headless: the elastic
+band (the rig never enables it; a warning is printed if the config does) and F9
+recording (nothing to record -- `-H -R` is refused by the rig).
+
+**Measured:** `g1_jumps9`, stand entry, 15 s, ground truth: 748/748 steps, mean
+root error 0.287 m, min pelvis height 0.694 m -- inside the spread of the same
+policy's windowed runs (0.27-0.32 m, 0.69 m) -- with zero re-syncs.

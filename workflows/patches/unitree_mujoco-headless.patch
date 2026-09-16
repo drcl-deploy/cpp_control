@@ -1,0 +1,132 @@
+diff --git a/simulate/src/main.cc b/simulate/src/main.cc
+index 2ffc077..51161f1 100755
+--- a/simulate/src/main.cc
++++ b/simulate/src/main.cc
+@@ -576,6 +576,84 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
+   exit(0);
+ }
+ 
++// LOCAL PATCH (cpp_control): --headless.
++//
++// The same physics with no viewer: no GLFW, no window, no mj::Simulate. For
++// sweeps, where a window per run is pure cost -- a GL context competing with
++// whatever else is on the GPU, a window taking focus every run, and no run at
++// all on a machine without a display.
++//
++// It cannot reuse PhysicsThread. mj::Simulate::Load hands the model to the
++// RENDER thread and blocks until that thread has taken it, and the GlfwAdapter
++// Simulate is built on opens the window in its constructor. So this is the
++// part of PhysicsLoop a measurement depends on and nothing else: load, forward,
++// then step at 1x against the wall clock, re-syncing rather than bursting when
++// it falls more than syncMisalign behind -- the viewer loop's pacing policy.
++// The bridge thread reads `m`/`d` exactly as it does there (it never takes
++// sim.mtx), --wait-for-cmd holds the reset state the same way, and the elastic
++// band is not applied (the sim2sim rig never enables it).
++void HeadlessPhysics(const char *filename)
++{
++  char loadError[kErrorLength] = "";
++  mjModel *mnew = mj_loadXML(filename, nullptr, loadError, kErrorLength);
++  if (!mnew)
++  {
++    std::printf("headless: could not load %s\n  %s\n", filename, loadError);
++    std::exit(EXIT_FAILURE);
++  }
++  if (loadError[0])
++  {
++    std::printf("headless: model compiled with a warning:\n  %s\n", loadError);
++  }
++  mjData *dnew = mj_makeData(mnew);
++  mj_forward(mnew, dnew);
++  // `m` before `d`: the bridge thread polls for `d` and then reads `m`.
++  m = mnew;
++  d = dnew;
++  param::physics_ready = true;
++  if (param::config.enable_elastic_band == 1)
++  {
++    std::printf("headless: enable_elastic_band is set, but the band is not applied without the viewer\n");
++  }
++  std::printf("headless: %s loaded (timestep %.4f s), stepping at 1x\n", filename, m->opt.timestep);
++
++  if (param::config.wait_for_cmd)
++  {
++    while (!param::lowcmd_received.load())
++    {
++      std::this_thread::sleep_for(std::chrono::milliseconds(1));
++    }
++    std::cout << "First LowCmd received; starting physics" << std::endl;
++  }
++
++  using Clock = std::chrono::steady_clock;
++  Clock::time_point syncCPU = Clock::now();
++  mjtNum syncSim = d->time;
++  while (true)
++  {
++    const Clock::time_point now = Clock::now();
++    const double target = syncSim + Seconds(now - syncCPU).count();
++    if (target - d->time > syncMisalign)
++    {
++      // Too far behind to catch up without a burst the controller would see as
++      // a jump in its state stream: re-sync, as the viewer's loop does.
++      std::printf("headless: %.3f s behind real time at t=%.3f, re-syncing\n",
++                  target - d->time, d->time);
++      syncCPU = now;
++      syncSim = d->time;
++      mj_step(m, d);
++    }
++    else
++    {
++      while (d->time < target)
++      {
++        mj_step(m, d);
++      }
++    }
++    std::this_thread::sleep_for(std::chrono::microseconds(500));
++  }
++}
++
+ void *UnitreeSdk2BridgeThread(void *arg)
+ {
+   // Wait for mujoco data.
+@@ -935,6 +1013,18 @@ int main(int argc, char **argv)
+     param::config.robot_scene = proj_dir.parent_path() / "unitree_robots" / param::config.robot / param::config.robot_scene;
+   }
+ 
++  // LOCAL PATCH (cpp_control): --headless. Branches off BEFORE the Simulate
++  // object, whose GlfwAdapter opens the window in its constructor. Same DDS
++  // order as below: participant first, then the bridge, then physics.
++  if (param::config.headless)
++  {
++    unitree::robot::ChannelFactory::Instance()->Init(param::config.domain_id,
++                                                    param::config.interface);
++    std::thread(UnitreeSdk2BridgeThread, nullptr).detach();
++    HeadlessPhysics(param::config.robot_scene.c_str());   // does not return
++    return 0;
++  }
++
+   // simulate object encapsulates the UI
+   auto sim = std::make_unique<mj::Simulate>(
+     std::make_unique<mj::GlfwAdapter>(),
+diff --git a/simulate/src/param.h b/simulate/src/param.h
+index 96137bb..53f42bd 100644
+--- a/simulate/src/param.h
++++ b/simulate/src/param.h
+@@ -83,6 +83,10 @@ inline struct SimulationConfig
+     // behaviour is unchanged and a simulator started on its own still runs.
+     bool wait_for_cmd = false;
+ 
++    // LOCAL PATCH (cpp_control): run the physics with no viewer -- no GLFW, no
++    // window, no display. See HeadlessPhysics in main.cc. Off by default.
++    bool headless = false;
++
+     void load_from_yaml(const std::string &filename)
+     {
+         auto cfg = YAML::LoadFile(filename);
+@@ -127,6 +131,8 @@ inline po::variables_map helper(int argc, char** argv)
+         ("idl_type,t", po::value<int>(&config.idl_type), "DDS IDL type: -1 auto, 0 unitree_go, 1 unitree_hg")
+         ("wait-for-cmd,c", po::bool_switch(&config.wait_for_cmd),
+          "hold the physics at the reset state until the first LowCmd arrives")
++        ("headless,H", po::bool_switch(&config.headless),
++         "run the physics at 1x with no viewer window (no GLFW, no display needed)")
+     ;
+ 
+     po::variables_map vm;

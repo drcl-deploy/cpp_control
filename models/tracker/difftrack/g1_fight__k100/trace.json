@@ -1,0 +1,16 @@
+{
+  "num_rows": 400,
+  "row_floats": 950,
+  "has_actions": true,
+  "layout": [
+    "root_pos:3",
+    "root_quat_wxyz:4",
+    "root_lin_vel:3",
+    "root_ang_vel_world:3",
+    "dof_pos:29",
+    "dof_vel:29",
+    "episode_step:1",
+    "obs:849",
+    "actions:29"
+  ]
+}

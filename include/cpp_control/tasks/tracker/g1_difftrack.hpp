@@ -130,6 +130,35 @@ namespace cpp_control
  * a resting controller the tracking state is entered from and handed back to —
  * without adding an FSM library to a package whose modes are an enum.
  *
+ * THE MOTION BLENDS (`motion_blend_in` / `motion_blend_out`, both off by
+ * default). These change what the POLICY IS SHOWN, which is what separates them
+ * from `entry_ramp`, `exit_ramp` and `arm_blend` below -- those change the
+ * command after the policy has produced it, or instead of running it at all.
+ *
+ * `motion_blend_in` eases the reference onto the pose the robot is standing in:
+ * for the first N seconds the reference is the clip plus the robot's own
+ * disagreement with clip frame 0, faded out on a smoothstep. Step 0 is exactly
+ * where the robot is, so the tracking error starts at zero instead of at a
+ * clip's worth of mid-stride pose, and the clip's clock still runs at 1x
+ * throughout -- nothing is delayed and nothing is played slow, which is what
+ * separates it from `lead_in_duration` and is why it works where that one does
+ * not. Measured on g1_fight from the SONIC stand: the root error stops running
+ * away (max 1.82 m -> 0.76 m) and the robot survives to clip step 113 instead of
+ * 73. See DiffTrackObsBuilder::buildBlendIn for the arithmetic and the sweep.
+ *
+ * `motion_blend_out` is its mirror at the other end: over the last N seconds the
+ * reference is interpolated off the clip and onto a standing frame -- the
+ * export's default pose, upright on the clip's heading, at the height that pose
+ * stands at -- so the rest state is handed a robot that has been asked to stop
+ * rather than one cut off mid-stride. Unlike `exit_hold`, which freezes the
+ * reference and measures worse than doing nothing, this gives the policy
+ * somewhere to go.
+ *
+ * Both are OFF by default because they replace the reference the tracking error
+ * is measured against: a run taken with one is not comparable with a run taken
+ * without one, and every number in docs/trackers/difftrack_running.md and
+ * recordings/icra_q1/ was taken without.
+ *
  * THE ARM HANDOVER (`arm_blend`, off by default). The clip runs to its last
  * frame untouched — the policy owns every joint until it is over, and nothing
  * here reaches into the tracking. The instant the stand takes the robot, the
@@ -319,6 +348,12 @@ protected:
     std::string entry_mode_ = "pose";
     double entry_ramp_ = 0.0;
     double lead_in_duration_ = 0.0;
+    /// Seconds of reference interpolated onto the robot's own pose at engage;
+    /// 0 disables it. See DiffTrackObsBuilder::buildBlendIn.
+    double motion_blend_in_ = 0.0;
+    /// Seconds of reference interpolated off the clip and onto a standing pose
+    /// before the handover; 0 disables it. See buildBlendOut.
+    double motion_blend_out_ = 0.0;
     double play_duration_ = -1.0;
     double exit_ramp_ = 0.0;
     double exit_hold_ = 0.0;
@@ -347,6 +382,8 @@ protected:
     double mocap_lowpass_ = 0.0;   ///< 0..1 velocity smoothing, 0 = none
     double mocap_timeout_ = 0.2;   ///< seconds without a pose before refusing; 0 = never
     rclcpp::Time mocap_last_rx_;
+    /// Holds an external world estimate's glitches out of the observation.
+    g1::difftrack::WorldStateGuard world_guard_;
 
     // --- optional world-state source: onboard state estimator (nav_msgs/Odometry) ---
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -375,7 +412,7 @@ protected:
     struct LogColumns
     {
         int t, t_wall, step, clip_step, phase, mode, policy_tick, state_tick;
-        int world_valid, world_age;
+        int world_valid, world_age, world_guard_offset, world_guard_active;
         int root_pos, root_quat, root_lin_vel, root_ang_vel;
         int ref_root_pos, ref_root_quat, ref_dof_pos;
         int imu_quat, imu_gyro, imu_accel;

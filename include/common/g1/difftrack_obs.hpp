@@ -115,6 +115,12 @@ namespace cpp_control::g1::difftrack {
         // existed, which is why they are read with defaults.
         std::string trainRun;
         std::string variant;
+        // Which algorithm trained the policy: forl_shac or ppo. Nothing here
+        // depends on it -- the export folds either one's observation
+        // normalisation into policy.onnx -- it is reported so a run says which
+        // policy it measured. A config without it predates PPO support, when
+        // the exporter read forl checkpoints only, so that is the default.
+        std::string trainAlg;
         std::string modelName;   // policy.onnx, relative to the config directory
         std::string motionName;  // motion.bin,  relative to the config directory
         int checkpointIter = -1;
@@ -226,17 +232,33 @@ namespace cpp_control::g1::difftrack {
     DiffTrackState toReferenceFrame(const DiffTrackState &world, const MotionAnchor &anchor);
 
     /**
-     * One synthesised reference frame of the lead-in, already placed in the
-     * world (the anchor has been applied), in the same pieces the clip table
-     * stores: root pose, local joint rotations as tan-norm 6-vectors, and key
-     * points relative to the root.
+     * One SYNTHESISED reference frame -- a lead-in step, a blend-in step or a
+     * blend-out step -- already placed in the world (the anchor has been
+     * applied), in the same pieces the clip table stores: root pose, local joint
+     * rotations as tan-norm 6-vectors, and key points relative to the root.
+     *
+     * Anywhere one of these exists for an episode step it REPLACES the clip's
+     * own frame at that step, for the lookahead the policy is shown and for the
+     * reference the tracking error is measured against alike.
      */
-    struct LeadInFrame {
+    struct SynthFrame {
         Eigen::Vector3d rootPos = Eigen::Vector3d::Zero();
         Eigen::Quaterniond rootQuat = Eigen::Quaterniond::Identity();
         Eigen::VectorXd dofPos;         // (numActions), for the ghost/diagnostics
         std::vector<float> jointRot6;   // 6 * (numBodies - 1)
         std::vector<float> keyRel;      // 3 * numKeyPoints
+
+        /**
+         * Whether rootPos/rootQuat/keyRel already have the anchor in them.
+         *
+         * The lead-in is built in the WORLD (true): it is an approach from where
+         * the robot physically is, and the robot is not in the clip's frame. The
+         * blends are built in the CLIP's own frame (false) and are anchored on the
+         * way out, exactly as the clip's table is -- which is what lets them be
+         * read back through the IDENTITY anchor that `observe_in_reference_frame`
+         * uses, the thing the lead-in cannot do and is refused for.
+         */
+        bool anchored = true;
     };
 
     /**
@@ -341,6 +363,140 @@ namespace cpp_control::g1::difftrack {
         void clearLeadIn() { leadIn_.clear(); }
 
         /**
+         * Build a BLEND-IN: the clip's own first @p durationS of reference, eased
+         * onto the pose the robot is actually standing in.
+         *
+         * This is the lead-in's answer to the same problem -- a clip that starts
+         * mid-motion cannot be handed to a standing robot -- taken from the other
+         * end. A lead-in PREPENDS a synthesised approach, so the clip starts late
+         * and the policy spends the approach being asked to move slowly; a
+         * tracking policy has no slow gear, and that is the configuration measured
+         * to topple the robot in about a second.
+         *
+         * The blend-in delays nothing and slows nothing. The clip's clock runs at
+         * 1x from episode step 0, so every lookahead the policy is shown has the
+         * timing it trained on. What is interpolated is only the robot's
+         * DISAGREEMENT with clip frame 0, faded out on a smoothstep:
+         *
+         *     reference(j) = clip(j) + a(j) * (robot - clip(0))
+         *
+         * for the root position, the root orientation (as a rotation vector) and
+         * the joint angles alike, with a(0) = 1 and a(steps) = 0 and zero slope at
+         * both ends. Step 0 is therefore exactly the pose the robot is standing
+         * in, the clip's own motion is underneath from the first step, and the
+         * standing pose bleeds out from under it.
+         *
+         * WHERE THE CLIP IS PLACED is makeAnchor's placement, unchanged: frame 0
+         * on the robot. It is worth saying what is NOT done, because it is the
+         * obvious idea and it measured wrong. A standing robot cannot have the
+         * clip's entry velocity, so the clip looks like it should be set BACK by
+         * the travel the robot gives up while it accelerates -- the lead-in's
+         * trapezoid, half a metre on g1_fight. Measured, that makes things worse:
+         * the robot does not chase the reference root, it EXECUTES THE MOTION, and
+         * the motion carries the root the clip's own distance whatever the root
+         * reference says. Setting the clip back does not close the error, it opens
+         * a permanent one -- 0.47 m of standing offset for the rest of the run,
+         * against 0.1 m with the plain anchor.
+         *
+         * MEASURED, on unitree_mujoco from the SONIC stand, ground-truth world
+         * state, `A` pressed after a 4 s settle:
+         *
+         *     g1_fight      no blend     falls at clip step  73/748, max err 1.82 m
+         *                   0.3 s                            95/748,         1.74 m
+         *                   0.5 s                           114/748,         0.70 m
+         *                   1.0 s                           113/748,         0.76 m
+         *                   1.5 s                            61/748,         1.34 m
+         *                   2.5 s                            58/748,         1.40 m
+         *     g1_dance15s   no blend     650/650 clean, mean err 0.175 m
+         *                   1.0 s        650/650 clean,          0.138 m
+         *
+         * so around 1 s, and it is a real optimum rather than a monotone knob:
+         * too short leaves the step change in, too long leaves the reference in a
+         * pose that is neither the robot's nor the clip's for long enough to
+         * matter. It does NOT make g1_fight survivable from a stand -- see
+         * docs/trackers/difftrack_running.md for what that clip's opening costs
+         * and why RSI gets away with it.
+         *
+         * @p durationS <= 0 clears any blend-in and gives the plain anchor of
+         * makeAnchor(). @p matchYaw is makeAnchor()'s, with the same caveat. The
+         * anchor is returned because the frames are built in the clip's frame and
+         * the caller needs the placement they will be read back through.
+         */
+        MotionAnchor buildBlendIn(const DiffTrackState &robot, double durationS,
+                                  bool matchYaw);
+
+        /**
+         * Build a BLEND-OUT: the last @p durationS of the played reference, eased
+         * off the clip and onto a STANDING pose.
+         *
+         * The mirror of the blend-in, and it exists for the mirror problem. A clip
+         * does not end anywhere a humanoid can stand -- mid-stride, in single
+         * support, at up to 1.8 m/s -- and the rest state has to catch the robot
+         * from there. Freezing the reference instead (`exit_hold`) measures worse
+         * than doing nothing at all: a tracking policy parked on a single-support
+         * frame does not brake, it flails.
+         *
+         * So the reference is given somewhere to go: over the last @p durationS of
+         * the run it is INTERPOLATED onto a frame the robot can be handed over
+         * from,
+         *
+         *     reference(j) = (1 - a(j)) * clip(j) + a(j) * stand
+         *
+         * with a(0) = 0 and a(steps) = 1, zero slope at both ends, where `stand`
+         * is
+         *
+         *   joint angles      the export's own default pose -- the pose the rest
+         *                     state is about to ask for, whichever engine backs it.
+         *   root orientation  upright, on the heading the clip has at its last
+         *                     played frame: the yaw is kept, the lean goes to zero.
+         *   root position     that frame's own horizontal position, at the height
+         *                     the default pose stands at with its feet on the floor
+         *                     the clip is on (standRootHeight). Keeping the
+         *                     position means the run still ends where it would have
+         *                     ended, so what this changes is the POSE it finishes
+         *                     in and not how far it got -- and the reference comes
+         *                     to rest there, because a smoothstep onto a fixed
+         *                     point has zero velocity at the end.
+         *
+         * The interpolation is the one asymmetry with the blend-in, which ADDS a
+         * fading offset to the clip instead. That is deliberate: the blend-in wants
+         * the clip's full amplitude present from the first step, and the blend-out
+         * wants it damped out, which is what "comes to rest" means. Adding an
+         * offset here would leave the clip dancing at full amplitude into the last
+         * step and then ask the reference to reach the standing pose in one of them.
+         *
+         * MEASURED on g1_dance15s (13 s budget, SONIC stand, ground truth): the
+         * reference's distance from the default pose over the last second goes
+         * 2.94 -> 1.94 -> 0.91 -> 0.15 rad with a 1 s blend-out against
+         * 3.07 -> 3.29 -> 2.19 without, and the robot arrives at the handover 1.2
+         * rad from the stand's pose rather than 2.2. The run itself is unharmed:
+         * 650/650 clean either way, mean root error 0.138 m with, 0.175 m without.
+         *
+         * @p lastEpisodeStep is the last step that will be PLAYED, which is not
+         * the clip's last frame when `play_duration` cuts the run short -- the
+         * blend has to land on the step the handover actually happens at.
+         * @p durationS <= 0 clears any blend-out.
+         */
+        void buildBlendOut(int lastEpisodeStep, double durationS);
+
+        /** Discard both blends (episode restart). */
+        void clearBlends() {
+            blendIn_.clear();
+            blendOut_.clear();
+            blendOutFirst_ = -1;
+        }
+
+        /** Control steps the blend-in covers; 0 if there is none. */
+        int blendInSteps() const {
+            return blendIn_.empty() ? 0 : static_cast<int>(blendIn_.size()) - 1;
+        }
+
+        /** Control steps the blend-out covers; 0 if there is none. */
+        int blendOutSteps() const {
+            return blendOut_.empty() ? 0 : static_cast<int>(blendOut_.size()) - 1;
+        }
+
+        /**
          * Policy action -> joint position target, in POLICY joint order.
          * target = default + action_scale * action, optionally clipped, exactly
          * as utils/actuator_params.py:process_policy_actions_numpy does.
@@ -386,9 +542,47 @@ namespace cpp_control::g1::difftrack {
         // lookahead reads across the handover without a special case -- which is
         // why leadInSteps() is one less than the table's length, and clip step k
         // sits at episode step leadInSteps() + k.
-        std::vector<LeadInFrame> leadIn_;
+        std::vector<SynthFrame> leadIn_;
+
+        // The blend-in, indexed by episode step from 0. Unlike the lead-in these
+        // OVERLAY the clip rather than preceding it: entry j is what episode step
+        // j shows instead of clip frame j - leadInSteps(), and the clip's clock is
+        // untouched. Entry blendInSteps() is the clip's own frame there, so the
+        // lookahead steps off the end of the table onto the clip with nothing to
+        // match up.
+        std::vector<SynthFrame> blendIn_;
+
+        // The blend-out, and the episode step its first entry covers. Its LAST
+        // entry is the standing frame the run ends on; there is no clip frame
+        // after it to be continuous with, because that is the point.
+        std::vector<SynthFrame> blendOut_;
+        int blendOutFirst_ = -1;
 
         bool loadMotion(const std::string &path, std::string &error);
+
+        /** True when any synthesised frame exists, i.e. a step may not be a clip frame. */
+        bool hasSynthFrames() const {
+            return !leadIn_.empty() || !blendIn_.empty() || !blendOut_.empty();
+        }
+
+        /**
+         * The synthesised frame that stands in for the clip at @p episodeStep, or
+         * nullptr when that step is the clip's own. The one place the three tables
+         * are resolved, so the lookahead, the reference readout and the error
+         * cannot disagree about what the policy was shown.
+         */
+        const SynthFrame *synthFrame(int episodeStep) const;
+
+        /**
+         * Root height at which the default pose stands with its feet on the floor
+         * the clip is on -- the floor being the lowest any body gets over the
+         * whole clip, since the tables are not referenced to z = 0.
+         *
+         * The blend-out's target height. Taking the clip's own root height at the
+         * last frame instead would hand the rest state a robot crouched, leaping
+         * or mid-fall, wherever the clip happened to stop.
+         */
+        double standRootHeight() const;
 
         /** Clamp a step index into the clip, matching LoopMode.CLAMP. */
         int clampStep(int clipStep) const;
@@ -406,7 +600,96 @@ namespace cpp_control::g1::difftrack {
                        Eigen::VectorXd &dofPos) const;
 
         /** Fill a lead-in frame's rot6/key blocks from an already-placed pose. */
-        void encodeFrame(LeadInFrame &frame) const;
+        void encodeFrame(SynthFrame &frame) const;
+    };
+
+    /** Settings for WorldStateGuard. Defaults are the deployed ones. */
+    struct WorldStateGuardConfig {
+        bool enabled = true;
+        /** Metres of horizontal motion the reference does not explain ... */
+        double maxUnexplainedM = 0.5;
+        /** ... that may pass within any window this long. */
+        double windowS = 0.2;
+        /** While a correction is fresh: cap on |v_xy - v_ref_xy|, m/s. */
+        double velDeviationMps = 0.5;
+        /** How long a correction stays "fresh" after the last rejection, s. */
+        double holdS = 0.5;
+        /** Control period the guard is stepped at, s. */
+        double dt = 0.02;
+    };
+
+    /**
+     * Keeps a GLITCHING world-state estimate out of the observation.
+     *
+     * The onboard estimator (docker/estimator) does not only drift: at the
+     * takeoff and landing of a jump its horizontal position teleports 1.3-2.4 m
+     * within 0.1-0.2 s, with a ~2 m/s horizontal velocity error alongside, and
+     * the error stays. A policy that has only ever seen its own tracking error
+     * (never above 0.4 m) reads that as the robot being far off the clip and
+     * lunges after it -- which is how g1_jumps21 falls on the estimator and
+     * never on ground truth.
+     *
+     * What the guard asks of each control tick is how far the robot moved in xy
+     * BEYOND what the reference moved. On ground truth, summed over any 0.2 s,
+     * that stays below 0.39 m on every shipped clip -- g1_run and its bundle
+     * variant included, at up to 3.75 m/s -- while the glitches reach 2.1 m.
+     * So at most maxUnexplainedM of it passes in any windowS; the excess is held
+     * out as a persistent xy correction, since the estimator's error does not
+     * come back on its own. A later jump the other way (the estimate snapping
+     * back) is excess too and cancels it. Height is left alone.
+     *
+     * While a correction is fresh the horizontal velocity is also held within
+     * velDeviationMps of the reference's: the glitch's velocity error outlasts
+     * the position jump. Outside a glitch the velocity passes untouched --
+     * genuine deviations from the reference velocity reach 1.4 m/s p99 on
+     * g1_run, too much to cap permanently.
+     *
+     * Step it once per control tick, in the frame the reference is placed in,
+     * and reset() it whenever the clip is re-anchored.
+     */
+    class WorldStateGuard {
+    public:
+        void configure(const WorldStateGuardConfig &cfg);
+        const WorldStateGuardConfig &config() const { return cfg_; }
+
+        /** Forget everything: no correction, empty window, zeroed statistics. */
+        void reset();
+
+        /**
+         * Correct one tick in place (x and y of both vectors only).
+         * @param refPos reference root position for this tick, same frame.
+         * @param gate   false: take no new rejections (the correction held so far
+         *               still applies) -- for ticks whose reference is not moving
+         *               with the robot, such as a frozen clock.
+         */
+        void apply(Eigen::Vector3d &rootPos, Eigen::Vector3d &rootLinVelWorld,
+                   const Eigen::Vector3d &refPos, bool gate = true);
+
+        const Eigen::Vector2d &offset() const { return offset_; }
+        bool rejectedThisTick() const { return rejected_now_ > 0.0; }
+        double rejectedThisTickM() const { return rejected_now_; }
+        bool velocityClampedThisTick() const { return vel_clamped_now_; }
+        double maxOffsetM() const { return max_offset_; }
+        int rejectTicks() const { return reject_ticks_; }
+        int velocityClampTicks() const { return vel_clamp_ticks_; }
+
+    private:
+        WorldStateGuardConfig cfg_;
+        int window_ticks_ = 10;
+        int hold_ticks_ = 25;
+        std::vector<double> accepted_;   ///< ring buffer, |accepted unexplained step|
+        int head_ = 0;
+        bool have_prev_ = false;
+        Eigen::Vector2d prev_raw_ = Eigen::Vector2d::Zero();
+        Eigen::Vector2d prev_ref_ = Eigen::Vector2d::Zero();
+        Eigen::Vector2d offset_ = Eigen::Vector2d::Zero();
+        int ticks_since_reject_ = 0;
+        bool ever_rejected_ = false;
+        double rejected_now_ = 0.0;
+        bool vel_clamped_now_ = false;
+        double max_offset_ = 0.0;
+        int reject_ticks_ = 0;
+        int vel_clamp_ticks_ = 0;
     };
 
 }  // namespace cpp_control::g1::difftrack

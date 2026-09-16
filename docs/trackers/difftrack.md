@@ -12,8 +12,8 @@ builder is a port of that one and is held to the same golden trace.
 
 | stage | where | what |
 |---|---|---|
-| training | `diffsimrl`, `mode=train alg=forl_shac` + ADD | reference-conditioned tracking policy: `imitation.enable_tar_obs`, `imitation.global_obs` |
-| graph | `export_to_crl_unitree.export_policy_onnx` | one ONNX graph, observation normalisation folded in; input `obs`, output `actions` |
+| training | `diffsimrl`, `mode=train alg=forl_shac` or `alg=ppo` + ADD | reference-conditioned tracking policy: `imitation.enable_tar_obs`, `imitation.global_obs` |
+| graph | `export_to_crl_unitree.export_policy_onnx` | one ONNX graph, observation normalisation folded in (forl's `RunningMeanStd` or rsl_rl's `EmpiricalNormalization`, detected per run); input `obs`, output `actions`. The controller never needs to know which: `train_alg` in the config is provenance only |
 | motion | `export_to_crl_unitree.export_motion` | the clip resampled onto the 50 Hz control grid and reduced to the `tar_obs` pieces, plus the reference pose per step |
 | kinematics | `export_to_crl_humanoid_ros.export_fk` | MuJoCo's body tree for the 31 MimicKit bodies, so the controller can rebuild `char_obs` from joint encoders alone (self-tested against `data.xpos`, ~1e-15 m) |
 | exporter | `diffsimrl/code/scripts/export_to_drcl_cpp_control.py` | writes the directory below, plus a golden rollout for the parity self-test |

@@ -190,6 +190,17 @@ if(unitree_hg_FOUND OR messages_FOUND)
     target_link_libraries(difftrack_selftest
       cpp_control_difftrack ${ONNXRUNTIME_LIBRARIES})
 
+    # The yaw check needs neither ONNX Runtime nor a recorded trace: it holds the
+    # observation to its own symmetry, which is what the whole stand-entry path
+    # (anchor_yaw_to_robot + observe_in_reference_frame) rests on.
+    add_executable(difftrack_yaw_selftest tests/difftrack_yaw_selftest.cpp)
+    target_link_libraries(difftrack_yaw_selftest cpp_control_difftrack)
+
+    # WorldStateGuard: genuine motion passes untouched, an estimator glitch is
+    # held out. Synthetic -- needs no model, trace, ROS or ONNX Runtime.
+    add_executable(difftrack_guard_selftest tests/difftrack_guard_selftest.cpp)
+    target_link_libraries(difftrack_guard_selftest cpp_control_difftrack)
+
     add_executable(g1_difftrack_node src/tasks/tracker/g1_difftrack.cpp)
     target_link_libraries(g1_difftrack_node cpp_control_g1 cpp_control_difftrack)
     # nav_msgs is REQUIRED, unlike optitrack_msgs: the onboard estimator is the

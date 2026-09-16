@@ -137,6 +137,8 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
     entry_mode_ = this->declare_parameter("entry", entry_mode_);
     entry_ramp_ = this->declare_parameter("entry_ramp", entry_ramp_);
     lead_in_duration_ = this->declare_parameter("lead_in_duration", lead_in_duration_);
+    motion_blend_in_ = this->declare_parameter("motion_blend_in", motion_blend_in_);
+    motion_blend_out_ = this->declare_parameter("motion_blend_out", motion_blend_out_);
     play_duration_ = this->declare_parameter("play_duration", play_duration_);
     exit_ramp_ = this->declare_parameter("exit_ramp", exit_ramp_);
     exit_hold_ = this->declare_parameter("exit_hold", exit_hold_);
@@ -155,6 +157,19 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
         fall_height_ = cfg.terminationHeight;
     mocap_lowpass_ = this->declare_parameter("mocap_lowpass", mocap_lowpass_);
     mocap_timeout_ = this->declare_parameter("mocap_timeout", mocap_timeout_);
+    // The world-state guard: keeps an estimator's position glitch out of the
+    // observation. Applies to the external sources (odom, mocap) only, while
+    // tracking; see WorldStateGuard in difftrack_obs.hpp for the numbers.
+    {
+        g1::difftrack::WorldStateGuardConfig gc;
+        gc.enabled = this->declare_parameter("world_guard", gc.enabled);
+        gc.maxUnexplainedM = this->declare_parameter("world_guard_max_m", gc.maxUnexplainedM);
+        gc.windowS = this->declare_parameter("world_guard_window_s", gc.windowS);
+        gc.velDeviationMps = this->declare_parameter("world_guard_vel_dev", gc.velDeviationMps);
+        gc.holdS = this->declare_parameter("world_guard_hold_s", gc.holdS);
+        gc.dt = cfg.controlDt;
+        world_guard_.configure(gc);
+    }
     auto_engage_ = this->declare_parameter("auto_engage", auto_engage_);
     auto_engage_delay_ = this->declare_parameter("auto_engage_delay", auto_engage_delay_);
     exit_when_finished_ = this->declare_parameter("exit_when_finished", exit_when_finished_);
@@ -415,6 +430,18 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                      ? "gains fade to the hold gains over " + std::to_string(exit_ramp_) +
                            "s, then the rest state"
                      : std::string("straight to the rest state (no gain ramp)");
+    // The reference's own ends, as against the gain/arm handover below: what the
+    // POLICY is shown, not what is done to the command afterwards.
+    std::string blend_desc;
+    if (motion_blend_in_ > 0.0)
+        blend_desc = "in " + std::to_string(motion_blend_in_) +
+                     "s (reference eased onto the robot's pose at engage)";
+    if (motion_blend_out_ > 0.0)
+        blend_desc += (blend_desc.empty() ? "" : ", ") + std::string("out ") +
+                      std::to_string(motion_blend_out_) +
+                      "s (reference eased onto a standing pose before the handover)";
+    if (blend_desc.empty())
+        blend_desc = "off — the reference is the clip, from its first frame to its last";
     std::string arm_desc = "off — the rest state takes every joint on the tick the clip ends";
     if (arm_blend_ > 0.0)
     {
@@ -426,11 +453,12 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
     }
     RCLCPP_INFO(this->get_logger(),
                 "difftrack loaded %s\n"
-                "  run          %s%s%s\n"
+                "  run          %s%s%s  alg=%s\n"
                 "  motion       %s (%d steps, %.2fs%s)\n"
                 "  obs          %d = %d char + %zu x %d tar\n"
                 "  gains        policy kp %.0f-%.0f kd %.1f-%.1f | hold kp %.0f-%.0f\n"
                 "  entry        %s (ramp %.1fs, lead-in %.2fs)\n"
+                "  motion blend %s\n"
                 "  anchor       %s%s, observation in %s frame\n"
                 "  play         %s\n"
                 "  rest state   %s%s\n"
@@ -438,6 +466,7 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                 "  arm blend    %s",
                 model_dir_.c_str(), cfg.sourceRun.c_str(),
                 cfg.variant.empty() ? "" : "  variant=", cfg.variant.c_str(),
+                cfg.trainAlg.c_str(),
                 cfg.motionFile.c_str(), cfg.clipSteps, cfg.motionLengthS,
                 builder_.loops() ? ", LOOPING" : "",
                 cfg.numObs, cfg.charObsDim, cfg.tarObsSteps.size(), cfg.tarFeatDim,
@@ -446,6 +475,7 @@ G1DiffTrackNode::G1DiffTrackNode(const std::string& node_name) : G1Node(node_nam
                 *std::min_element(kps_.begin(), kps_.end()),
                 *std::max_element(kps_.begin(), kps_.end()),
                 entry_mode_.c_str(), entry_ramp_, lead_in_duration_,
+                blend_desc.c_str(),
                 anchor_motion_to_robot_ ? "clip moved onto the robot" : "clip at its recorded pose",
                 anchor_motion_to_robot_ && anchor_yaw_to_robot_ ? " (yaw + position)" : "",
                 observe_in_reference_frame_ ? "the clip's" : "the world",
@@ -833,7 +863,11 @@ void G1DiffTrackNode::engage_reset()
     fell_ = false;
     fell_at_step_ = 0;
     anchor_ = MotionAnchor{};
+    // A new anchor is a new baseline: whatever the guard held out belonged to
+    // the last placement of the clip.
+    world_guard_.reset();
     builder_.clearLeadIn();
+    builder_.clearBlends();
     // `A` during the interpolation: the clip owns the arms again from this tick.
     arm_blending_ = false;
 
@@ -896,18 +930,23 @@ void G1DiffTrackNode::resolve_anchor(const DiffTrackState& s)
     // reference along behind the robot and leave nothing to track.
     const auto& cfg = builder_.config();
 
+    // The lead-in used to be refused here alongside observe_in_reference_frame,
+    // because its table was synthesised already placed in the world and could not
+    // be read back through the identity anchor the reference-frame observation
+    // uses. It is built in the clip's own frame now, as the blends are, so the
+    // two compose.
     double lead_in = lead_in_duration_;
-    if (lead_in > 0.0 && observe_in_reference_frame_)
+
+    // The blend-in and the lead-in are two answers to one question and cannot
+    // both be in force: each solves the anchor's translation for its own
+    // approach, and the lead-in owns episode step 0 outright.
+    double blend_in = motion_blend_in_;
+    if (blend_in > 0.0 && lead_in > 0.0)
     {
-        // The lead-in table is synthesised already placed in the world, so it
-        // cannot be read back through the identity anchor the reference-frame
-        // observation uses. Supporting both would mean synthesising it in the
-        // clip's frame instead; it measures worse than no lead-in at all, so it
-        // is refused rather than half-implemented.
         RCLCPP_WARN(this->get_logger(),
-                    "lead_in_duration %.2fs is not supported together with "
-                    "observe_in_reference_frame; running without a lead-in.",
-                    lead_in);
+                    "motion_blend_in %.2fs and lead_in_duration %.2fs are alternatives, "
+                    "not a pair; running with the blend-in alone.",
+                    blend_in, lead_in);
         lead_in = 0.0;
     }
 
@@ -915,16 +954,69 @@ void G1DiffTrackNode::resolve_anchor(const DiffTrackState& s)
     {
         // With a lead-in the anchor is a consequence of the approach, not an
         // input to it: the clip has to land where the reference gets to after
-        // accelerating away from the robot, so buildLeadIn solves for both.
-        anchor_ = lead_in > 0.0
-                      ? builder_.buildLeadIn(s, lead_in, anchor_yaw_to_robot_)
-                      : builder_.makeAnchor(s.rootPos, s.rootQuat, 0, anchor_yaw_to_robot_);
+        // accelerating away from the robot, so buildLeadIn solves for both. The
+        // blend-in deliberately does NOT move the clip -- see buildBlendIn -- and
+        // returns makeAnchor's own placement; it goes through the builder anyway
+        // because it needs the anchor to build its frames in the clip's frame.
+        if (blend_in > 0.0)
+            anchor_ = builder_.buildBlendIn(s, blend_in, anchor_yaw_to_robot_);
+        else if (lead_in > 0.0)
+            anchor_ = builder_.buildLeadIn(s, lead_in, anchor_yaw_to_robot_);
+        else
+            anchor_ = builder_.makeAnchor(s.rootPos, s.rootQuat, 0, anchor_yaw_to_robot_);
         lead_in_steps_ = builder_.leadInSteps();
         RCLCPP_INFO(this->get_logger(),
                     "difftrack anchored the clip to the robot: yaw %+.1f deg, "
                     "translation [%+.2f %+.2f] m",
                     anchor_.yaw * 180.0 / M_PI, anchor_.translation.x(),
                     anchor_.translation.y());
+    }
+    else if (blend_in > 0.0)
+    {
+        // The blend-in interpolates the reference onto the robot, which only
+        // means anything if the clip has been brought to the robot first: with
+        // the clip left where it was recorded the robot is an arbitrary distance
+        // from frame 0 and the "blend" would be a teleport.
+        RCLCPP_WARN(this->get_logger(),
+                    "motion_blend_in %.2fs needs anchor_motion_to_robot; with the clip "
+                    "left where it was recorded there is nothing to blend onto. Running "
+                    "without it.",
+                    blend_in);
+    }
+    if (builder_.blendInSteps() > 0)
+        RCLCPP_INFO(this->get_logger(),
+                    "difftrack blend-in: the reference starts on the robot's own pose and "
+                    "eases onto the clip over %d steps (%.2fs). The clip's own clock runs "
+                    "at 1x from step 0 -- nothing is delayed, and nothing is played slow.",
+                    builder_.blendInSteps(), builder_.blendInSteps() * cfg.controlDt);
+
+    // The blend-out lands on the step the run actually ends at, which is the
+    // clip's last frame only when play_duration does not cut it short. A looping
+    // clip has no last frame and no natural end to blend onto, so it gets none.
+    if (motion_blend_out_ > 0.0)
+    {
+        if (play_steps_ == std::numeric_limits<int>::max())
+            RCLCPP_WARN(this->get_logger(),
+                        "motion_blend_out %.2fs needs an end to blend onto; this clip "
+                        "loops and play_duration is open-ended, so there is none.",
+                        motion_blend_out_);
+        else
+        {
+            builder_.buildBlendOut(lead_in_steps_ + play_steps_ - 1, motion_blend_out_);
+            if (builder_.blendOutSteps() > 0)
+                RCLCPP_INFO(this->get_logger(),
+                            "difftrack blend-out: the reference leaves the clip over the "
+                            "last %d steps (%.2fs) and comes to rest upright in the "
+                            "default pose, which is what the rest state is about to ask "
+                            "for.",
+                            builder_.blendOutSteps(),
+                            builder_.blendOutSteps() * cfg.controlDt);
+            else
+                RCLCPP_WARN(this->get_logger(),
+                            "motion_blend_out %.2fs does not fit: the run is %d steps and "
+                            "the blend-in already owns the front of it.",
+                            motion_blend_out_, play_steps_);
+        }
     }
     if (lead_in_steps_ > 0)
         RCLCPP_INFO(this->get_logger(),
@@ -990,10 +1082,11 @@ void G1DiffTrackNode::finish(const char* why)
     // of throttled log. Same fields as the crl-humanoid-ros port's SUMMARY.
     RCLCPP_INFO(this->get_logger(),
                 "SUMMARY motion=%s variant=%s steps=%d/%d mean_err=%.3f max_err=%.3f "
-                "min_height=%.3f fell_at=%s reason=%s",
+                "min_height=%.3f fell_at=%s reason=%s guard_max=%.2f guard_ticks=%d",
                 cfg.sourceRun.c_str(), cfg.variant.empty() ? "-" : cfg.variant.c_str(),
                 stat_steps_, play_steps_ == std::numeric_limits<int>::max() ? -1 : play_steps_,
-                stat_steps_ ? err_sum_ / stat_steps_ : 0.0, err_max_, min_height_, fell_at, why);
+                stat_steps_ ? err_sum_ / stat_steps_ : 0.0, err_max_, min_height_, fell_at, why,
+                world_guard_.maxOffsetM(), world_guard_.rejectTicks());
 
     // Snapshot for the run log, taken HERE rather than read at close: `A`
     // pressed during the tail runs engage_reset(), which clears every counter
@@ -1353,6 +1446,33 @@ RobotCommand G1DiffTrackNode::policy_control()
             return rest_command();
     }
 
+    // ── the reference this tick is measured against ──
+    //
+    // Straight into the run-log members: the row is written after the command
+    // has gone out, by which time episode_step_ has advanced and this reference
+    // is no longer the one that produced the action. Taken BEFORE the
+    // observation because the world-state guard needs it.
+    builder_.referencePose(episode_step_, anchor_, log_ref_pos_, log_ref_quat_, log_ref_dof_);
+
+    // ── the world-state guard ──
+    // Only for a pose that arrives from outside (the onboard estimator, mocap):
+    // the simulator's backend state cannot glitch. New rejections are taken
+    // while the clip's clock runs; a frozen clock (SETTLE) keeps the correction
+    // but has no moving reference to judge the robot's motion against.
+    if (world_pose_external_)
+    {
+        world_guard_.apply(s.rootPos, s.rootLinVelWorld, log_ref_pos_, phase_ == Phase::TRACK);
+        if (world_guard_.rejectedThisTick())
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                                 "difftrack world guard: step %d, the world estimate moved %.2f m "
+                                 "more than %.2f m in %.2f s beyond the reference; held out "
+                                 "(correction now [%+.2f %+.2f] m)",
+                                 clip_step, world_guard_.rejectedThisTickM(),
+                                 world_guard_.config().maxUnexplainedM,
+                                 world_guard_.config().windowS, world_guard_.offset().x(),
+                                 world_guard_.offset().y());
+    }
+
     // ── inference ──
     // In reference-frame mode the clip is fed to the policy where it was
     // RECORDED and the robot is brought to it, rather than the other way round.
@@ -1378,12 +1498,7 @@ RobotCommand G1DiffTrackNode::policy_control()
         act[p] = static_cast<double>(action[p]);
     builder_.actionToJointTarget(act, joint_target_);
 
-    // ── diagnostics, and the reference this tick was measured against ──
-    //
-    // Straight into the run-log members: the row is written after the command
-    // has gone out, by which time episode_step_ has advanced and this reference
-    // is no longer the one that produced the action.
-    builder_.referencePose(episode_step_, anchor_, log_ref_pos_, log_ref_quat_, log_ref_dof_);
+    // ── diagnostics (the reference was taken above, before the observation) ──
     log_action_ = act;
     log_clip_step_ = clip_step;
     log_phase_ = static_cast<int>(phase_);
@@ -1476,6 +1591,11 @@ void G1DiffTrackNode::record_setup()
         {"state_tick", 1},    // the plant's own counter, relative to the run's first
         {"world_valid", 1},   // the world pose was usable this tick
         {"world_age", 1},     // seconds since the last external world pose
+        // The world-state guard: the xy correction it is holding out of the
+        // state below (subtract it from root_pos to get what the policy saw),
+        // and whether it rejected or clamped anything on this tick.
+        {"world_guard_offset", 2},
+        {"world_guard_active", 1},
 
         // The world state the CONTROLLER used, after the staleness check and
         // any frame rotation — not the raw topic.
@@ -1545,6 +1665,8 @@ void G1DiffTrackNode::record_setup()
     col_.state_tick = recorder_->offset("state_tick");
     col_.world_valid = recorder_->offset("world_valid");
     col_.world_age = recorder_->offset("world_age");
+    col_.world_guard_offset = recorder_->offset("world_guard_offset");
+    col_.world_guard_active = recorder_->offset("world_guard_active");
     col_.root_pos = recorder_->offset("root_pos");
     col_.root_quat = recorder_->offset("root_quat");
     col_.root_lin_vel = recorder_->offset("root_lin_vel");
@@ -1696,6 +1818,10 @@ void G1DiffTrackNode::on_control_step(const RobotCommand& cmd)
             (!world_pose_external_ || mocap_timeout_ <= 0.0 || age <= mocap_timeout_);
         run_log::put(r, col_.world_valid, world_ok);
         run_log::put(r, col_.world_age, age);
+        run_log::put(r, col_.world_guard_offset, world_guard_.offset().x());
+        run_log::put(r, col_.world_guard_offset + 1, world_guard_.offset().y());
+        run_log::put(r, col_.world_guard_active,
+                     world_guard_.rejectedThisTick() || world_guard_.velocityClampedThisTick());
         run_log::put(r, col_.root_pos, robot_state_.base_pos_w.data(), 3);
         run_log::put(r, col_.root_quat, robot_state_.base_quat_w.data(), 4);
         run_log::put(r, col_.root_lin_vel, robot_state_.base_lin_vel_w.data(), 3);
@@ -1869,7 +1995,15 @@ std::string G1DiffTrackNode::record_meta_json(const char* closed_by) const
         .add("workflow", config_ ? config_->workflow : std::string())
         .add("lowstate_topic", config_ ? config_->lowstate_topic : std::string())
         .add("lowcmd_topic", config_ ? config_->lowcmd_topic : std::string())
-        .add("state_decimation", config_ ? config_->state_decimation : 0);
+        .add("state_decimation", config_ ? config_->state_decimation : 0)
+        .add("guard_enabled", world_pose_external_ && world_guard_.config().enabled)
+        .add("guard_max_m", world_guard_.config().maxUnexplainedM)
+        .add("guard_window_s", world_guard_.config().windowS)
+        .add("guard_vel_dev", world_guard_.config().velDeviationMps)
+        .add("guard_hold_s", world_guard_.config().holdS)
+        .add("guard_max_offset", world_guard_.maxOffsetM())
+        .add("guard_reject_ticks", world_guard_.rejectTicks())
+        .add("guard_vel_clamp_ticks", world_guard_.velocityClampTicks());
 
     run_log::Json exp;
     exp.add("model_dir", model_dir_)
@@ -1878,6 +2012,7 @@ std::string G1DiffTrackNode::record_meta_json(const char* closed_by) const
         .add("train_run", cfg.trainRun)
         .add("variant", cfg.variant)
         .add("checkpoint_iter", cfg.checkpointIter)
+        .add("train_alg", cfg.trainAlg)
         .add("motion_file", cfg.motionFile)
         .add("clip_steps", cfg.clipSteps)
         .add("motion_length_s", cfg.motionLengthS)
@@ -1911,6 +2046,8 @@ std::string G1DiffTrackNode::record_meta_json(const char* closed_by) const
     params.add("entry", entry_mode_)
         .add("entry_ramp", entry_ramp_)
         .add("lead_in_duration", lead_in_duration_)
+        .add("motion_blend_in", motion_blend_in_)
+        .add("motion_blend_out", motion_blend_out_)
         .add("play_duration", play_duration_)
         .add("play_steps", play_steps_ == std::numeric_limits<int>::max() ? -1 : play_steps_)
         .add("exit_hold", exit_hold_)
@@ -1930,7 +2067,12 @@ std::string G1DiffTrackNode::record_meta_json(const char* closed_by) const
     anchor.add("yaw", anchor_.yaw)
         .add("translation", std::vector<double>{anchor_.translation.x(), anchor_.translation.y()})
         .add("identity", anchor_.identity)
-        .add("lead_in_steps", lead_in_steps_);
+        .add("lead_in_steps", lead_in_steps_)
+        // The reference the error columns are against is the BLENDED one wherever
+        // these cover a step, so a file cannot be compared with one taken at other
+        // settings without them.
+        .add("blend_in_steps", builder_.blendInSteps())
+        .add("blend_out_steps", builder_.blendOutSteps());
 
     run_log::Json summary;
     summary.add("set", log_summary_.set)
@@ -1994,6 +2136,7 @@ std::string G1DiffTrackNode::record_index_json(const char* closed_by) const
         .add("motion", dir_name(model_dir_))
         .add("variant", cfg.variant)
         .add("train_run", cfg.trainRun)
+        .add("train_alg", cfg.trainAlg)
         .add("world", world_source)
         .add("host", std::string(host))
         .add("seconds", recorder_->rows() * cfg.controlDt)
