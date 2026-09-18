@@ -20,7 +20,7 @@
 #                until Ctrl-C. Implies -w (one motion, no summary).
 #   -e MODE      entry: rsi (default) or stand   — see below
 #   -d SECONDS   tracking budget: per measured run, or per `A` press under -s
-#                                                (default 20; ignored under -w)
+#                may be fractional (-d 12.5)     (default 20; ignored under -w)
 #   -r N         repeats per motion              (default 1; ignored under -w)
 #   -l SECONDS   lead-in: ramp the reference from rest onto the clip's entry
 #                velocity (rsi entry only)       (default 0)
@@ -458,9 +458,22 @@ if [ "$WORKFLOW" = "unitree" ]; then
   fi
 fi
 
+# -d TAKES A FRACTIONAL BUDGET. `play_duration` is a double the whole way down --
+# the launch argument is cast to float, the node holds it as a double and turns
+# it into steps with lround, and the run-log reservation reads it as seconds --
+# so `-d 12.5` was only ever refused by this line's integer arithmetic, which
+# died under `set -e` before anything started.
+#
 # The backstop has to cover a run that now takes its DURATION in REAL seconds,
-# plus the pose ramp and the settle dwell before tracking starts.
-TIMEOUT=$((DURATION * 3 + 120))
+# plus the pose ramp and the settle dwell before tracking starts. It stays a
+# whole number of seconds, rounded UP, because it is a coarse safety net and
+# `timeout` reads better that way.
+case "$DURATION" in
+  ''|*[!0-9.]*|*.*.*|.)
+    echo "-d wants seconds as a number, whole or fractional (20, 12.5), got '$DURATION'"
+    exit 2 ;;
+esac
+TIMEOUT=$(awk -v d="$DURATION" 'BEGIN { t = d * 3 + 120; printf "%d", (t == int(t) ? t : int(t) + 1) }')
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "$HERE/.." && pwd)"

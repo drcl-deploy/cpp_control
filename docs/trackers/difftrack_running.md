@@ -145,7 +145,7 @@ metres against the reference the policy was actually given.
 | `-w` | watch: one motion, no budget, no summary, viewer up until Ctrl-C |
 | `-e rsi` | (default) robot starts standing **on** the clip's first frame — the comparison against diffsimrl's own numbers |
 | `-e stand` | robot starts in the model's pose, holds the nominal pose, then picks the clip up — the hardware sequence |
-| `-d N` | tracking budget, seconds |
+| `-d N` | tracking budget, seconds — fractional is fine (`-d 12.5`) |
 | `-r N` | repeats per motion |
 | `-f` | free-run the simulator instead of pacing it to the wall clock — faster sweeps, identical physics, but the viewer plays at 1.4x-1.8x |
 | `-R` | record an mp4 per run into `cpp_control/recordings/`, named for the motion — the same recorder F9 drives, started at t=0 |
