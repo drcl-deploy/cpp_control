@@ -300,7 +300,10 @@ docker images | grep g1-estimator
 ### 2.4 Copy the scripts
 
 The image is self-contained; `run.sh` is not, and it is the thing that gets the
-network right. Either copy the package across or just the one script:
+network right. Copy the whole directory, not the one script: `run.sh` mounts its
+default parameter file, `ws/src/legged_odom/config/g1_dynamic.yaml`, from next
+to itself and refuses to start without it. Re-copy after any change to that file
+— the container reads it at start, so no image rebuild is needed.
 
 ```bash
 scp -r $PKG/docker/estimator unitree@192.168.123.164:~/difftrack-estimator
@@ -338,6 +341,11 @@ bash ~/difftrack-estimator/run.sh -i eth0
 
 `run.sh` uses `--network host`, which is required: docker's default bridge is a
 separate broadcast domain and DDS discovery does not cross it.
+
+It runs `g1_dynamic.yaml`, the contact model tuned for jumps and run (see
+[`difftrack_state_estimation.md` §10](../../docs/trackers/difftrack_state_estimation.md#10-estimator-parameters-per-clip)),
+for every clip — the startup line says `params=.../g1_dynamic.yaml`. `-c stock`
+runs the image's `g1.yaml` instead.
 
 Check it:
 
@@ -394,14 +402,18 @@ forever is harder to notice than one that stays down.
 -d ID      ROS_DOMAIN_ID (default: $ROS_DOMAIN_ID, else 0)
 -t TAG     image tag                    (default g1-estimator)
 -n NAME    container name               (default g1-estimator)
+-c FILE    legged_odom parameter file, mounted read-only
+           (default ws/src/legged_odom/config/g1_dynamic.yaml next to run.sh;
+           `stock` = the image's g1.yaml)
 -D         detached
 -q         no container log on stdout
 ```
 
 ### Node parameters
 
-`ws/src/legged_odom/config/g1.yaml`, and it is commented. The ones worth
-knowing:
+`ws/src/legged_odom/config/g1.yaml`, and it is commented; `g1_dynamic.yaml`,
+which `run.sh` runs by default, is the same file with two contact values
+changed. The ones worth knowing:
 
 | parameter | default | |
 |---|---|---|

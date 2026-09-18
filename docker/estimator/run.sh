@@ -9,9 +9,11 @@
 #   -d ID        ROS_DOMAIN_ID (default: $ROS_DOMAIN_ID, else 0)
 #   -t TAG       image tag (default g1-estimator)
 #   -n NAME      container name (default g1-estimator)
-#   -c FILE      run with this parameter file instead of the image's g1.yaml —
-#                mounted read-only, no image rebuild. A full legged_odom yaml,
-#                e.g. ws/src/legged_odom/config/g1_dynamic.yaml (jumps, run).
+#   -c FILE      the legged_odom parameter file, mounted read-only (no image
+#                rebuild). Default: ws/src/legged_odom/config/g1_dynamic.yaml
+#                next to this script — the contact model tuned for jumps, run
+#                and fight, and what the robot runs. `-c stock` runs the
+#                image's own g1.yaml instead.
 #   -D           detached; prints the container id and returns
 #   -q           quiet: no container log on stdout
 #   -h           this help
@@ -33,7 +35,10 @@ tag=g1-estimator
 name=g1-estimator
 detach=0
 quiet=0
-params=""
+# The default parameter file lives in the package, not the image, so this
+# script finds it relative to itself. Copy the whole docker/estimator directory
+# to the robot (README 2.4), not run.sh alone.
+params="$here/ws/src/legged_odom/config/g1_dynamic.yaml"
 
 while getopts "i:d:t:n:c:Dqh" opt; do
     case "$opt" in
@@ -90,13 +95,20 @@ if docker ps --format '{{.Names}}' | grep -qx "$name"; then
     exit 1
 fi
 
-# -c: the node straight from a mounted parameter file. The launch file only
-# knows files baked into the image, and a tuning change should not need a
-# rebuild. An explicit command after the options still wins.
+# The node straight from a mounted parameter file. The launch file only knows
+# files baked into the image, and a tuning change should not need a rebuild.
+# `-c stock` is the image's own launch file and g1.yaml. An explicit command
+# after the options still wins.
 cmd=("$@")
+[ "$params" = stock ] && params=""
 if [ -n "$params" ]; then
+    # A missing file is an error, never a quiet fall back to g1.yaml: the two
+    # estimators behave very differently through a jump, and nothing downstream
+    # would show which one is running.
     if [ ! -f "$params" ]; then
         echo "run.sh: no parameter file '$params'" >&2
+        echo "        Copy the whole docker/estimator directory next to run.sh, or pass" >&2
+        echo "        -c stock to run the image's g1.yaml." >&2
         exit 2
     fi
     run_args+=(-v "$(realpath "$params"):/estimator/params.yaml:ro")

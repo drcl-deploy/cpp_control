@@ -145,10 +145,11 @@
 #                 THAT. The same estimate, from the same container, that the
 #                 robot will run. Needs the image built once:
 #                     bash docker/estimator/build.sh
-#                 g1_jumps*/g1_run* run with the parameters tuned for jumping
-#                 and running (docker/estimator/.../config/g1_dynamic.yaml,
-#                 mounted with run.sh -c); everything else with the stock
-#                 g1.yaml. ESTIMATOR_PARAMS=stock|<file> overrides that.
+#                 g1_jumps*/g1_run*/g1_fight* run with the parameters tuned
+#                 for jumping and running (docker/estimator/.../config/
+#                 g1_dynamic.yaml, mounted with run.sh -c), which is also what
+#                 the robot runs; everything else with the stock g1.yaml.
+#                 ESTIMATOR_PARAMS=stock|<file> overrides that.
 #                 The controller's world-state guard (world_guard:=true,
 #                 WorldStateGuard in difftrack_obs.hpp) holds a glitching
 #                 estimate out of the observation on every clip.
@@ -478,8 +479,9 @@ TIMEOUT=$(awk -v d="$DURATION" 'BEGIN { t = d * 3 + 120; printf "%d", (t == int(
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "$HERE/.." && pwd)"
 ESTIMATOR_IMAGE=${ESTIMATOR_IMAGE:-g1-estimator}
-# The estimator's parameters. Jumps and run get the file tuned on them
-# (recordings/estimator_tuning/) whenever it exists; every other clip keeps the
+# The estimator's parameters. Jumps, run and fight get the file tuned on jumps
+# and run (recordings/estimator_tuning/) whenever it exists — the same file
+# docker/estimator/run.sh defaults to on the robot; every other clip keeps the
 # image's stock g1.yaml. ESTIMATOR_PARAMS overrides the choice for every clip:
 #   auto (default) | stock | <path to a legged_odom yaml>
 DYNAMIC_ESTIMATOR_PARAMS=$PKG/docker/estimator/ws/src/legged_odom/config/g1_dynamic.yaml
@@ -638,9 +640,8 @@ stop_estimator() {
   docker rm -f "$ESTIMATOR_CONTAINER" >/dev/null 2>&1 || true
 }
 start_estimator() {
-  local log=$1 params=${2:-}
-  local param_args=()
-  if [ -n "$params" ]; then param_args=(-c "$params"); fi
+  local log=$1 params=${2:-stock}
+  local param_args=(-c "$params")
   if ! docker image inspect "$ESTIMATOR_IMAGE" >/dev/null 2>&1; then
     echo "  no '$ESTIMATOR_IMAGE' image. Build it once:"
     echo "      bash $PKG/docker/estimator/build.sh"
@@ -864,11 +865,12 @@ PYCFG
     odom_args=()
     est_log="$LOGDIR/${motion}_${rep}_est.log"
     # Which estimator parameters this clip runs with (see ESTIMATOR_PARAMS).
-    est_params=""
+    # Always passed to run.sh explicitly: its own default is g1_dynamic.yaml.
+    est_params=stock
     case "$ESTIMATOR_PARAMS" in
       auto)
         case "$motion" in
-          g1_jumps*|g1_run*)
+          g1_jumps*|g1_run*|g1_fight*)
             if [ -f "$DYNAMIC_ESTIMATOR_PARAMS" ]; then est_params=$DYNAMIC_ESTIMATOR_PARAMS; fi ;;
         esac ;;
       stock) ;;
@@ -1149,7 +1151,7 @@ echo "world state: -E $ESTIMATOR$([ "$ESTIMATOR" = mixed ] && echo " (on the est
 viewer: $([ "$HEADLESS" = 1 ] && echo headless || echo window)"
 if [ "$ESTIMATOR" != "ground_truth" ]; then
   echo "estimator params: ESTIMATOR_PARAMS=$ESTIMATOR_PARAMS$([ "$ESTIMATOR_PARAMS" = auto ] && \
-echo " (g1_jumps*/g1_run*: $([ -f "$DYNAMIC_ESTIMATOR_PARAMS" ] && echo g1_dynamic.yaml || echo 'stock -- no g1_dynamic.yaml yet'); others: stock g1.yaml)")"
+echo " (g1_jumps*/g1_run*/g1_fight*: $([ -f "$DYNAMIC_ESTIMATOR_PARAMS" ] && echo g1_dynamic.yaml || echo 'stock -- no g1_dynamic.yaml yet'); others: stock g1.yaml)")"
 fi
 if [ "$RUN_LOG" = "1" ]; then
   echo "run logs: $RUN_LOG_DIR  (one npz per run, tagged sim2sim_${RUN_TAG_MODE})"

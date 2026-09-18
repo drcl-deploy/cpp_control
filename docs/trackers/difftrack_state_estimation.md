@@ -382,9 +382,11 @@ contact model (§10).
 ## 10. Estimator parameters per clip
 
 `docker/estimator/run.sh -c <file>` mounts a full `legged_odom` parameter file
-instead of the image's `g1.yaml` — no rebuild. `run_difftrack_sim2sim.sh` uses
-`ws/src/legged_odom/config/g1_dynamic.yaml` for `g1_jumps*` and `g1_run*`
-whenever that file exists and the stock `g1.yaml` for everything else;
+instead of the image's `g1.yaml` — no rebuild. Its default is
+`ws/src/legged_odom/config/g1_dynamic.yaml`, so that is what the robot runs, for
+every clip; `-c stock` is the image's `g1.yaml`. `run_difftrack_sim2sim.sh` uses
+`g1_dynamic.yaml` for `g1_jumps*`, `g1_run*` and `g1_fight*` whenever that file
+exists and the stock `g1.yaml` for everything else;
 `ESTIMATOR_PARAMS=stock|<file>` overrides the choice for every clip. The tuning
 that produced `g1_dynamic.yaml` — replaying ground-truth sensor bags into the
 container under candidate parameters and scoring against ground truth — lives in

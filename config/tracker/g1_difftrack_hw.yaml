@@ -31,7 +31,7 @@
 # Kalman filter over the robot's own IMU and encoders, in a container, which is
 # what docker/estimator builds:
 #
-#   bash docker/estimator/run.sh -i eth0            # publishes /odom
+#   bash docker/estimator/run.sh -i eth0            # publishes /odom (g1_dynamic.yaml)
 #   ros2 launch cpp_control g1_difftrack.launch.py motion:=g1_walk \
 #       config_path:=$(ros2 pkg prefix cpp_control)/share/cpp_control/config/tracker/g1_difftrack_hw.yaml \
 #       odom_topic:=/odom
