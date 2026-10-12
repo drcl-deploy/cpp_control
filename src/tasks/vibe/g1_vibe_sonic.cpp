@@ -145,6 +145,24 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
         attn_topic, 10);
   }
 
+  if (planner_) {
+    planner_status_sub_ = this->create_subscription<msg::PlannerStatus>(
+        "/vibe/planner/status",
+        rclcpp::QoS(1).best_effort().durability_volatile(),
+        [this](msg::PlannerStatus::SharedPtr) {
+          last_planner_ = std::chrono::steady_clock::now();
+          planner_seen_ = true;
+        });
+    planner_watchdog_ = this->create_wall_timer(
+        std::chrono::milliseconds(100), [this]() {
+          if (planner_seen_ && !planner_fresh()) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "planner heartbeat lost (>1 s); shutting down tracker");
+            rclcpp::shutdown();
+          }
+        });
+  }
+
   std::ostringstream queries;
   for (const auto& q : query_names_) queries << q << ' ';
   RCLCPP_INFO(this->get_logger(),
@@ -404,6 +422,12 @@ void G1VibeSonicNode::restore_stand_reference() {
   prepped_ = false;
 }
 
+bool G1VibeSonicNode::planner_fresh() const {
+  return planner_seen_ &&
+         std::chrono::steady_clock::now() - last_planner_ <
+             std::chrono::seconds(1);
+}
+
 void G1VibeSonicNode::on_button_a() {
   if (calibration_lock_) {
     enter_stand();
@@ -414,6 +438,10 @@ void G1VibeSonicNode::on_button_a() {
   // The planner supplies its own rate-limited lead-in. Here A is the explicit rollout
   // arm, not the open-loop Repose prep/track transition below.
   if (planner_) {
+    if (!planner_fresh()) {
+      RCLCPP_WARN(this->get_logger(), "A refused: waiting for planner status");
+      return;
+    }
     if (!allow_policy_entry()) return;
     G1SonicNode::on_button_a();
     return;

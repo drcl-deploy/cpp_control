@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <cpp_control/msg/planner_status.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <string>
@@ -66,6 +68,7 @@ class G1VibeSonicNode : public G1SonicNode {
   void enter_prep();
   bool motion_contract_ready() const;
   bool tokens_fresh() const;
+  bool planner_fresh() const;
   /// Put the nominal 1-frame clip back under stand (and re-engage onto it).
   void restore_stand_reference();
 
@@ -89,6 +92,12 @@ class G1VibeSonicNode : public G1SonicNode {
   int token_dim_ = 0;           ///< D from the kv port shape
   bool tokens_seen_ = false;
   rclcpp::Time last_token_time_;
+
+  // The direct ROS launch owns process shutdown; no external supervisor.
+  bool planner_seen_ = false;
+  std::chrono::steady_clock::time_point last_planner_;
+  rclcpp::Subscription<msg::PlannerStatus>::SharedPtr planner_status_sub_;
+  rclcpp::TimerBase::SharedPtr planner_watchdog_;
 
   // task command
   int goal_color_ = 0;

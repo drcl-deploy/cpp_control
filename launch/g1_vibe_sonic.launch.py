@@ -14,16 +14,17 @@ Usage:
     # offboard live camera + attention overlay:
     bash scripts/vibe/stream_vibes.sh
 
-Every path here is relative to $VIBE_ASSET_ROOT (setup.sh: <repo>/vibe), so a
+Every path here is relative to $VIBE_ASSET_ROOT, so a
 command line is one string on the desktop and on the Orin; absolute still wins.
 `artifact:=<run>[/<export>]` names a training run under models/ and finds the
 export inside it, whatever the run's own layout; `artifact_dir:=` still takes a
 directory. Either way it must hold a matching .onnx/.manifest.json pair, and
 multiple pairs need checkpoint:=<training step>.
 
-Prefer one of the task launch files, which selects a packaged artifact and
-pins expected_task_family. This generic entry point remains useful for export
-development; experiments should use a task wrapper, including Repose.
+For direct exporter outputs, pass policy_path:=... and encoder_path:=...;
+their same-stem manifests are discovered beside them. With planner:=true, the
+C++ tracker refuses rollout arming until planner status arrives and exits after
+one second of heartbeat loss. ROS launch then shuts down its sibling processes.
 """
 
 import glob
