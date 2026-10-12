@@ -32,7 +32,6 @@ find_package(unitree_hg QUIET)
 find_package(unitree_go QUIET)
 find_package(messages QUIET)
 find_package(vision_encoders QUIET)  # ImageTokens (vibe-sonic) + frame_wire.hpp
-find_package(OpenCV QUIET)           # the planner perception only
 
 if(unitree_hg_FOUND)
   message(STATUS "Found unitree_hg -- Unitree HG backend enabled")
@@ -108,7 +107,11 @@ add_library(cpp_control_deploy STATIC
   src/common/g1/sonic_stand.cpp
   thirdparty/cnpy/cnpy.cpp)
 target_include_directories(cpp_control_deploy PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/thirdparty>
+  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:include/cpp_control_vendor>
+  ${ONNXRUNTIME_INCLUDE_DIRS})
 target_link_libraries(cpp_control_deploy ${ONNXRUNTIME_LIBRARIES} yaml-cpp ZLIB::ZLIB)
 
 # config_loader resolves every yaml path through asset_path(), which lives in
@@ -249,76 +252,6 @@ if(unitree_hg_FOUND OR messages_FOUND)
   list(APPEND INSTALL_TARGETS g1_locomotion_node g1_textop_node g1_sonic_node)
 endif()
 
-# ── level 3: planners — repose (own process, soft real-time) ──
-# ROS-free algorithm + one thin node. OpenCV is the only new dependency and
-# covers resize, minAreaRect and the 3x3 symmetric eigen-solve alike.
-if(OpenCV_FOUND)
-  add_library(cpp_control_repose_planner STATIC
-    src/planners/repose/cfg.cpp
-    src/planners/repose/sight.cpp
-    src/planners/repose/clips.cpp
-    src/planners/repose/approach.cpp
-    src/planners/repose/table.cpp
-    src/planners/repose/writer.cpp)
-  target_include_directories(cpp_control_repose_planner PUBLIC ${OpenCV_INCLUDE_DIRS})
-  target_link_libraries(cpp_control_repose_planner cpp_control_deploy ${OpenCV_LIBS})
-
-  # Replay rig + bake: no robot, no ROS, no risk (docs/planners/repose/planner.md §8 P0).
-  add_executable(repose_planner_selftest tests/repose_planner_selftest.cpp)
-  target_link_libraries(repose_planner_selftest
-    cpp_control_repose_planner cpp_control_vibe_contract yaml-cpp)
-  if(BUILD_TESTING)
-    # The shipped yaml is part of the contract: the round-trip check reads it
-    # from the source tree, so a schema change that forgets a reader fails here.
-    add_test(NAME repose_planner_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim.yaml
-             --check-preset-parity)
-    add_test(NAME repose_planner_v8_config_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_real_v8.yaml)
-    add_test(NAME repose_planner_v85_config_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v8_5.yaml)
-    add_test(NAME repose_planner_v9_config_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9.yaml)
-    add_test(NAME repose_planner_v91_config_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9_1.yaml)
-    add_test(NAME repose_planner_v92_config_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9_2.yaml)
-    add_test(NAME repose_planner_v93_config_selftest COMMAND repose_planner_selftest
-             --config ${CMAKE_CURRENT_SOURCE_DIR}/config/repose_planner/g1_sim_v9_3.yaml)
-  endif()
-  list(APPEND INSTALL_TARGETS repose_planner_selftest)
-
-  if(unitree_hg_FOUND AND vision_encoders_FOUND)
-    add_executable(g1_repose_planner_node src/planners/repose/node.cpp)
-    # frame_wire.hpp is a plain header, not a rosidl artifact, so it rides the
-    # package's exported include dirs rather than its typesupport target.
-    target_include_directories(g1_repose_planner_node
-      PRIVATE ${vision_encoders_INCLUDE_DIRS})
-    target_link_libraries(g1_repose_planner_node
-      cpp_control_repose_planner cpp_control_vibe_contract yaml-cpp)
-    ament_target_dependencies(g1_repose_planner_node
-      rclcpp std_msgs unitree_hg vision_encoders)
-    rosidl_target_interfaces(g1_repose_planner_node
-      ${PROJECT_NAME} "rosidl_typesupport_cpp")
-    list(APPEND INSTALL_TARGETS g1_repose_planner_node)
-
-    add_executable(g1_repose_planner_observe_node src/planners/repose/observe_node.cpp)
-    target_include_directories(g1_repose_planner_observe_node
-      PRIVATE ${vision_encoders_INCLUDE_DIRS})
-    target_link_libraries(g1_repose_planner_observe_node
-      cpp_control_repose_planner yaml-cpp)
-    ament_target_dependencies(g1_repose_planner_observe_node
-      rclcpp sensor_msgs std_msgs unitree_hg vision_encoders)
-    rosidl_target_interfaces(g1_repose_planner_observe_node
-      ${PROJECT_NAME} "rosidl_typesupport_cpp")
-    list(APPEND INSTALL_TARGETS g1_repose_planner_observe_node)
-  else()
-    message(STATUS "repose planner disabled -- needs unitree_hg + vision_encoders")
-  endif()
-else()
-  message(STATUS "OpenCV NOT found -- planners disabled")
-endif()
-
 # ── Level 1 + tasks: mini_pi (needs messages) ────────────────
 if(messages_FOUND)
   add_library(cpp_control_mini_pi STATIC src/robots/mini_pi.cpp)
@@ -361,31 +294,23 @@ install(PROGRAMS
   scripts/vibe/replay_vibes.py
   scripts/vibe/replay_vibes.sh
   scripts/vibe/stream_vibes.sh
-  scripts/planners/repose/repose_run_console.sh
-  scripts/planners/repose/repose_console.py
-  scripts/planners/repose/repose_voice_keys.py
-  scripts/planners/repose/repose_observe_viewer.py
-  scripts/planners/repose/repose_record_observe.sh
-  scripts/planners/repose/repose_replay_observe.py
-  scripts/planners/repose/repose_replay_observe.sh
-  scripts/planners/repose/repose_stream_observe.sh
-  scripts/planners/repose/repose_validate_observe_bag.py
-  scripts/planners/repose/repose_check_observe.py
-  scripts/planners/repose/repose_check_observe.sh
-  scripts/planners/repose/repose_record_localization.sh
-  scripts/planners/repose/repose_export_observe_bag.py
-  scripts/planners/repose/repose_tune_observe.py
   scripts/planners/setup_sonic_kinematic.sh
   DESTINATION lib/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)
-  add_test(NAME repose_voice_keys_selftest
-    COMMAND /usr/bin/env python3
-      ${CMAKE_CURRENT_SOURCE_DIR}/scripts/planners/repose/repose_voice_keys.py
-      --self-test)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+# Shared deployment utilities used by independent planner packages.
+install(TARGETS cpp_control_deploy cpp_control_vibe_contract
+  EXPORT cpp_control_runtime ARCHIVE DESTINATION lib)
+install(DIRECTORY include/common DESTINATION include)
+install(FILES include/cpp_control/tasks/vibe/task_profile.hpp
+  DESTINATION include/cpp_control/tasks/vibe)
+install(FILES thirdparty/cnpy/cnpy.h DESTINATION include/cpp_control_vendor/cnpy)
+ament_export_targets(cpp_control_runtime HAS_LIBRARY_TARGET)
+ament_export_dependencies(yaml-cpp ZLIB)
 
 ament_package()
