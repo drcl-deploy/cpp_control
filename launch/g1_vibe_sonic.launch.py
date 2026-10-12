@@ -136,7 +136,25 @@ def _pairs(artifact_dir):
     return found
 
 
+def _explicit_pair(path, manifest=''):
+    """Resolve an exporter pair without changing either file."""
+    path = asset_path(path)
+    manifest = asset_path(manifest) if manifest else os.path.splitext(path)[0] + '.manifest.json'
+    if not path.endswith('.onnx') or not os.path.isfile(path) or not os.path.isfile(manifest):
+        raise RuntimeError('Expected an ONNX file and matching manifest: ' + path)
+    return path, manifest
+
+
 def _resolve_artifact(context):
+    explicit = LaunchConfiguration('policy_path').perform(context).strip()
+    sidecar = LaunchConfiguration('policy_manifest').perform(context).strip()
+    if explicit:
+        if any(LaunchConfiguration(key).perform(context).strip()
+               for key in ('artifact', 'artifact_dir', 'checkpoint')):
+            raise RuntimeError('Pass policy_path OR artifact/artifact_dir/checkpoint.')
+        return _explicit_pair(explicit, sidecar)
+    if sidecar:
+        raise RuntimeError('policy_manifest requires policy_path.')
     artifact_dir = _artifact_dir(context)
     checkpoint = LaunchConfiguration('checkpoint').perform(context).strip()
 
@@ -170,16 +188,29 @@ def _launch_runtime(context, encoder_pkg):
     onnx_path, manifest_path = _resolve_artifact(context)
     motion_path = asset_path(LaunchConfiguration('motion_path').perform(context).strip())
     encoder_config = os.path.join(encoder_pkg, 'config', 'encoder.yaml')
+    encoder_path = LaunchConfiguration('encoder_path').perform(context).strip()
+    encoder_manifest = LaunchConfiguration('encoder_manifest').perform(context).strip()
+    encoder_tag = LaunchConfiguration('encoder_tag').perform(context)
+    encoder_params = {
+        'model': encoder_tag,
+        'camera_ip': LaunchConfiguration('camera_ip'),
+        'tokens_topic': LaunchConfiguration('tokens_topic'),
+    }
+    if encoder_path:
+        encoder_path, encoder_manifest = _explicit_pair(encoder_path, encoder_manifest)
+        with open(encoder_manifest, 'r') as stream:
+            encoder_tag = json.load(stream)['tag']
+        encoder_params.update(model_path=encoder_path, manifest_path=encoder_manifest,
+                              model=encoder_tag)
+    elif encoder_manifest:
+        raise RuntimeError('encoder_manifest requires encoder_path.')
 
     encoder = Node(
         package='vision_encoders',
         executable='encoder_node',
         name='encoder_node',
         output='screen',
-        parameters=[encoder_config, {
-            'model': LaunchConfiguration('encoder_tag'),
-            'camera_ip': LaunchConfiguration('camera_ip'),
-        }],
+        parameters=[encoder_config, encoder_params],
         on_exit=Shutdown(reason='Vibe encoder exited'),
     )
 
@@ -197,7 +228,7 @@ def _launch_runtime(context, encoder_pkg):
             'il_ordered': LaunchConfiguration('il_ordered'),
             'tokens_topic': LaunchConfiguration('tokens_topic'),
             'reference_topic': LaunchConfiguration('reference_topic'),
-            'encoder_tag': LaunchConfiguration('encoder_tag'),
+            'encoder_tag': encoder_tag,
             'expected_task_family': LaunchConfiguration('expected_task_family'),
             'goal_color': LaunchConfiguration('goal_color'),
             'prep_joints': LaunchConfiguration('prep_joints'),
@@ -263,6 +294,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=default_config),
+        DeclareLaunchArgument('policy_path', default_value='',
+                              description='Explicit exported policy ONNX; relative to VIBE_ASSET_ROOT'),
+        DeclareLaunchArgument('policy_manifest', default_value=''),
+        DeclareLaunchArgument('encoder_path', default_value='',
+                              description='Explicit exported encoder ONNX; bypasses legacy tag lookup'),
+        DeclareLaunchArgument('encoder_manifest', default_value=''),
         DeclareLaunchArgument(
             'artifact', default_value='',
             description='shorthand for an export under $VIBE_ASSET_ROOT/models: '
