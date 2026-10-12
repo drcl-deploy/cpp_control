@@ -102,12 +102,12 @@ several, launch fails instead of guessing; add `checkpoint:=<training_step>`.
 
 Closed-loop Repose runs the same way through `g1_repose_planner.launch.py`, which
 adds the planner process to this same runtime — see
-[docs/planners/repose/experiments.md](../planners/repose/experiments.md) for the two things that
+[docs/planners/repose/experiments.md](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/experiments.md) for the two things that
 differ (depth on the camera wire, and the console terminal).
 
 To collect labeled RGB-D snapshots while the robot remains locked in nominal
 stand, use the separate sim2sim or hardware workflow in
-[Repose color calibration](../planners/repose/color_calibration.md). It has its own
+[Repose color calibration](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/color_calibration.md). It has its own
 `repose_stream_observe.sh`/`repose_replay_observe.sh` pair and bag directory.
 
 For Repose, UOLM, or PerLoco, stage the motion after the task is running:
@@ -165,13 +165,13 @@ Calibration bags are intentionally separate from experiment bags. Record and
 review them with:
 
 ```bash
-bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_stream_observe.sh record
-bash ~/unitree_ros2/cyclonedds_ws/src/cpp_control/scripts/planners/repose/repose_replay_observe.sh
+ros2 run sledgehammer repose_stream_observe.sh record
+ros2 run sledgehammer repose_replay_observe.sh
 ```
 
 They default to `~/unitree_ros2/bags/repose_observe/`; the complete hardware and
 sim2sim procedure is in
-[Repose color calibration](../planners/repose/color_calibration.md).
+[Repose color calibration](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/color_calibration.md).
 
 ## Controls and shutdown
 

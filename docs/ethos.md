@@ -136,4 +136,4 @@ cpp_control/
    `launch/<robot>_<task>_planner.launch.py`. Talk to the controller only over
    `MotionReference` / `ControllerStatus`, and keep the algorithm ROS-free so a
    selftest can replay it with no robot — see
-   [docs/planners/repose/](planners/repose/planner.md).
+   [docs/planners/repose/](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/planner.md).
