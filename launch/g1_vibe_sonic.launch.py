@@ -273,7 +273,6 @@ def _launch_runtime(context, encoder_pkg):
             'bind_address': LaunchConfiguration('bridge_address'),
             'config_path': LaunchConfiguration('bridge_config'),
         }],
-        on_exit=Shutdown(reason='Vibe telemetry bridge exited'),
     )
 
     return [
@@ -337,7 +336,7 @@ def generate_launch_description():
             description='CDR/TCP channel profile used by server and client'),
         DeclareLaunchArgument(
             'enable_bridge', default_value='true',
-            description='start telemetry server (disable only for no-telemetry benchmarks)'),
+            description='start optional telemetry server; disable when running it separately'),
         DeclareLaunchArgument('expected_task_family', default_value=''),
         DeclareLaunchArgument('goal_color', default_value='0',
                               description='goal up-face color index (one-hot 6)'),

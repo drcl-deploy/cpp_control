@@ -31,7 +31,7 @@ The short of it:
 ```
 model.onnx                      # the graph, all preprocessing baked in
 model.manifest.json             # vibe.onnx.v1:
-  control.step_dt               #   asserted vs control_dt
+  control.step_dt               #   checked vs control_dt; mismatch currently warns
   action.{joint_names,scale,default_joint_pos,stiffness,damping}
   inputs[].terms[]              #   name / dim / offset / history per port
   outputs[]                     #   "actions" first; extras (e.g. "attn") ride along

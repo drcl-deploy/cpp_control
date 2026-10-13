@@ -1,8 +1,14 @@
-# Vibe experiment workflow
+# ViBe experiment workflow (historical)
+
+Current release commands and environment setup are maintained in
+[vibe_ws](https://github.com/drcl-deploy/vibe_ws#usage). The paths and setup
+examples below describe the inherited unitree_ros2 workspace.
 
 Each Vibe task launch owns the complete experiment runtime: the CDR/TCP
 telemetry server, `encoder_node`, and one `g1_vibe_sonic_node`. Do not start a
 second encoder, bridge server, or controller. `Ctrl-C` stops all three.
+Use `enable_bridge:=false` when running the server separately. The bridge is
+optional: its exit does not stop encoder or controller.
 
 ## 1. Select the experiment environment
 
