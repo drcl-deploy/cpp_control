@@ -145,6 +145,11 @@ void G1SonicNode::construct(bool bind_now) {
     motion_ = std::make_unique<g1::Motion>(g1::Motion::from_npz(
         motion_path, il_ordered ? g1::MJ2IL : std::vector<int>{}));
     clock_ = std::make_unique<g1::MotionClock>(*motion_, anchor_body_);
+    RCLCPP_INFO(this->get_logger(),
+                "motion loaded: %s | %d frames @ %.0f fps%s",
+                motion_path.c_str(), motion_->num_frames,
+                static_cast<double>(motion_->fps),
+                il_ordered ? " (IL->MJ remapped)" : "");
   }
   // No clip -> boot into stand; motions arrive over motion_topic and A starts
   // them.

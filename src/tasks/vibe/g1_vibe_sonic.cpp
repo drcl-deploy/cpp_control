@@ -470,8 +470,11 @@ void G1VibeSonicNode::on_button_a() {
         "A refused — RB to stand, then L1 to ramp onto frame %d", start_frame_);
     return;
   }
-  restore_stand_reference();   // a later RB must mean nominal again
+  // The base handler checks allow_policy_entry() again. Keep the completed
+  // prep alive until it accepts the clip; a refused entry must remain retryable.
   G1SonicNode::on_button_a();  // leave stand, engage the clip at t=0
+  if (!stand_mode_)
+    restore_stand_reference();  // a later RB must mean nominal again
 }
 
 // ── Engage ───────────────────────────────────────────────────────
