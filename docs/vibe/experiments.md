@@ -106,10 +106,10 @@ export directory; checkpoint-specific filenames are not encoded in the launch
 files. Most contain one pair and need no other argument. If one contains
 several, launch fails instead of guessing; add `checkpoint:=<training_step>`.
 
-Closed-loop Repose runs the same way through `g1_repose_planner.launch.py`, which
-adds the planner process to this same runtime — see
-[docs/planners/repose/experiments.md](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/experiments.md) for the two things that
-differ (depth on the camera wire, and the console terminal).
+Closed-loop Repose starts the tracker with `planner:=true`, then starts
+`ros2 launch sledgehammer planner.launch.py env:=sim` in another terminal.
+The [vibe_ws README](https://github.com/drcl-deploy/vibe_ws#with-planner-cube-repose-only)
+has the complete commands. Repose planner launches belong to sledgehammer.
 
 To collect labeled RGB-D snapshots while the robot remains locked in nominal
 stand, use the separate sim2sim or hardware workflow in

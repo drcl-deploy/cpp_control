@@ -67,7 +67,8 @@ graph TD
 
 levels 0-2 are **inheritance**; level 3 is a **topic wire**. a planner is a
 separate process at a separate rate, so the controller stays runnable — and
-shippable — with no planner attached.
+shippable — with no planner attached. Planner implementations and their launch
+files belong in separate packages, such as `sledgehammer` for Repose.
 
 | level | class | owns |
 |---|---|---|
@@ -75,7 +76,7 @@ shippable — with no planner attached.
 | 1 | `G1Node`, `MiniPiNode` | joint config, message backends, gamepad, robot-level stand engine |
 | 1.5 | `G1TextopTrackerNode` | motion streaming + WBC obs, shared by trackers that ride the topic wire |
 | 2 | task nodes | obs building, inference, action mapping |
-| 3 | planners (`planners/<task>/`) | perception, retrieval, which reference to commit next |
+| 3 | external planners (e.g. `sledgehammer`) | perception, retrieval, which reference to commit next |
 
 ## control modes
 
@@ -112,8 +113,7 @@ cpp_control/
 │   └── cpp_control/
 │       ├── base.hpp                # level 0
 │       ├── robots/<robot>.hpp      # level 1
-│       ├── tasks/<task>/<robot>.hpp# level 2
-│       └── planners/<task>/         # level 3 — g1-only, so flat (no <robot>)
+│       └── tasks/<task>/<robot>.hpp# level 2
 ├── src/                            # mirrors include/
 ├── launch/<robot>_<task>.launch.py
 ├── models/<task>/                  # dropped-in artifacts (untracked)
@@ -131,9 +131,8 @@ cpp_control/
    executable in CMakeLists.
 3. prefer the manifest stack for new policies
    ([docs/onnx_policies.md](onnx_policies.md)) — zero hand-counted dims.
-4. planner: it does **not** inherit anything. `planners/<task>/` + a ROS-free
-   algorithm lib + one thin node + `config/<task>_planner/<robot>.yaml` +
-   `launch/<robot>_<task>_planner.launch.py`. Talk to the controller only over
-   `MotionReference` / `ControllerStatus`, and keep the algorithm ROS-free so a
-   selftest can replay it with no robot — see
-   [docs/planners/repose/](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/planner.md).
+4. planner: create a separate package with a ROS-free algorithm library and
+   a thin node. Its configuration and launches stay in that package. Talk to
+   the controller over `MotionReference` / `ControllerStatus`, and keep the
+   algorithm ROS-free so a selftest can replay it with no robot — see
+   [sledgehammer](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/planner.md).

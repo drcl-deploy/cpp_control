@@ -70,7 +70,7 @@ several pairs.
 
 | surface | resolved by |
 |---|---|
-| `clips`, `frames.path`, `frames.library` | `src/planners/repose/{node,observe_node}.cpp` |
+| `clips`, `frames.path`, `frames.library` | `sledgehammer/src/repose/{node,observe_node}.cpp` |
 | `onnx_path`, `hlc_onnx_path`, `policy_path`, `motion_path`, `stand_onnx_path` | `src/config_loader.cpp` |
 | `artifact`, `artifact_dir`, `motion_path` on the command line | `launch/g1_vibe_sonic.launch.py` |
 
