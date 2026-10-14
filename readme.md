@@ -31,6 +31,12 @@ ros2 launch cpp_control g1_locomotion.launch.py
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
 
+# G1 ViBe SONIC tracker
+ros2 launch cpp_control g1_vibe_sonic.launch.py \
+    policy_path:="/path/to/policy.onnx" \
+    encoder_path:="/path/to/vision_encoder.onnx" \
+    motion_path:="/path/to/motion.npz"
+
 # hardware workflow (sonic + vibe-sonic): controller never dies —
 # boot with no clip (stand), stream motions, A starts each one
 ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
