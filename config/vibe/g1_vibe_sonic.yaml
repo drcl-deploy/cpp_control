@@ -5,7 +5,7 @@
 # The kps/kds/default_angles below are pre-manifest fallbacks for the
 # zeroing/nominal modes and are overwritten at startup.
 
-control_dt: 0.02   # must equal the manifest's control.step_dt (asserted at startup)
+control_dt: 0.02   # must equal manifest control.step_dt; mismatch currently warns
 
 msg_type: "hg"
 imu_type: "pelvis"

@@ -4,58 +4,68 @@
 #include <string>
 #include <vector>
 
-namespace cpp_control
-{
-namespace deploy
-{
+namespace cpp_control {
+namespace deploy {
+
+/// Optional producer metadata on a manifest observation term.
+struct SourceSpec {
+  std::string kind;
+  std::string sensor;
+  std::string model_name;
+  std::string model_dtype;
+  std::string slice;
+};
 
 /// One observation term inside an input port (vibe.onnx.v1 `inputs[].terms[]`).
-struct TermSpec
-{
-    std::string name;
-    std::vector<int64_t> shape;
-    int dim = 0;      ///< flattened width, history included
-    int offset = 0;   ///< float offset inside the port buffer
-    int history = 0;  ///< mjlab history_length (0 = no history)
+struct TermSpec {
+  std::string name;
+  std::vector<int64_t> shape;
+  int dim = 0;      ///< flattened width, history included
+  int offset = 0;   ///< float offset inside the port buffer
+  int history = 0;  ///< mjlab history_length (0 = no history)
+  SourceSpec source;
 };
 
 /// One named ONNX input (vibe.onnx.v1 `inputs[]`).
-struct PortSpec
-{
-    std::string name;
-    std::vector<int64_t> shape;
-    std::vector<std::string> groups;
-    std::vector<TermSpec> terms;
+struct PortSpec {
+  std::string name;
+  std::vector<int64_t> shape;
+  std::vector<std::string> groups;
+  std::vector<TermSpec> terms;
 
-    int dim() const;  ///< flattened width (product of shape)
+  int dim() const;  ///< flattened width (product of shape)
 };
 
-/// Action head metadata (vibe.onnx.v1 `action`) — joint order is the checkpoint's.
-struct ActionSpec
-{
-    std::vector<std::string> joint_names;
-    std::vector<float> scale;
-    std::vector<float> default_joint_pos;
-    std::vector<float> stiffness;
-    std::vector<float> damping;
+/// Action head metadata (vibe.onnx.v1 `action`) — joint order is the
+/// checkpoint's.
+struct ActionSpec {
+  std::vector<std::string> joint_names;
+  std::vector<float> scale;
+  std::vector<float> default_joint_pos;
+  std::vector<float> stiffness;
+  std::vector<float> damping;
 };
 
 /// Parsed `<model>.manifest.json` (schema vibe.onnx.v1). JSON ⊂ YAML, parsed
 /// via yaml-cpp — no extra dependency. See vibe/deploy/onnx_manifest.py.
-struct DeployManifest
-{
-    std::string schema;
-    std::string model_class;
-    std::string checkpoint;
-    double step_dt = 0.02;
+struct DeployManifest {
+  std::string schema;
+  std::string task_id;
+  std::string run_path;
+  std::string model_class;
+  std::string checkpoint;
+  double step_dt = 0.02;
 
-    ActionSpec action;
-    std::vector<PortSpec> inputs;
-    std::vector<std::string> outputs;
+  ActionSpec action;
+  std::vector<PortSpec> inputs;
+  std::vector<std::string> outputs;
 
-    static DeployManifest load(const std::string& path);
+  static DeployManifest load(const std::string& path);
 
-    const PortSpec* find_input(const std::string& name) const;
+  const PortSpec* find_input(const std::string& name) const;
+  /// Find the physical input buffer serving a logical observation group.
+  /// Export input deduplication can make the group differ from the port name.
+  const PortSpec* find_group(const std::string& group) const;
 };
 
 }  // namespace deploy

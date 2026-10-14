@@ -1,7 +1,11 @@
 #include "cpp_control/config_loader.hpp"
 
+#include "common/asset_path.hpp"
+
 #include <fstream>
 #include <iostream>
+
+using cpp_control::asset_path;
 
 Config::Config(const std::string& config_path)
 {
@@ -37,26 +41,28 @@ Config::Config(const std::string& config_path)
             lowstate_topic = config["lowstate_topic"].as<std::string>();
         }
 
-        // Model paths
+        // Model paths. Resolved here, once, so a task node never sees a
+        // relative string: launch passes these as parameters and the yaml is
+        // only read when it does not, which used to hand ORT "locomotion/g1.onnx".
         if (config["policy_path"])
         {
-            policy_path = config["policy_path"].as<std::string>();
+            policy_path = asset_path(config["policy_path"].as<std::string>());
         }
         if (config["onnx_path"])
         {
-            onnx_path = config["onnx_path"].as<std::string>();
+            onnx_path = asset_path(config["onnx_path"].as<std::string>());
         }
         if (config["hlc_onnx_path"])
         {
-            hlc_onnx_path = config["hlc_onnx_path"].as<std::string>();
+            hlc_onnx_path = asset_path(config["hlc_onnx_path"].as<std::string>());
         }
         if (config["motion_path"])
         {
-            motion_path = config["motion_path"].as<std::string>();
+            motion_path = asset_path(config["motion_path"].as<std::string>());
         }
         if (config["stand_onnx_path"])
         {
-            stand_onnx_path = config["stand_onnx_path"].as<std::string>();
+            stand_onnx_path = asset_path(config["stand_onnx_path"].as<std::string>());
         }
 
         // Control gains for 29DOF

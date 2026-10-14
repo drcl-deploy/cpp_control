@@ -59,7 +59,8 @@ namespace cpp_control
         std::unique_ptr<g1::SonicStand> sonic_stand_;
 
 #ifdef HAS_UNITREE_HG
-        // --- Hook for Level 2: read velocities from gamepad_ after mode switching ---
+        // --- Hooks for Level 2: sample axes before gates, act after switching ---
+        virtual void on_gamepad_input() {}
         virtual void on_gamepad() {}
 
         // --- Gamepad state (readable by Level 2) ---

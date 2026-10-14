@@ -171,6 +171,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
 {
     memcpy(gamepad_rx_.buff, msg.wireless_remote.data(), 40);
     gamepad_.update(gamepad_rx_.RF_RX);
+    on_gamepad_input();
 
     // Mode switching only — velocity mapping is task-specific (Level 2)
     if (gamepad_.B.on_press)
@@ -198,7 +199,7 @@ void G1Node::handle_gamepad(const unitree_hg::msg::LowState& msg)
         engage_stand();
         RCLCPP_INFO(this->get_logger(), "[GP] -> stand (robot-level SONIC)");
     }
-    if (gamepad_.up.on_press || gamepad_.A.on_press)
+    if ((gamepad_.up.on_press || gamepad_.A.on_press) && allow_policy_entry())
     {
         control_mode_ = ControlMode::POLICY;
         std::fill(actions_.begin(), actions_.end(), 0.0f);

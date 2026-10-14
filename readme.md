@@ -11,11 +11,15 @@ modular, multi-robot, multi-workflow C++ controller deployment for ROS2
 2. onnxruntime — [pre-built v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0),
    symlinked under [thirdparty](./thirdparty/):
    ```bash
-   ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
+   ln -s /PATH/TO/onnxruntime-linux-x64-gpu-1.22.0 ./cpp_control/thirdparty/onnxruntime
    ```
 3. `colcon build --symlink-install --packages-select cpp_control`
 4. CLI shims (`publish-motion`), one-time:
    `uv pip install -e cyclonedds_ws/src/cpp_control --python venv/bin/python`
+
+> [!NOTE]
+> For the [ViBe](https://lok-i.github.io/vibe-control/) tracker, follow the
+> [vibe_ws](https://github.com/drcl-deploy/vibe_ws) workflow.
 
 ## usage
 
@@ -27,16 +31,16 @@ ros2 launch cpp_control g1_locomotion.launch.py
 ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=/path/to/policy.onnx motion_path:=/path/to/motion.npz
 
+# G1 ViBe SONIC tracker
+ros2 launch cpp_control g1_vibe_sonic.launch.py \
+    policy_path:="/path/to/policy.onnx" \
+    encoder_path:="/path/to/vision_encoder.onnx" \
+    motion_path:="/path/to/motion.npz"
+
 # hardware workflow (sonic + vibe-sonic): controller never dies —
 # boot with no clip (stand), stream motions, A starts each one
 ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
 publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
-
-# G1 vibe-SONIC (vision): encoder first, then the node, then the smoke viewer
-ros2 launch vision_encoders encoder.launch.py model:=theia-tiny
-ros2 launch cpp_control g1_vibe_sonic.launch.py \
-    onnx_path:=/path/to/model.onnx motion_path:=/path/to/motion.npz
-ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
 
 # deploy infra self-test (+ optional smoke of a real export)
 ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]
