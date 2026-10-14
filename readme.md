@@ -17,6 +17,10 @@ modular, multi-robot, multi-workflow C++ controller deployment for ROS2
 4. CLI shims (`publish-motion`), one-time:
    `uv pip install -e cyclonedds_ws/src/cpp_control --python venv/bin/python`
 
+> [!NOTE]
+> For the [ViBe](https://lok-i.github.io/vibe-control/) tracker, follow the
+> [vibe_ws](https://github.com/drcl-deploy/vibe_ws) workflow.
+
 ## usage
 
 ```bash
@@ -63,13 +67,3 @@ this package deploys policies trained with, and stands on the ideas of:
 - [beyondmimic](https://github.com/HybridRobotics/motion_tracking_controller) — motion tracking controller
 - [textop-tracker](https://github.com/TeleHuman/Textop) — text-conditioned whole-body tracking
 - [SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) — whole-body control
-
-## ViBe
-
-```bash
-ros2 launch cpp_control g1_vibe_sonic.launch.py policy_path:=/path/to/policy.onnx encoder_path:=/path/to/encoder.onnx motion_path:=/path/to/motion.npz
-ros2 run cpp_control attn_viewer.py        # attention rows, live in the terminal
-```
-
-- [Setup, samples and Repose planner](https://github.com/drcl-deploy/vibe_ws).
-- [Exports and interfaces](docs/vibe.md).
