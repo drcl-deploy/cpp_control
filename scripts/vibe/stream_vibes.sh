@@ -30,29 +30,24 @@ while (($#)); do
   esac
 done
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cpp_control_root="$(cd -- "${script_dir}/../.." && pwd)"
-repository_root="$(cd -- "${cpp_control_root}/../../.." && pwd)"
-workspace_setup="${repository_root}/cyclonedds_ws/install/setup.bash"
-
-if [[ ! -f /opt/ros/humble/setup.bash ]]; then
-  echo "stream_vibes: /opt/ros/humble/setup.bash not found" >&2
-  exit 1
+script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# Source and installed entry points both find their colcon workspace by ancestry.
+workspace="${VIBE_WORKSPACE_ROOT:+${VIBE_WORKSPACE_ROOT}/cyclonedds_ws}"
+if [[ -z "$workspace" ]]; then
+  candidate="$script_dir"
+  while [[ "$candidate" != / ]]; do
+    if [[ -f "$candidate/install/local_setup.bash" ]]; then workspace="$candidate"; break; fi
+    candidate="$(dirname -- "$candidate")"
+  done
 fi
-if [[ ! -f "${workspace_setup}" ]]; then
-  echo "stream_vibes: workspace is not built: ${workspace_setup}" >&2
-  exit 1
-fi
-
-# This is intentionally a source-tree entry point: it makes a completely fresh
-# terminal ready before invoking any `ros2` command.
-# ROS-generated setup files are not nounset-safe: Humble reads variables such
-# as AMENT_TRACE_SETUP_FILES before initializing them. Keep strict mode for
-# this script, but suspend nounset while importing the environment.
-set +u
-source /opt/ros/humble/setup.bash
-source "${workspace_setup}"
-set -u
+[[ -n "$workspace" ]] || { echo 'Source the workspace setup first.' >&2; exit 1; }
+repository_root="${VIBE_WORKSPACE_ROOT:-$(dirname -- "$workspace")}"
+helper="$script_dir/../ros_environment.sh"
+[[ -f "$helper" ]] || helper="$script_dir/../../share/cpp_control/scripts/ros_environment.sh"
+source "$helper"
+cpp_control_source_ros "$workspace"
+cpp_control_check_python cv2 numpy rclpy vision_encoders.msg
+if [[ "$record" == true ]]; then cpp_control_check_python rosbag2_py; fi
 
 export ROS_DOMAIN_ID="${BRIDGE_ROS_DOMAIN_ID:-71}"
 # The setup files select the experiment DDS interface. This client republishes
@@ -81,7 +76,7 @@ ros2 run cdr_tcp_bridge bridge_client.sh &
 children+=("$!")
 
 echo "stream_vibes: starting encoder frame + attention overlay"
-ros2 run cpp_control attention_overlay_viewer.py &
+/usr/bin/python3 "${script_dir}/attention_overlay_viewer.py" &
 children+=("$!")
 
 if [[ "${record}" == true ]]; then

@@ -11,14 +11,20 @@ Released ViBe samples, setup and direct launch commands live in
 1. workflow setup, incl. the python venv:
    [workflows/unitree.md](workflows/unitree.md) /
    [workflows/drcl_deploy.md](workflows/drcl_deploy.md)
-2. onnxruntime — [pre-built v1.22](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0),
-   symlinked under [thirdparty](./thirdparty/):
+2. ONNX Runtime — use `vision_encoders/scripts/setup_onnxruntime.sh` for the
+   host's SDK, or point CMake at an existing SDK with
+   `-DONNXRUNTIME_ROOT=/path/to/sdk`. A stable link also works:
    ```bash
-   ln -s /PATH/TO/onnxruntime-linux-x64-1.22.0 ./cpp_control/thirdparty/
+   ln -s /path/to/onnxruntime-sdk ./cpp_control/thirdparty/onnxruntime
    ```
 3. `colcon build --symlink-install --packages-select cpp_control`
 4. CLI shims (`publish-motion`), one-time:
    `uv pip install -e cyclonedds_ws/src/cpp_control --python venv/bin/python`
+
+For an offboard viewer, build with `-DCPP_CONTROL_BUILD_RUNTIME=OFF` and
+`-DVISION_ENCODERS_BUILD_RUNTIME=OFF` to install messages and viewing tools without
+ONNX/CUDA. The default builds all controllers. Viewing scripts honor `ROS_DISTRO`
+(Foxy/Humble/Jazzy) and use the OS Python that matches ROS; setup venvs are separate.
 
 ## usage
 

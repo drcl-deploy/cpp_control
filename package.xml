@@ -14,6 +14,8 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>yaml-cpp</depend>
+  <depend>zlib</depend>
   <depend>vision_encoders</depend>  <!-- ImageTokens (adapt-sonic) + frame_wire.hpp; build-orders after the msg pkg -->
 
   <exec_depend>rclpy</exec_depend>

@@ -20,35 +20,25 @@ if (($# == 1)) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
   exit 0
 fi
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cpp_control_root="$(cd -- "${script_dir}/../.." && pwd)"
-repository_root="$(cd -- "${cpp_control_root}/../../.." && pwd)"
-workspace_setup="${repository_root}/cyclonedds_ws/install/setup.bash"
-
-ros_setup=""
-if [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
-  ros_setup="/opt/ros/${ROS_DISTRO}/setup.bash"
-elif [[ -f /opt/ros/humble/setup.bash ]]; then
-  ros_setup=/opt/ros/humble/setup.bash
-elif [[ -f /opt/ros/foxy/setup.bash ]]; then
-  ros_setup=/opt/ros/foxy/setup.bash
+script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# Source and installed entry points both find their colcon workspace by ancestry.
+workspace="${VIBE_WORKSPACE_ROOT:+${VIBE_WORKSPACE_ROOT}/cyclonedds_ws}"
+if [[ -z "$workspace" ]]; then
+  candidate="$script_dir"
+  while [[ "$candidate" != / ]]; do
+    if [[ -f "$candidate/install/local_setup.bash" ]]; then workspace="$candidate"; break; fi
+    candidate="$(dirname -- "$candidate")"
+  done
 fi
-if [[ -z "${ros_setup}" ]]; then
-  echo "replay_vibes: no supported ROS setup found under /opt/ros" >&2
-  exit 1
-fi
-if [[ ! -f "${workspace_setup}" ]]; then
-  echo "replay_vibes: workspace is not built: ${workspace_setup}" >&2
-  exit 1
-fi
-
-# ROS-generated setup files are not nounset-safe.
-set +u
-source "${ros_setup}"
-source "${workspace_setup}"
-set -u
+[[ -n "$workspace" ]] || { echo 'Source the workspace setup first.' >&2; exit 1; }
+repository_root="${VIBE_WORKSPACE_ROOT:-$(dirname -- "$workspace")}"
+helper="$script_dir/../ros_environment.sh"
+[[ -f "$helper" ]] || helper="$script_dir/../../share/cpp_control/scripts/ros_environment.sh"
+source "$helper"
+cpp_control_source_ros "$workspace"
+cpp_control_check_python cv2 numpy rclpy rosbag2_py PyQt5.QtCore matplotlib.backends.backend_qt5agg
 
 export VIBE_BAG_DIR="${VIBE_BAG_DIR:-${repository_root}/bags}"
 export QT_IM_MODULE="${VIBE_QT_IM_MODULE:-compose}"
 export PYTHONWARNINGS="${PYTHONWARNINGS:+${PYTHONWARNINGS},}ignore:Unable to import Axes3D:UserWarning:matplotlib.projections"
-exec python3 "${script_dir}/replay_vibes.py" "$@"
+exec /usr/bin/python3 "${script_dir}/replay_vibes.py" "$@"

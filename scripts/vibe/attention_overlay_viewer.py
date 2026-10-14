@@ -14,6 +14,7 @@ import time
 import cv2
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
@@ -161,7 +162,7 @@ def main():
     try:
         while rclpy.ok() and not viewer.should_quit:
             rclpy.spin_once(viewer, timeout_sec=0.1)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         cv2.destroyAllWindows()
