@@ -146,10 +146,10 @@ G1VibeSonicNode::G1VibeSonicNode(const std::string& node_name)
   }
 
   if (planner_) {
-    planner_status_sub_ = this->create_subscription<msg::PlannerStatus>(
-        "/vibe/planner/status",
+    planner_heartbeat_sub_ = this->create_subscription<std_msgs::msg::Empty>(
+        "/vibe/planner/heartbeat",
         rclcpp::QoS(1).best_effort().durability_volatile(),
-        [this](msg::PlannerStatus::SharedPtr) {
+        [this](std_msgs::msg::Empty::SharedPtr) {
           last_planner_ = std::chrono::steady_clock::now();
           planner_seen_ = true;
         });

@@ -25,19 +25,19 @@ colcon build
 
 ### python venv
 
-one venv for every python-side tool (launch helpers, exporters, viewers) — uv,
-system-site-packages so ros2 python (rclpy, launch) stays importable, prompt
-named without the dot-dir noise:
+An optional venv can host `publish-motion` and other Python development tools.
+Use the OS Python ABI and system packages so ROS stays importable. Runtime
+viewing scripts use `/usr/bin/python3`; they do not require this venv.
 
 ```
 cd unitree_ros2
-uv venv venv --python 3.10 --system-site-packages --prompt unitree
-source /opt/ros/humble/setup.bash   # ros first, then venv
+uv venv venv --python /usr/bin/python3 --system-site-packages --prompt unitree
+source /opt/ros/$ROS_DISTRO/setup.bash   # select your installed ROS distribution
 source venv/bin/activate
 ```
 
-install python deps only in here (`uv pip install <pkg>`); the c++ stack needs
-none of it.
+Install development dependencies here with `uv pip install <pkg>`; install
+runtime viewer dependencies through the workspace installer or ROS/system packages.
 
 ### mujoco 
 

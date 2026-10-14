@@ -1,4 +1,4 @@
-"""Launch perceptive locomotion (Grail) on the shared G1 Vibe runtime."""
+"""Launch ViBe parkour (OmRe) on the shared G1 runtime."""
 
 import os
 
@@ -15,11 +15,10 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'artifact', default_value='',
-            description='PerLoco Grail export under $VIBE_ASSET_ROOT/models: <run>[/<export>]'),
+            description='PerLoco OmRe export under $VIBE_ASSET_ROOT/models: <run>[/<export>]'),
         DeclareLaunchArgument(
             'artifact_dir', default_value='',
-            description='PerLoco Grail export directory; relative resolves '
-                        'under $VIBE_ASSET_ROOT'),
+            description='PerLoco OmRe export directory; relative resolves under $VIBE_ASSET_ROOT'),
         DeclareLaunchArgument('checkpoint', default_value='',
                               description='Artifact step if the directory has multiple exports'),
         IncludeLaunchDescription(

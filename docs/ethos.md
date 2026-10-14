@@ -70,6 +70,12 @@ separate process at a separate rate, so the controller stays runnable — and
 shippable — with no planner attached. Planner implementations and their launch
 files belong in separate packages, such as `sledgehammer` for Repose.
 
+ViBe uses the same layers: `vision_encoders` publishes image tokens and the
+controller combines them with robot state and reference motion. The ONNX graph
+and manifest own the exported observation/action contract. Planner-specific
+perception and status messages stay with the planner; the controller accepts a
+standard heartbeat when planner mode is enabled. See [ViBe integration](vibe.md).
+
 | level | class | owns |
 |---|---|---|
 | 0 | `BaseNode` | control-mode FSM (zeroing / damping / nominal / stand / policy), joystick, timer loop |

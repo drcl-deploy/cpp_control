@@ -45,7 +45,7 @@ VIEW_TOPICS = (
 )
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
-# The planner vocabulary, mirrored from msg/PlannerStatus.msg and scripts/planners/repose/repose_console.py.
+# Optional Repose pane; vocabulary matches sledgehammer/msg/PlannerStatus.msg.
 PLANNER_MODES = ('init', 'settle', 'scan', 'clip', 'approach')
 CONTROLLER_MODES = ('zeroing', 'damping', 'nominal', 'standing', 'stand', 'POLICY')
 CUBE_COLORS = ('red', 'orange', 'green', 'yellow', 'blue', 'pink')
@@ -153,6 +153,9 @@ class BagAccess:
         type_name = self.topic_types.get(topic)
         if not type_name:
             return None
+        # Pre-migration bags retain the old package name; the CDR fields are unchanged.
+        if type_name == 'cpp_control/msg/PlannerStatus':
+            type_name = 'sledgehammer/msg/PlannerStatus'
         try:
             return get_message(type_name)
         except (AttributeError, ImportError, ModuleNotFoundError, ValueError) as error:

@@ -1,7 +1,7 @@
 #pragma once
 
 /// One resolution rule for every path a config or a launch file names, so a
-/// yaml is the same string on the desktop and on the Orin — docs/vibe/assets.md
+/// yaml is the same string on the desktop and on the Orin — docs/vibe.md
 
 #include <string>
 

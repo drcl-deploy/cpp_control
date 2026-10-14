@@ -1,7 +1,7 @@
 #pragma once
 
 #include <chrono>
-#include <cpp_control/msg/planner_status.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <string>
@@ -96,7 +96,7 @@ class G1VibeSonicNode : public G1SonicNode {
   // The direct ROS launch owns process shutdown; no external supervisor.
   bool planner_seen_ = false;
   std::chrono::steady_clock::time_point last_planner_;
-  rclcpp::Subscription<msg::PlannerStatus>::SharedPtr planner_status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr planner_heartbeat_sub_;
   rclcpp::TimerBase::SharedPtr planner_watchdog_;
 
   // task command

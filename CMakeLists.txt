@@ -19,9 +19,6 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionReference.msg"
   "msg/ControllerStatus.msg"
-  "msg/PlannerStatus.msg"
-  "msg/CubeObservation.msg"
-  "msg/CalibrationState.msg"
   DEPENDENCIES std_msgs
 )
 
