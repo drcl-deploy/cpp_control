@@ -4,7 +4,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
+#include <utility>
 
 #include "common/asset_path.hpp"
 #include "common/g1/joint_orders.hpp"
@@ -84,6 +86,30 @@ void G1SonicNode::construct(bool bind_now) {
       this->declare_parameter("reference_topic", "/tracker/reference");
   planner_ = this->declare_parameter("planner", false);
   calibration_lock_ = this->declare_parameter("calibration_lock", false);
+
+  prep_rate_ = this->declare_parameter("prep_rate", 1.5);
+  prep_min_s_ = this->declare_parameter("prep_min_s", 0.5);
+  prep_max_s_ = this->declare_parameter("prep_max_s", 2.0);
+  prep_joints_name_ = this->declare_parameter("prep_joints", "arms");
+  if (prep_joints_name_ == "arms")
+    prep_joints_ = g1::ARM_JOINT_INDICES;
+  else if (prep_joints_name_ == "arms_waist") {
+    prep_joints_ = g1::WAIST_JOINT_INDICES;
+    prep_joints_.insert(prep_joints_.end(), g1::ARM_JOINT_INDICES.begin(),
+                        g1::ARM_JOINT_INDICES.end());
+  } else if (prep_joints_name_ == "all") {
+    prep_joints_.resize(G1_NUM_MOTOR);
+    std::iota(prep_joints_.begin(), prep_joints_.end(), 0);
+  } else
+    throw std::runtime_error(
+        "g1_sonic: prep_joints must be arms | arms_waist | all, "
+        "got '" +
+        prep_joints_name_ + "'");
+
+  if (!std::isfinite(prep_rate_) || !std::isfinite(prep_min_s_) ||
+      !std::isfinite(prep_max_s_) || prep_rate_ <= 0.0 || prep_min_s_ <= 0.0 ||
+      prep_max_s_ < prep_min_s_)
+    throw std::runtime_error("g1_sonic: invalid prep rate or duration limits");
 
   g1::StandYawConfig stand_yaw_config;
   stand_yaw_config.enabled = this->declare_parameter("stand_yaw_teleop", false);
@@ -268,7 +294,8 @@ void G1SonicNode::on_motion(std_msgs::msg::Float32MultiArray::SharedPtr msg) {
       g1::Motion::from_wire(T, msg->data.data(), cols));
   pend_ready_ = true;
   RCLCPP_INFO(this->get_logger(),
-              "motion staged (T=%d @ %.0f fps, %d cols%s) — A to start", T,
+              "motion staged (T=%d @ %.0f fps, %d cols%s) — L1 to prep, A to start",
+              T,
               static_cast<double>(pend_motion_->fps), cols,
               pend_motion_->has_contact ? "" : " — NO twist/contact cmds");
 }
@@ -353,7 +380,7 @@ void G1SonicNode::on_reference(
   RCLCPP_INFO(
       this->get_logger(),
       "reference staged: '%s' (T=%u @ %.0f fps, twist=%s contact=%s goal=%s) — "
-      "A to start",
+      "L1 to prep, A to start",
       msg->reference_id.c_str(), msg->frames, static_cast<double>(msg->fps),
       msg->has_twist ? "yes" : "no", msg->has_contact ? "yes" : "no",
       msg->has_object_goal ? "yes" : "no");
@@ -416,6 +443,92 @@ void G1SonicNode::on_button_a() {
   }
   stand_mode_ = false;
   pending_engage_ = true;
+  restore_stand_reference();  // consume prep only after entry was accepted
+}
+
+// ── Prep: SONIC balances while the arm reference ramps onto the clip ──
+
+void G1SonicNode::enter_prep() {
+  if (calibration_lock_) {
+    RCLCPP_INFO(this->get_logger(),
+                "calibration lock: L1 ignored; nominal stand stays active");
+    return;
+  }
+  if (!requires_prep()) {
+    RCLCPP_INFO(this->get_logger(), "L1 ignored — this mode does not use clip prep");
+    return;
+  }
+  if (control_mode_ != ControlMode::POLICY || !stand_mode_) {
+    RCLCPP_WARN(this->get_logger(),
+                "L1 refused — prep runs inside stand: press RB first");
+    return;
+  }
+  if (pend_ready_) commit_pending_motion();
+  if (!motion_contract_ready()) {
+    restore_stand_reference();
+    RCLCPP_WARN(this->get_logger(),
+                "L1 refused — no motion loaded or missing task reference channels");
+    return;
+  }
+
+  // Start from the reference SONIC is holding, not the measured pose: it is
+  // the only pose the policy is currently being asked for, so a re-press of
+  // L1 mid-ramp continues from where the ramp got to instead of snapping back.
+  const int cur =
+      std::clamp(stand_clock_->frame(), 0, stand_motion_->num_frames - 1);
+  const std::vector<float> from(stand_motion_->jp(cur),
+                                stand_motion_->jp(cur) + G1_NUM_MOTOR);
+  const int f = std::clamp(start_frame_, 0, motion_->num_frames - 1);
+  const float* f0 = motion_->jp(f);
+
+  // Only prep_joints_ chase the clip; the rest hold nominal, so the pose SONIC
+  // must balance on until A is a stance it can hold, not a dynamic keyframe.
+  std::vector<float> to = default_angles_;
+  for (int i : prep_joints_) to[i] = f0[i];
+
+  const auto worst_of = [&](const float* a, const float* b) {
+    int idx = 0;
+    float max_d = 0.0f;
+    for (int i = 0; i < G1_NUM_MOTOR; ++i)
+      if (const float d = std::fabs(a[i] - b[i]); d > max_d) {
+        max_d = d;
+        idx = i;
+      }
+    return std::pair<int, float>{idx, max_d};
+  };
+  const auto name = [&](int i) {
+    return i < static_cast<int>(joint_names_.size()) ? joint_names_[i].c_str()
+                                                     : "?";
+  };
+  const auto [worst, max_d] =
+      worst_of(to.data(), from.data());               // what the ramp covers
+  const auto [held, step] = worst_of(f0, to.data());  // what A still steps by
+  const double secs = std::clamp(max_d / prep_rate_, prep_min_s_, prep_max_s_);
+  const float fps = motion_->fps;
+  const int T = static_cast<int>(std::lround(secs * fps));
+
+  stand_motion_ =
+      std::make_unique<g1::Motion>(g1::Motion::lead_in(from, to, T, fps));
+  stand_clock_ = std::make_unique<g1::MotionClock>(*stand_motion_, 0);
+  prep_active_ = true;
+  prepped_ = false;
+  enter_stand();   // stand_mode_, pending_engage_ — the switch is deferred
+  rebind_active();  // ...but the two lines above freed the previous stand pair
+  RCLCPP_INFO(this->get_logger(),
+              "prep -> frame %d [%s]: ramp max |dq| %.2f rad (%s), %.2f s / %d "
+              "frames · "
+              "handover step %.2f rad (%s)",
+              f, prep_joints_name_.c_str(), max_d, name(worst), secs,
+              stand_motion_->num_frames, step,
+              step > 0.0f ? name(held) : "none — reference is continuous");
+}
+
+void G1SonicNode::restore_stand_reference() {
+  if (!prep_active_) return;
+  make_stand_motion();  // rebinds active_* off the lead-in it just freed
+  pending_engage_ = true;
+  prep_active_ = false;
+  prepped_ = false;
 }
 
 // ── Stand reference (textop enter_stand_mode equivalent) ─────────
@@ -915,6 +1028,17 @@ RobotCommand G1SonicNode::policy_control() {
     RCLCPP_INFO(this->get_logger(), "motion finished — holding last frame");
   }
 
+  if (prep_active_ && !prepped_ && stand_clock_->finished()) {
+    prepped_ = true;
+    const float* target = stand_motion_->jp(stand_motion_->num_frames - 1);
+    float err = 0.0f;
+    for (int i = 0; i < G1_NUM_MOTOR; ++i)
+      err =
+          std::max(err, std::fabs(robot_state_.joint_positions[i] - target[i]));
+    RCLCPP_INFO(this->get_logger(),
+                "prepped on frame %d (posture err %.3f rad) — A to run",
+                start_frame_, err);
+  }
   return cmd;
 }
 
@@ -940,8 +1064,20 @@ void G1SonicNode::on_joy_input(sensor_msgs::msg::Joy::SharedPtr msg) {
 }
 
 bool G1SonicNode::allow_policy_entry() {
-  // The ordinary A transition (nominal -> policy) stays unchanged. This gate
-  // matters only when A arms a planner from an already-running SONIC stand.
+  if (requires_prep() && !prepped_) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "policy entry refused — RB to stand, then L1 to prep frame %d",
+        start_frame_);
+    return false;
+  }
+  if (requires_prep() && pend_ready_) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "A refused — a clip was staged after the prep, press L1 again");
+    return false;
+  }
+  // A also waits for stand walking and yaw to settle before arming.
   const double now = this->now().seconds();
   const bool walk_centered =
       !manual_walk_input_fresh(now) || manual_walk_input_ == 0.0;
@@ -980,16 +1116,23 @@ void G1SonicNode::on_joy(sensor_msgs::msg::Joy::SharedPtr msg) {
       msg->buttons.size() > joy::XMODE_R1 && msg->buttons[joy::XMODE_R1] == 1;
   const bool a =
       msg->buttons.size() > joy::XMODE_A && msg->buttons[joy::XMODE_A] == 1;
+  const bool l1 =
+      msg->buttons.size() > joy::XMODE_L1 && msg->buttons[joy::XMODE_L1] == 1;
+  if (requires_prep() && rb && !prev_rb_joy_) restore_stand_reference();
+  if (l1 && !prev_l1_) enter_prep();
+  prev_l1_ = l1;
   if (rb && !prev_rb_joy_) {
     enter_stand();
     RCLCPP_INFO(this->get_logger(), "-> stand (SONIC @ nominal)");
   }
   prev_rb_joy_ = rb;
 
-  // A (base already switched to POLICY): commit any staged motion, then
-  // leave stand and (re)start it.
+  // BaseNode checks the prep gate before changing mode; the task handler
+  // checks it again before leaving stand and starting the prepared clip.
   if (a && !prev_a_joy_) on_button_a();
   prev_a_joy_ = a;
+  if (requires_prep() && control_mode_ != ControlMode::POLICY)
+    restore_stand_reference();
 }
 
 #ifdef HAS_UNITREE_HG
@@ -1007,11 +1150,15 @@ void G1SonicNode::on_gamepad_input() {
 }
 
 void G1SonicNode::on_gamepad() {
+  if (requires_prep() && gamepad_.R1.on_press) restore_stand_reference();
+  if (gamepad_.L1.on_press) enter_prep();
   if (gamepad_.R1.on_press) {
     enter_stand();
     RCLCPP_INFO(this->get_logger(), "[GP] -> stand (SONIC @ nominal)");
   }
   if (gamepad_.A.on_press) on_button_a();
+  if (requires_prep() && control_mode_ != ControlMode::POLICY)
+    restore_stand_reference();
 }
 #endif
 

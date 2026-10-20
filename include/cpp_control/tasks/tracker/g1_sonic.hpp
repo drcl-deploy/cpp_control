@@ -31,20 +31,20 @@ namespace cpp_control {
  * Motion, two ways (hw workflow == textop's):
  *   - launch-time npz (`motion_path`; `il_ordered:=true` for retargeted clips)
  *   - streamed over `motion_topic` (textop wire, IL-ordered): each message is
- *     STAGED; A commits + starts it. `motion_path` empty -> boot into stand
- *     and wait for streamed motions — the controller never has to die.
+ *     STAGED; L1 commits + prepares it, then A starts it. `motion_path` empty
+ *     boots into stand and waits for streamed motions.
  *
  * Stand mode (RB / R1): SONIC tracks a synthetic 1-frame reference — nominal
- * pose, identity anchor at the robot's heading. A (re)starts the loaded clip
- * (committing any staged one first).
+ * pose, identity anchor at the robot's heading. L1 smoothly prepares the arms
+ * for the loaded clip; A starts it only after prep completes. A new clip or
+ * leaving policy invalidates prep. Planner references supply their own lead-in.
  *
  * `planner:=true` hands the reference stream to a planner instead of a human. A
  * arms planner execution; RB returns to stand and disarms it. While armed,
  * references auto-commit on arrival and swaps keep observation histories (a
  * planner commits every couple of seconds, and resetting them that often would
  * starve every history term). ControllerStatus tells the planner what is
- * ACTUALLY playing. Default false — open-loop rollouts are bit-for-bit
- * unchanged.
+ * ACTUALLY playing. Default false; manual clips require L1 prep.
  */
 class G1SonicNode : public G1Node {
  public:
@@ -75,6 +75,10 @@ class G1SonicNode : public G1Node {
                                const deploy::TermSpec& spec);
   void make_stand_motion();
   void enter_stand();
+  void enter_prep();
+  void restore_stand_reference();
+  virtual bool requires_prep() const { return !planner_ && !calibration_lock_; }
+  virtual bool motion_contract_ready() const { return motion_ != nullptr; }
   /// `reset_history` false = soft re-engage: re-point and re-align the clock
   /// but keep observation histories and the last action (the planner reference
   /// swaps).
@@ -102,7 +106,7 @@ class G1SonicNode : public G1Node {
   /// re-engages.
   void rebind_active();
   void publish_controller_status();
-  virtual void on_button_a();  ///< commit staged motion (if any) + track
+  virtual void on_button_a();  ///< start the prepared clip, or arm the planner
 
   // deploy artifacts
   deploy::DeployManifest manifest_;
@@ -111,7 +115,7 @@ class G1SonicNode : public G1Node {
       motion_;  ///< null until a clip is loaded/committed
   std::unique_ptr<g1::MotionClock> clock_;
 
-  // streamed motion (staged; committed on A — arrives in stand/non-policy
+  // streamed motion (staged; committed on L1 — arrives in stand/non-policy
   // modes)
   std::unique_ptr<g1::Motion> pend_motion_;
   bool pend_ready_ = false;
@@ -146,6 +150,18 @@ class G1SonicNode : public G1Node {
       false;  ///< explicit re-engage (stand <-> track switches)
   bool prev_rb_joy_ = false;
   bool prev_a_joy_ = false;
+
+  // prep: stand mode driving a lead-in clip instead of the nominal one
+  bool prep_active_ = false;  ///< stand_motion_ is the lead-in, not nominal
+  bool prepped_ = false;      ///< lead-in played out — A is armed
+  bool prev_l1_ = false;
+  double prep_rate_ = 1.5;  ///< rad/s: max |dq| sets the ramp duration
+  double prep_min_s_ = 0.5;
+  double prep_max_s_ = 2.0;  ///< longer than this and SONIC slouches
+  /// Joints the lead-in actually moves (MJ order); the rest stay nominal, so
+  /// the pose SONIC has to hold until A stays a stance it can hold.
+  std::vector<int> prep_joints_ = g1::ARM_JOINT_INDICES;
+  std::string prep_joints_name_ = "arms";
 
   // Right-stick X heading control, active only while SONIC owns nominal stand.
   g1::StandYaw stand_yaw_;
