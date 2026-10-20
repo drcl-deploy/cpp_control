@@ -55,35 +55,16 @@ class G1VibeSonicNode : public G1SonicNode {
                        const deploy::TermSpec& spec) override;
   RobotCommand policy_control() override;
   void engage_reset(bool reset_history = true) override;
-  void on_joy(sensor_msgs::msg::Joy::SharedPtr msg) override;
-#ifdef HAS_UNITREE_HG
-  void on_gamepad() override;
-#endif
   bool allow_policy_entry() override;
   void on_button_a() override;
 
  private:
   void on_tokens(vision_encoders::msg::ImageTokens::SharedPtr msg);
   void publish_attn();
-  void enter_prep();
-  bool motion_contract_ready() const;
+  bool requires_prep() const override { return task_profile_.requires_prep; }
+  bool motion_contract_ready() const override;
   bool tokens_fresh() const;
   bool planner_fresh() const;
-  /// Put the nominal 1-frame clip back under stand (and re-engage onto it).
-  void restore_stand_reference();
-
-  // prep: stand mode driving a lead-in clip instead of the nominal one
-  bool prep_active_ = false;  ///< stand_motion_ is the lead-in, not nominal
-  bool prepped_ = false;      ///< lead-in played out — A is armed
-  bool prev_l1_ = false;
-  bool prev_rb_ = false;
-  double prep_rate_ = 1.5;  ///< rad/s: max |dq| sets the ramp duration
-  double prep_min_s_ = 0.5;
-  double prep_max_s_ = 2.0;  ///< longer than this and SONIC slouches
-  /// Joints the lead-in actually moves (MJ order); the rest stay nominal, so
-  /// the pose SONIC has to hold until A stays a stance it can hold.
-  std::vector<int> prep_joints_ = g1::ARM_JOINT_INDICES;
-  std::string prep_joints_name_ = "arms";
 
   // token state (single-threaded executor: callback and timer serialize)
   std::vector<float> kv_buf_;   ///< (P*D) latest patch tokens, manifest layout

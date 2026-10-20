@@ -38,9 +38,9 @@ ros2 launch cpp_control g1_vibe_sonic.launch.py \
     motion_path:="/path/to/motion.npz"
 
 # hardware workflow (sonic + vibe-sonic): controller never dies —
-# boot with no clip (stand), stream motions, A starts each one
+# boot with no clip (stand), stream motions, L1 preps and A starts each one
 ros2 launch cpp_control g1_sonic_tracker.launch.py motion_path:=''
-publish-motion /path/to/motion.npz     # stage -> press A -> track -> RB -> repeat
+publish-motion /path/to/motion.npz     # stage -> RB -> L1 prep -> A track -> RB -> repeat
 
 # deploy infra self-test (+ optional smoke of a real export)
 ./build/cpp_control/deploy_selftest [policy.onnx [policy.manifest.json]]

@@ -158,8 +158,8 @@ ros2 launch cpp_control g1_sonic_tracker.launch.py \
     onnx_path:=... motion_path:=.../cube_frontflip/sample4/motion.npz il_ordered:=true
 ```
 
-joystick: `X` nominal pose → `A` track the clip from frame 0 (yaw-aligns to the
-robot at that instant; pressing `A` again restarts) · **`RB`/`R1` stand mode** —
+joystick: **`RB`/`R1` stand → `L1` prep → `A` track** the clip from frame 0
+(yaw-aligned to the robot at entry). Stand mode uses SONIC —
 SONIC tracks a synthetic 1-frame nominal-pose reference at the robot's heading
 (the hardware idle while loading/exporting motions) · `B` zero · `Y` damp.
 launch args: `manifest_path` (default: sibling of the onnx), `motion_start_frame`,
@@ -169,9 +169,9 @@ note vs mjlab play: deployment cannot teleport the robot to the clip's start
 pose — the clip is heading-aligned to wherever the robot stands, so engage from
 a posture near the clip's frame 0.
 
-## prep gate (`g1_vibe_sonic`)
+## prep gate (`g1_sonic` and `g1_vibe_sonic`)
 
-`g1_vibe_sonic` enforces that last sentence instead of trusting it. `L1` is not
+Both trackers require a completed prep before starting a manual clip. `L1` is not
 a new control mode — it is **stand with a different stand clip**:
 
 | | stand (`RB`) | prep (`L1`) |
@@ -237,4 +237,5 @@ flip — vetoing afterwards would mean undoing a mode change blind, which can
 strand `DAMPING`/`ZEROING` inside `POLICY`. Every swap of `stand_motion_` also
 arms `pending_engage_`, so `active_motion_` can never outlive its clip.
 
-the base `g1_sonic_node` is unchanged — `A` engages directly, as before.
+Planner mode supplies its own lead-in and keeps its existing A-to-arm workflow.
+Stand-reactive ViBe tasks also keep their existing controls.
